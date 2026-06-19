@@ -1,0 +1,121 @@
+/* ── Refined Dark Studio — Theme Variables & Global Reset ─────── */
+
+/* Self-hosted fonts (no network dependency) */
+@font-face {
+    font-family: 'Hanken Grotesk';
+    src: url('../fonts/hanken-grotesk.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    src: url('../fonts/jetbrains-mono-regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    src: url('../fonts/jetbrains-mono-medium.woff2') format('woff2');
+    font-weight: 500 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root {
+    /* Surfaces — neutral slate, layered for depth */
+    --bg-deep: #0b0e13;
+    --bg-primary: #0e1116;
+    --bg-secondary: #141821;
+    --bg-panel: #161a21;
+    --bg-raised: #1c212b;
+    --bg-input: #0c0f14;
+    --bg-hover: #222936;
+
+    /* Borders */
+    --border: #232936;
+    --border-bright: #313a4a;
+    --border-focus: #3fb6a8;
+
+    /* Single accent — calm teal */
+    --accent: #3fb6a8;
+    --accent-bright: #56d3c3;
+    --accent-dim: #2c8479;
+    --accent-soft: rgba(63, 182, 168, 0.12);
+    --accent-line: rgba(63, 182, 168, 0.35);
+
+    /* Semantic (status only) */
+    --ok: #46c08a;
+    --ok-soft: rgba(70, 192, 138, 0.12);
+    --warn: #e0a64b;
+    --warn-soft: rgba(224, 166, 75, 0.12);
+    --danger: #e5556e;
+    --danger-soft: rgba(229, 85, 110, 0.12);
+
+    /* Text */
+    --text-primary: #e6e8ec;
+    --text-secondary: #9aa3b2;
+    --text-muted: #5c6573;
+    --text-bright: #f4f6f9;
+
+    /* Elevation (no neon glow) */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.45);
+    --accent-glow: 0 0 0 3px var(--accent-soft);
+
+    --font-sans: 'Hanken Grotesk', ui-sans-serif, system-ui, 'Segoe UI Variable',
+        'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+
+    --radius: 6px;
+    --radius-lg: 10px;
+    --radius-pill: 999px;
+    --transition: 0.16s ease;
+    --transition-slow: 0.3s ease;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+::selection {
+    background: var(--accent-soft);
+    color: var(--text-bright);
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-bright);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: var(--radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+    background-clip: content-box;
+}

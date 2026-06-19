@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local app state — personal (NAS paths, creator/download history)
+app_state.json
+*.corrupt
+*.tmp
+
+# Claude Code local settings
+.claude/
