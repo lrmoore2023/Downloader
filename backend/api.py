@@ -2,8 +2,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 
 import webview
@@ -20,6 +22,31 @@ from backend.coomerfans_archive import Archive as CfArchive
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_FILE = os.path.join(APP_DIR, "app_state.json")
+
+
+def _replace_with_retry(src, dst, attempts=10, delay=0.1):
+    """os.replace(src, dst) hardened against transient Windows locks.
+
+    On Windows the destination can be momentarily held open by antivirus
+    real-time scanning, the Search indexer, or a cloud-sync/backup agent
+    (E:\\Photos is exactly the kind of folder those watch). MoveFileEx then
+    fails with WinError 5 (access denied) even though nothing is permanently
+    wrong, so retry a few times with a short backoff before giving up.
+    """
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            # If the destination picked up a read-only attribute, clear it.
+            try:
+                if os.path.exists(dst):
+                    os.chmod(dst, stat.S_IWRITE | stat.S_IREAD)
+            except OSError:
+                pass
+            time.sleep(delay)
 
 
 class Api:
@@ -87,7 +114,7 @@ class Api:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(merged, f, indent=2)
-                os.replace(tmp, STATE_FILE)
+                _replace_with_retry(tmp, STATE_FILE)
             except Exception:
                 try:
                     os.unlink(tmp)
@@ -228,9 +255,11 @@ class Api:
                 window["width"] = int(width)
             if height:
                 window["height"] = int(height)
-            if x is not None:
+            # When the window is minimized (or mid-close) Windows reports a
+            # large-negative sentinel position (~-32000). Don't persist that,
+            # or the window restores off-screen and looks like it never opened.
+            if x is not None and y is not None and int(x) > -10000 and int(y) > -10000:
                 window["x"] = int(x)
-            if y is not None:
                 window["y"] = int(y)
             state["window"] = window
             self.save_state(state)

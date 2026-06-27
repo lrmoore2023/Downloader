@@ -22,9 +22,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qs, urlsplit
 
+import requests
+
 from backend.coomerfans_scraper import (
-    make_session, parse_creator_url, iter_post_urls, parse_post,
-    refresh_media_url, slugify, build_filename, target_path, site_code,
+    make_session, parse_creator_url, iter_post_urls, parse_post, fetch_html,
+    refresh_media_url, build_filename, target_path, site_code,
 )
 from backend.coomerfans_archive import Archive, entry_key
 
@@ -32,6 +34,12 @@ from backend.coomerfans_archive import Archive, entry_key
 # fresh one" rather than "retry the same URL".
 _EXPIRED_STATUSES = (401, 403, 404, 410)
 _GONE_REFRESH_LIMIT = 4   # give up (flag error) after this many refresh-resistant gone responses
+
+# Transient HTTP statuses for page/post *reads* (server hiccups, rate limits,
+# Cloudflare 52x). coomerfans intermittently 500s on a valid post; a retry a
+# few seconds later succeeds. These are retried (with backoff) rather than
+# dropping the post. 404/410 are NOT here — a missing post page is permanent.
+_TRANSIENT_READ_STATUSES = (408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524)
 
 
 def expected_total(response, resume_pos):
@@ -167,7 +175,7 @@ class CoomerfansRunner:
 
         post_urls = list(iter_post_urls(
             self._session, creator_url, on_page=on_page,
-            should_cancel=self._cancelled,
+            should_cancel=self._cancelled, fetch=self._fetch_page,
         ))
         if self._cancelled():
             return []
@@ -175,8 +183,10 @@ class CoomerfansRunner:
 
         jobs = []
         jobs_lock = threading.Lock()
+        failed = []
+        failed_lock = threading.Lock()
 
-        def handle_post(post_url):
+        def handle_post(post_url, attempts):
             if self._cancelled():
                 return
             parts = post_url.rstrip("/").split("/")
@@ -185,14 +195,18 @@ class CoomerfansRunner:
             if (self._mode == "latest" and self._archive
                     and self._archive.post_seen(post_id)):
                 return
-            try:
-                info = parse_post(self._session, post_url)
-            except Exception as e:
-                self._bump("error")
-                self._error(f"Failed to read post {post_url}: {e}")
+
+            # Resilient read: transient server errors (e.g. coomerfans' sporadic
+            # 500s) are retried with backoff instead of dropping the post.
+            info = self._read_post(post_url, attempts)
+            if info is None:
+                if not self._cancelled():
+                    with failed_lock:
+                        failed.append(post_url)
                 return
 
-            slug = slugify(info["title"], info["post_id"])
+            # Filenames use the post_id (the /p/{postId}/ number), not a title slug.
+            name = str(info["post_id"])
             for idx, m in enumerate(info["media"], 1):
                 if year and (not info["dt"] or info["dt"].year != int(year)):
                     continue
@@ -205,17 +219,81 @@ class CoomerfansRunner:
                     "url": m["url"],
                     "path_key": m["path_key"],
                     "dt": info["dt"],
-                    "slug": slug,
+                    "name": name,
                 }
                 with jobs_lock:
                     jobs.append(job)
 
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
-            futures = [ex.submit(handle_post, u) for u in post_urls]
+            futures = [ex.submit(handle_post, u, 4) for u in post_urls]
             for _ in as_completed(futures):
                 if self._cancelled():
                     break
+
+        # Second window: posts that exhausted their inline retries get another,
+        # longer pass. A transient 5xx/timeout has usually cleared by now, so
+        # nothing is dropped just because the server hiccuped during the burst.
+        if failed and not self._cancelled():
+            retry_urls = list(failed)
+            failed.clear()
+            self._info(f"Re-reading {len(retry_urls)} post(s) that errored on the first pass...")
+            with ThreadPoolExecutor(max_workers=self.workers) as ex:
+                futures = [ex.submit(handle_post, u, 10) for u in retry_urls]
+                for _ in as_completed(futures):
+                    if self._cancelled():
+                        break
+
+        # Only posts still failing after both windows are counted as real errors.
+        for u in failed:
+            self._bump("error")
+            self._error(f"Failed to read post after repeated retries: {u}")
+
         return jobs
+
+    # ── resilient reads ──────────────────────────────────────
+    def _request_with_retry(self, func, what, attempts, backoff=3):
+        """Call func() with cancellable retry on transient HTTP/network errors.
+
+        Returns func()'s result, or None if it failed after `attempts` tries,
+        hit a non-transient HTTP status, or the run was cancelled. Transient
+        statuses (5xx/429/52x) and connection/timeout errors back off and retry;
+        404/410 and other client errors give up immediately (the page is gone).
+        """
+        b = backoff
+        for attempt in range(1, attempts + 1):
+            if self._cancelled():
+                return None
+            try:
+                return func()
+            except requests.HTTPError as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status not in _TRANSIENT_READ_STATUSES:
+                    self._error(f"{what}: HTTP {status} (not retriable)")
+                    return None
+                err = f"HTTP {status}"
+            except requests.RequestException as e:
+                err = e.__class__.__name__
+            if attempt < attempts:
+                self._info(f"{what}: {err}; retry {attempt}/{attempts} in {b}s")
+                self._sleep_cancellable(b)
+                b = min(b * 2, 120)
+            else:
+                self._info(f"{what}: {err}; gave up after {attempts} attempt(s)")
+        return None
+
+    def _read_post(self, post_url, attempts):
+        return self._request_with_retry(
+            lambda: parse_post(self._session, post_url), f"post {post_url}", attempts)
+
+    def _fetch_page(self, session, url):
+        """Resilient page fetch for the crawl. Raises only after retries are
+        exhausted on a non-transient error, so a transient blip no longer
+        truncates pagination (which would silently lose later pages)."""
+        html = self._request_with_retry(
+            lambda: fetch_html(session, url), f"page {url}", attempts=10)
+        if html is None and not self._cancelled():
+            raise RuntimeError(f"Could not fetch creator page after retries: {url}")
+        return html
 
     # ── download ─────────────────────────────────────────────
     def _download_all(self, jobs):
@@ -250,10 +328,10 @@ class CoomerfansRunner:
         self._download_stream(job, dest_path, entry, filename)
 
     def _assign_path(self, job, entry):
-        """Pick a collision-free destination path. Two different media items
-        that would map to the same date+slug+index name get a ' (n)' suffix so
-        nothing is ever overwritten."""
-        base = build_filename(job["dt"], self._service, job["slug"],
+        """Pick a collision-free destination path. (post_id+index is unique per
+        creator, so collisions shouldn't occur, but the ' (n)' suffix guards
+        against any edge case so nothing is ever overwritten.)"""
+        base = build_filename(job["dt"], self._service, job["name"],
                               job["index"], job["ext"])
         with self._fname_lock:
             path = target_path(self._destination, job["kind"], job["dt"], base)

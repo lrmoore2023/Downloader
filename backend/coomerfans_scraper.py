@@ -123,10 +123,10 @@ def ext_from_url(url, default="bin"):
     return default
 
 
-def build_filename(dt, service, slug, index, ext):
-    """e.g. '2026.01.07 - OF - the-art-of-seduction_1.mp4'."""
+def build_filename(dt, service, name, index, ext):
+    """e.g. '2026.01.07 - OF - 89344156_1.mp4' (name is the post_id)."""
     date_str = f"{dt:%Y.%m.%d}" if dt else "0000.00.00"
-    return f"{date_str} - {site_code(service)} - {slug}_{index}.{ext}"
+    return f"{date_str} - {site_code(service)} - {name}_{index}.{ext}"
 
 
 def target_path(destination, kind, dt, filename):
@@ -146,13 +146,16 @@ def fetch_html(session, url, timeout=(15, 60)):
 
 
 def iter_post_urls(session, creator_url, on_page=None, should_cancel=None,
-                   max_pages=100000):
+                   max_pages=100000, fetch=None):
     """Yield every post URL for a creator, walking ?page=N until exhausted.
 
     Stops when a page yields no new post links or there is no "Next" link.
     on_page(page_num, new_count) is called after each page is parsed.
     should_cancel() -> bool lets the caller abort the crawl.
+    fetch(session, url) -> html overrides the default fetch_html, letting the
+    caller add retry/backoff for transient server errors.
     """
+    fetch = fetch or fetch_html
     seen = set()
     base = creator_url.split("?")[0].split("#")[0]
     page = 1
@@ -160,7 +163,9 @@ def iter_post_urls(session, creator_url, on_page=None, should_cancel=None,
         if should_cancel and should_cancel():
             return
         page_url = base if page == 1 else f"{base}?page={page}"
-        html = fetch_html(session, page_url)
+        html = fetch(session, page_url)
+        if html is None:        # fetch declined (e.g. cancelled mid-retry)
+            return
         soup = BeautifulSoup(html, "html.parser")
 
         new_links = []

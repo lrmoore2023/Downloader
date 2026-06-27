@@ -149,7 +149,7 @@ def repair_broken(broken, destination, service, user_id, runner, session,
             job = {
                 "post_url": info["url"], "post_id": post_id, "index": idx,
                 "kind": it["kind"], "ext": m["ext"], "url": m["url"],
-                "path_key": m["path_key"], "dt": info["dt"], "slug": "",
+                "path_key": m["path_key"], "dt": info["dt"], "name": "",
             }
             ok = runner._download_stream(job, it["path"], it["entry"], it["filename"])
             if ok:

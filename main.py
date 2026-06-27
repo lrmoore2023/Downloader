@@ -26,9 +26,14 @@ def main():
         min_size=(900, 600),
         background_color="#0e1116",
     )
-    if "x" in saved and "y" in saved:
-        create_kwargs["x"] = saved["x"]
-        create_kwargs["y"] = saved["y"]
+    # Only restore a saved position if it's plausibly on-screen. A minimized
+    # or mid-close window reports a large-negative sentinel (~-32000) on
+    # Windows; restoring that would open the window where it can't be seen, so
+    # fall back to letting the OS center it.
+    sx, sy = saved.get("x"), saved.get("y")
+    if isinstance(sx, int) and isinstance(sy, int) and -10000 < sx < 30000 and -10000 < sy < 30000:
+        create_kwargs["x"] = sx
+        create_kwargs["y"] = sy
 
     window = webview.create_window("Downloader", **create_kwargs)
     api.set_window(window)
