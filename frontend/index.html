@@ -12,31 +12,16 @@
     <div class="toast-container" id="toastContainer"></div>
 
     <div class="app-container">
-        <!-- Sidebar -->
-        <nav class="sidebar">
-            <div class="sidebar-tab active" data-tab="twitter" title="X / Twitter">
-                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-                </svg>
-                <span class="tab-tooltip">X / Twitter</span>
-            </div>
-            <div class="sidebar-tab" data-tab="coomerfans" title="Coomerfans">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                     stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="2" y="4" width="20" height="16" rx="2"/>
-                    <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/>
-                </svg>
-                <span class="tab-tooltip">Coomerfans</span>
-            </div>
-        </nav>
-
-        <!-- Main Content -->
         <main class="main-content">
             <!-- Header -->
             <header class="header">
                 <span class="header-title">Downloader</span>
                 <div class="header-divider"></div>
-                <span class="header-subtitle" id="headerSubtitle">X / Twitter</span>
+                <span class="header-subtitle" id="headerSubtitle">Library</span>
+                <div class="segmented header-toggle" id="viewToggle">
+                    <button class="seg active" data-view="creator" onclick="switchView('creator')">Creator</button>
+                    <button class="seg" data-view="gallery" onclick="switchView('gallery')">Gallery</button>
+                </div>
                 <div class="header-status">
                     <div class="running-indicator" id="runningIndicator">
                         <div class="pulse-dot"></div>
@@ -44,346 +29,339 @@
                         <span class="run-count" id="runCount">0</span>
                         <span class="run-file" id="runFile"></span>
                     </div>
+                    <button class="btn btn-ghost btn-icon" id="btnSettings" onclick="openSettings()" title="Settings">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </button>
                 </div>
             </header>
 
-            <!-- Tab Content -->
-            <div class="tab-content">
-                <!-- Twitter Tab -->
-                <div class="tab-panel active" id="twitterTab">
+            <!-- Scrollable content: Creator view -->
+            <div class="tab-content" id="creatorView">
 
-                    <!-- Authentication Section -->
-                    <div class="section">
-                        <div class="section-title">Authentication</div>
+                <!-- Creator bar -->
+                <div class="section">
+                    <div class="section-title">Creator</div>
+                    <div class="form-row">
+                        <span class="form-label">Type</span>
+                        <div class="segmented" id="categoryFilter"></div>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">Creator</span>
+                        <select class="select-field" id="creatorSelect" style="flex: 1;" onchange="onCreatorChange()">
+                            <option value="">Select a creator…</option>
+                        </select>
+                        <select class="select-field" id="creatorSort" style="min-width: 130px;" onchange="onSortChange()" title="Sort creators">
+                            <option value="recent">Recent</option>
+                            <option value="name">Name A–Z</option>
+                        </select>
+                        <button class="btn btn-ghost btn-sm" id="btnConfigure" onclick="openConfigure()">Configure Links</button>
+                        <button class="btn btn-secondary btn-sm" onclick="openNewCreator()">+ New</button>
+                        <button class="btn btn-ghost btn-sm btn-icon" id="btnOpenFolder" onclick="openCreatorFolder()" title="Open folder in Explorer">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <div class="creator-avatar" id="creatorAvatar" style="display: none;"></div>
+                        <div class="chip-row" id="creatorChips"><span class="field-hint">No creator selected.</span></div>
+                    </div>
+                </div>
 
-                        <div class="radio-group">
-                            <div class="radio-option selected" data-auth="file" onclick="setAuthMethod('file')">
-                                <div class="radio-dot"></div>
-                                <span class="radio-label">Cookie File</span>
-                            </div>
-                            <div class="radio-option" data-auth="browser" onclick="setAuthMethod('browser')">
-                                <div class="radio-dot"></div>
-                                <span class="radio-label">Extract from Browser</span>
-                            </div>
-                        </div>
-
-                        <!-- Cookie File Mode -->
-                        <div class="auth-section active" id="authFile">
-                            <div class="form-row">
-                                <span class="form-label">Cookie File</span>
-                                <input type="text" class="input-field" id="cookiesPath" placeholder="Select cookies.txt file..." readonly>
-                                <button class="btn btn-ghost btn-sm" onclick="browseCookies()">Browse</button>
-                            </div>
-                            <div class="form-row">
-                                <span class="form-label"></span>
-                                <span id="cookieStatus" class="status-badge status-idle">No cookies loaded</span>
-                            </div>
-                        </div>
-
-                        <!-- Browser Extract Mode -->
-                        <div class="auth-section" id="authBrowser">
-                            <div class="form-row">
-                                <span class="form-label">Browser</span>
-                                <select class="select-field" id="browserSelect">
-                                    <option value="chrome">Chrome</option>
-                                    <option value="firefox">Firefox</option>
-                                    <option value="edge">Edge</option>
-                                    <option value="brave">Brave</option>
-                                    <option value="opera">Opera</option>
-                                    <option value="chromium">Chromium</option>
-                                </select>
-                                <button class="btn btn-ghost btn-sm" id="extractBtn" onclick="extractBrowserCookies()">Extract</button>
-                            </div>
-                            <div class="form-row">
-                                <span class="form-label"></span>
-                                <span id="browserStatus" class="status-badge status-idle">Not extracted</span>
-                            </div>
+                <!-- Download actions -->
+                <div class="section">
+                    <div class="section-title">Download</div>
+                    <div class="form-row">
+                        <span class="form-label">Scope</span>
+                        <div class="segmented" id="scopeControl">
+                            <span class="field-hint">Select a creator to choose what to fetch.</span>
                         </div>
                     </div>
-
-                    <!-- Archive Directory Section -->
-                    <div class="section">
-                        <div class="section-title">Archive Database</div>
-
-                        <div class="form-row">
-                            <span class="form-label">Archive Dir</span>
-                            <input type="text" class="input-field" id="archiveDir" placeholder="Select folder to store archive .db files..." readonly>
-                            <button class="btn btn-ghost btn-sm" onclick="browseArchiveDir()">Browse</button>
-                        </div>
-                        <div class="form-row">
-                            <span class="form-label"></span>
-                            <span class="field-hint">
-                                Stores per-artist download history (twitter_username.db). Changing this moves existing archives to the new location.
-                            </span>
-                        </div>
+                    <div class="form-row">
+                        <span class="form-label">Single link</span>
+                        <select class="select-field" id="linkScope" style="flex: 1;" onchange="onLinkScopeChange()">
+                            <option value="">Use the scope above</option>
+                        </select>
+                        <span class="field-hint">Pick one link to fetch just that account.</span>
+                    </div>
+                    <div class="actions-row">
+                        <button class="btn btn-primary" id="btnDownloadAll" onclick="startDownload('full')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                            </svg>
+                            Download Everything
+                        </button>
+                        <button class="btn btn-secondary" id="btnFetchLatest" onclick="startDownload('latest')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                            </svg>
+                            Fetch Latest
+                        </button>
+                        <button class="btn btn-ghost" id="btnVerify" onclick="verifyRepair()" title="Check downloaded coomerfans files for corruption and re-download broken ones">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 12l2 2 4-4"/>
+                                <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                            Verify &amp; Repair
+                        </button>
+                        <button class="btn btn-danger" id="btnCancel" onclick="cancelDownload()" style="display: none;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            </svg>
+                            Cancel
+                        </button>
                     </div>
 
-                    <!-- Target Section -->
-                    <div class="section">
-                        <div class="section-title">Target</div>
+                    <div class="actions-row actions-divider">
+                        <select class="select-field" id="redownloadYear" style="min-width: 100px;">
+                            <option value="">Year…</option>
+                        </select>
+                        <button class="btn btn-ghost" id="btnRedownload" onclick="redownloadYear()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 4v6h6M23 20v-6h-6"/>
+                                <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
+                            </svg>
+                            Redownload Year
+                        </button>
+                        <span class="field-hint">Re-fetches a year for the links in the selected scope.</span>
+                    </div>
+                </div>
 
-                        <div class="form-row">
-                            <span class="form-label">Library Root</span>
-                            <input type="text" class="input-field" id="libraryRoot" placeholder="Parent folder for new artists (optional)..." readonly>
-                            <button class="btn btn-ghost btn-sm" onclick="browseLibraryRoot()">Browse</button>
+                <!-- Output Log -->
+                <div class="section log-section">
+                    <div class="log-header">
+                        <div class="section-title" style="margin-bottom: 0;">Output Log</div>
+                        <button class="btn btn-ghost btn-sm" onclick="clearLog()">Clear</button>
+                    </div>
+                    <div class="log-container" id="logContainer"></div>
+                    <div class="stats-bar" id="statsBar">
+                        <div class="stat-item">
+                            <span class="stat-label">Downloaded</span>
+                            <span class="stat-value stat-downloaded" id="statDownloaded">0</span>
                         </div>
-                        <div class="form-row">
-                            <span class="form-label"></span>
-                            <span class="field-hint">New artist URLs auto-fill to &lt;root&gt;/&lt;username&gt;. Known artists restore their saved folder.</span>
+                        <div class="stat-divider"></div>
+                        <div class="stat-item">
+                            <span class="stat-label">Skipped</span>
+                            <span class="stat-value stat-skipped" id="statSkipped">0</span>
                         </div>
-
-                        <div class="form-row">
-                            <span class="form-label">Recent</span>
-                            <select class="select-field" id="recentArtists" style="flex: 1;" onchange="loadRecentArtist()">
-                                <option value="">Select a recent artist...</option>
-                            </select>
-                        </div>
-
-                        <div class="form-row">
-                            <span class="form-label">Account URL</span>
-                            <input type="text" class="input-field" id="accountUrl" placeholder="https://x.com/username">
-                        </div>
-                        <div id="urlError" class="field-error" style="margin-left: 106px;">Invalid URL. Use format: https://x.com/username</div>
-
-                        <div class="form-row">
-                            <span class="form-label">Destination</span>
-                            <input type="text" class="input-field" id="destFolder" placeholder="Auto-fills from URL, or browse..." readonly>
-                            <button class="btn btn-ghost btn-sm" onclick="browseDestination()">Browse</button>
-                            <button class="btn btn-ghost btn-sm btn-icon" id="btnOpenFolder" onclick="openDestination()" title="Open destination in Explorer">
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-                                </svg>
-                            </button>
-                        </div>
-
-                        <div class="form-row" style="margin-top: 4px;">
-                            <span class="form-label"></span>
-                            <label class="checkbox-option" onclick="toggleHasVideos()">
-                                <div class="checkbox-box" id="hasVideosBox"></div>
-                                <span class="checkbox-label">Artist has videos/gifs (separates images into Images/ subfolder)</span>
-                            </label>
+                        <div class="stat-divider"></div>
+                        <div class="stat-item">
+                            <span class="stat-label">Errors</span>
+                            <span class="stat-value stat-errors" id="statErrors">0</span>
                         </div>
                     </div>
+                </div>
 
-                    <!-- Actions Section -->
-                    <div class="section">
-                        <div class="section-title">Actions</div>
-                        <div class="actions-row">
-                            <button class="btn btn-primary" id="btnGetArtist" onclick="getArtistPosts()">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-                                </svg>
-                                Get Artist Posts
-                            </button>
-                            <button class="btn btn-secondary" id="btnFetchLatest" onclick="fetchLatestPosts()">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <polyline points="23 4 23 10 17 10"/>
-                                    <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-                                </svg>
-                                Fetch Latest Posts
-                            </button>
-                            <button class="btn btn-danger" id="btnCancel" onclick="cancelDownload()" style="display: none;">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                                </svg>
-                                Cancel
-                            </button>
-                        </div>
+                <!-- Pawchive: external links needing manual download (below the log) -->
+                <div class="section pending-links" id="pendingLinks" style="display: none;"></div>
 
-                        <div class="actions-row actions-divider">
-                            <select class="select-field" id="redownloadYear" style="min-width: 100px;">
-                                <option value="">Year...</option>
-                            </select>
-                            <button class="btn btn-ghost" id="btnRedownload" onclick="redownloadYear()">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M1 4v6h6M23 20v-6h-6"/>
-                                    <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
-                                </svg>
-                                Redownload Year
-                            </button>
-                            <span class="field-hint">Re-fetches missing files for a specific year</span>
-                        </div>
+            </div><!-- /creatorView -->
+
+            <!-- Scrollable content: Gallery view -->
+            <div class="tab-content" id="galleryView" style="display: none;">
+                <div class="gallery-toolbar">
+                    <div class="segmented" id="galleryCategoryFilter"></div>
+                    <input type="text" class="input-field" id="gallerySearch" placeholder="Search creators…"
+                           oninput="renderGallery()" style="max-width: 280px;">
+                    <span class="field-hint" id="galleryCount" style="margin-left: auto;"></span>
+                </div>
+                <div class="tile-grid" id="tileGrid"></div>
+            </div>
+
+            <!-- Scrollable content: Media browser -->
+            <div class="tab-content" id="mediaView" style="display: none;">
+                <div class="media-toolbar">
+                    <button class="btn btn-ghost btn-sm" onclick="switchView('gallery')">← Gallery</button>
+                    <span class="media-title" id="mediaTitle"></span>
+                    <select class="select-field" id="mediaYear" style="min-width: 110px;" onchange="renderMedia()">
+                        <option value="">All years</option>
+                    </select>
+                    <div class="segmented" id="mediaSourceFilter"></div>
+                    <div class="segmented" id="mediaKind">
+                        <button class="seg active" data-kind="all" onclick="setMediaKind('all')">All</button>
+                        <button class="seg" data-kind="image" onclick="setMediaKind('image')">Images</button>
+                        <button class="seg" data-kind="video" onclick="setMediaKind('video')">Videos</button>
                     </div>
-
-                    <!-- Output Log Section -->
-                    <div class="section log-section">
-                        <div class="log-header">
-                            <div class="section-title" style="margin-bottom: 0;">Output Log</div>
-                            <button class="btn btn-ghost btn-sm" onclick="clearLog()">Clear</button>
-                        </div>
-                        <div class="log-container" id="logContainer"></div>
-                        <div class="stats-bar" id="statsBar">
-                            <div class="stat-item">
-                                <span class="stat-label">Downloaded</span>
-                                <span class="stat-value stat-downloaded" id="statDownloaded">0</span>
-                            </div>
-                            <div class="stat-divider"></div>
-                            <div class="stat-item">
-                                <span class="stat-label">Skipped</span>
-                                <span class="stat-value stat-skipped" id="statSkipped">0</span>
-                            </div>
-                            <div class="stat-divider"></div>
-                            <div class="stat-item">
-                                <span class="stat-label">Errors</span>
-                                <span class="stat-value stat-errors" id="statErrors">0</span>
-                            </div>
-                        </div>
+                    <div class="segmented" id="mediaSort">
+                        <button class="seg active" data-sort="newest" onclick="setMediaSort('newest')">Newest</button>
+                        <button class="seg" data-sort="oldest" onclick="setMediaSort('oldest')">Oldest</button>
                     </div>
-
-                </div><!-- /twitterTab -->
-
-                <!-- Coomerfans Tab -->
-                <div class="tab-panel" id="coomerfansTab">
-
-                    <!-- Archive Directory Section -->
-                    <div class="section">
-                        <div class="section-title">Archive Database</div>
-                        <div class="form-row">
-                            <span class="form-label">Archive Dir</span>
-                            <input type="text" class="input-field" id="cfArchiveDir" placeholder="Select folder to store archive .db files..." readonly>
-                            <button class="btn btn-ghost btn-sm" onclick="cfBrowseArchiveDir()">Browse</button>
-                        </div>
-                        <div class="form-row">
-                            <span class="form-label"></span>
-                            <span class="field-hint">
-                                Stores per-creator download history (coomerfans_service_id.db) so re-runs skip what's already downloaded.
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Target Section -->
-                    <div class="section">
-                        <div class="section-title">Target</div>
-
-                        <div class="form-row">
-                            <span class="form-label">Library Root</span>
-                            <input type="text" class="input-field" id="cfLibraryRoot" placeholder="Parent folder for new creators (optional)..." readonly>
-                            <button class="btn btn-ghost btn-sm" onclick="cfBrowseLibraryRoot()">Browse</button>
-                        </div>
-                        <div class="form-row">
-                            <span class="form-label"></span>
-                            <span class="field-hint">New creator URLs auto-fill to &lt;root&gt;/&lt;name&gt;. Known creators restore their saved folder.</span>
-                        </div>
-
-                        <div class="form-row">
-                            <span class="form-label">Recent</span>
-                            <select class="select-field" id="cfRecentArtists" style="flex: 1;" onchange="cfLoadRecentArtist()">
-                                <option value="">Select a recent creator...</option>
-                            </select>
-                        </div>
-
-                        <div class="form-row">
-                            <span class="form-label">Creator URL</span>
-                            <input type="text" class="input-field" id="cfCreatorUrl" placeholder="https://coomerfans.com/u/onlyfans/310803/lividpuppy">
-                        </div>
-                        <div id="cfUrlError" class="field-error" style="margin-left: 106px;">Invalid URL. Use format: https://coomerfans.com/u/&lt;service&gt;/&lt;id&gt;/&lt;name&gt;</div>
-
-                        <div class="form-row">
-                            <span class="form-label">Destination</span>
-                            <input type="text" class="input-field" id="cfDestFolder" placeholder="Auto-fills from URL, or browse..." readonly>
-                            <button class="btn btn-ghost btn-sm" onclick="cfBrowseDestination()">Browse</button>
-                            <button class="btn btn-ghost btn-sm btn-icon" onclick="cfOpenDestination()" title="Open destination in Explorer">
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-                                </svg>
-                            </button>
-                        </div>
-                        <div class="form-row">
-                            <span class="form-label"></span>
-                            <span class="field-hint">Videos save to &lt;dest&gt;/&lt;year&gt;/, images to &lt;dest&gt;/images/&lt;year&gt;/. Files: "YYYY.MM.DD - OF - title-slug_N.ext".</span>
-                        </div>
-
-                        <div class="form-row">
-                            <span class="form-label">Concurrency</span>
-                            <input type="range" id="cfConcurrency" class="slider-field" min="3" max="10" step="1" value="5" oninput="cfUpdateConcurrency()">
-                            <span id="cfConcurrencyVal" class="field-hint" style="min-width: 150px;">5 downloads at once</span>
-                        </div>
-                        <div class="form-row">
-                            <span class="form-label"></span>
-                            <span class="field-hint">How many files download simultaneously. Raise for big cold-storage backfills; lower if you get rate-limited.</span>
-                        </div>
-                    </div>
-
-                    <!-- Actions Section -->
-                    <div class="section">
-                        <div class="section-title">Actions</div>
-                        <div class="actions-row">
-                            <button class="btn btn-primary" id="cfBtnDownloadAll" onclick="cfDownloadAll()">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-                                </svg>
-                                Download Everything
-                            </button>
-                            <button class="btn btn-secondary" id="cfBtnFetchLatest" onclick="cfFetchLatest()">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <polyline points="23 4 23 10 17 10"/>
-                                    <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-                                </svg>
-                                Fetch Latest
-                            </button>
-                            <button class="btn btn-ghost" id="cfBtnVerify" onclick="cfVerifyRepair()" title="Check downloaded files for corruption/truncation and re-download broken ones">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M9 12l2 2 4-4"/>
-                                    <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                </svg>
-                                Verify &amp; Repair
-                            </button>
-                            <button class="btn btn-danger" id="cfBtnCancel" onclick="cfCancel()" style="display: none;">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                                </svg>
-                                Cancel
-                            </button>
-                        </div>
-
-                        <div class="actions-row actions-divider">
-                            <select class="select-field" id="cfRedownloadYear" style="min-width: 100px;">
-                                <option value="">Year...</option>
-                            </select>
-                            <button class="btn btn-ghost" id="cfBtnRedownload" onclick="cfRedownloadYear()">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M1 4v6h6M23 20v-6h-6"/>
-                                    <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
-                                </svg>
-                                Redownload Year
-                            </button>
-                            <span class="field-hint">Re-fetches all media for a specific year (ignores archive)</span>
-                        </div>
-                    </div>
-
-                    <!-- Output Log Section -->
-                    <div class="section log-section">
-                        <div class="log-header">
-                            <div class="section-title" style="margin-bottom: 0;">Output Log</div>
-                            <button class="btn btn-ghost btn-sm" onclick="cfClearLog()">Clear</button>
-                        </div>
-                        <div class="log-container" id="cfLogContainer"></div>
-                        <div class="stats-bar" id="cfStatsBar">
-                            <div class="stat-item">
-                                <span class="stat-label">Downloaded</span>
-                                <span class="stat-value stat-downloaded" id="cfStatDownloaded">0</span>
-                            </div>
-                            <div class="stat-divider"></div>
-                            <div class="stat-item">
-                                <span class="stat-label">Skipped</span>
-                                <span class="stat-value stat-skipped" id="cfStatSkipped">0</span>
-                            </div>
-                            <div class="stat-divider"></div>
-                            <div class="stat-item">
-                                <span class="stat-label">Errors</span>
-                                <span class="stat-value stat-errors" id="cfStatErrors">0</span>
-                            </div>
-                        </div>
-                    </div>
-
-                </div><!-- /coomerfansTab -->
-            </div><!-- /tab-content -->
+                    <span class="field-hint" id="mediaCount" style="margin-left: auto;"></span>
+                    <button class="btn btn-secondary btn-sm" onclick="manageCurrentCreator()">Manage / Download</button>
+                </div>
+                <div class="media-grid" id="mediaGrid"></div>
+            </div>
         </main>
     </div>
 
+    <!-- ── Lightbox viewer ─────────────────────────────────────── -->
+    <div class="lightbox" id="mediaViewer">
+        <button class="lightbox-close" onclick="closeViewer()" title="Close (Esc)">&times;</button>
+        <button class="lightbox-nav lightbox-prev" onclick="viewerPrev()" title="Previous (←)">&#8249;</button>
+        <div class="lightbox-stage" id="lightboxStage"></div>
+        <button class="lightbox-nav lightbox-next" onclick="viewerNext()" title="Next (→)">&#8250;</button>
+        <div class="lightbox-caption" id="lightboxCaption"></div>
+    </div>
+
+    <!-- ── Configure Links overlay ─────────────────────────────── -->
+    <div class="modal-overlay" id="configureOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <span id="configureTitle">Configure Creator</span>
+                <button class="modal-close" onclick="closeConfigure()" title="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <span class="form-label">Name</span>
+                    <input type="text" class="input-field" id="cfgName" placeholder="Creator name (defaults to folder name)">
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Type</span>
+                    <input type="text" class="input-field" id="cfgCategory" list="cfgCategoryList" placeholder="Real / Furry (auto-detected from folder)">
+                    <datalist id="cfgCategoryList"></datalist>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Folder</span>
+                    <input type="text" class="input-field" id="cfgDest" placeholder="Destination folder…" readonly>
+                    <button class="btn btn-ghost btn-sm" onclick="cfgBrowseDest()">Browse</button>
+                    <button class="btn btn-ghost btn-sm btn-icon" onclick="cfgOpenDest()" title="Open folder">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <label class="checkbox-option" onclick="cfgToggleVideos()">
+                        <div class="checkbox-box" id="cfgVideosBox"></div>
+                        <span class="checkbox-label">Has videos/gifs (Twitter images split into an Images/ subfolder)</span>
+                    </label>
+                </div>
+
+                <div class="section-title" style="margin-top: 6px;">Links</div>
+                <div class="links-list" id="cfgLinks"></div>
+
+                <div class="form-row" style="margin-top: 12px;">
+                    <input type="text" class="input-field" id="cfgNewLink" placeholder="Paste a coomerfans (OF/Fansly) or X/Twitter URL…">
+                    <button class="btn btn-secondary btn-sm" id="cfgAddBtn" onclick="cfgAddLink()">Add Link</button>
+                </div>
+                <div class="field-hint" id="cfgLinkPreview" style="min-height: 16px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-danger btn-sm" id="cfgDeleteBtn" onclick="cfgDelete()" style="margin-right: auto;">Delete Creator</button>
+                <button class="btn btn-ghost btn-sm" onclick="closeConfigure()">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="cfgSave()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Settings overlay ────────────────────────────────────── -->
+    <div class="modal-overlay" id="settingsOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <span>Settings</span>
+                <button class="modal-close" onclick="closeSettings()" title="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="section-title">Storage</div>
+                <div class="form-row">
+                    <span class="form-label">Archive Dir</span>
+                    <input type="text" class="input-field" id="setArchiveDir" placeholder="Folder for archive .db files…" readonly>
+                    <button class="btn btn-ghost btn-sm" onclick="setBrowseArchive()">Browse</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Per-link download history (twitter_*.db, coomerfans_*.db), shared by both platforms.</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Library Root</span>
+                    <input type="text" class="input-field" id="setLibraryRoot" placeholder="Parent folder for new creators (optional)…" readonly>
+                    <button class="btn btn-ghost btn-sm" onclick="setBrowseLibrary()">Browse</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Concurrency</span>
+                    <input type="range" id="setConcurrency" class="slider-field" min="3" max="10" step="1" value="5" oninput="setUpdateConcurrency()">
+                    <span id="setConcurrencyVal" class="field-hint" style="min-width: 140px;">5 downloads at once</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Coomerfans simultaneous downloads. Raise for big cold-storage backfills; lower if rate-limited.</span>
+                </div>
+
+                <div class="section-title" style="margin-top: 16px;">Rebuild Library</div>
+                <div class="field-hint" style="margin-bottom: 10px;">
+                    Recover creators whose folder↔link index was lost. <b>Recover from backup</b> restores
+                    mappings saved in earlier state files. <b>Scan &amp; Import</b> rebuilds from the NAS by
+                    matching archive DBs to creator folders (coomerfans names are looked up online as needed).
+                    Both are additive — they never delete files or existing links.
+                </div>
+                <div class="actions-row">
+                    <button class="btn btn-ghost btn-sm" onclick="recoverFromBackup()">Recover from backup</button>
+                    <button class="btn btn-secondary btn-sm" onclick="importFromDisk()">Scan &amp; Import from disk</button>
+                </div>
+                <div class="form-row" style="margin-top: 8px;">
+                    <span class="form-label"></span>
+                    <span class="field-hint" id="setRootsInfo">Detecting library roots…</span>
+                </div>
+
+                <div class="section-title" style="margin-top: 16px;">Twitter Authentication</div>
+                <div class="field-hint" style="margin-bottom: 12px;">Only needed when fetching Twitter content.</div>
+                <div class="radio-group">
+                    <div class="radio-option selected" data-auth="file" onclick="setAuthMethod('file')">
+                        <div class="radio-dot"></div>
+                        <span class="radio-label">Cookie File</span>
+                    </div>
+                    <div class="radio-option" data-auth="browser" onclick="setAuthMethod('browser')">
+                        <div class="radio-dot"></div>
+                        <span class="radio-label">Extract from Browser</span>
+                    </div>
+                </div>
+                <div class="auth-section active" id="authFile">
+                    <div class="form-row">
+                        <span class="form-label">Cookie File</span>
+                        <input type="text" class="input-field" id="cookiesPath" placeholder="Select cookies.txt file…" readonly>
+                        <button class="btn btn-ghost btn-sm" onclick="browseCookies()">Browse</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span id="cookieStatus" class="status-badge status-idle">No cookies loaded</span>
+                    </div>
+                </div>
+                <div class="auth-section" id="authBrowser">
+                    <div class="form-row">
+                        <span class="form-label">Browser</span>
+                        <select class="select-field" id="browserSelect">
+                            <option value="chrome">Chrome</option>
+                            <option value="firefox">Firefox</option>
+                            <option value="edge">Edge</option>
+                            <option value="brave">Brave</option>
+                            <option value="opera">Opera</option>
+                            <option value="chromium">Chromium</option>
+                        </select>
+                        <button class="btn btn-ghost btn-sm" id="extractBtn" onclick="extractBrowserCookies()">Extract</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span id="browserStatus" class="status-badge status-idle">Not extracted</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary btn-sm" onclick="closeSettings()">Done</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/logger.js"></script>
-    <script src="js/twitter_tab.js"></script>
-    <script src="js/coomerfans_tab.js"></script>
+    <script src="js/creators.js"></script>
+    <script src="js/gallery.js"></script>
+    <script src="js/media.js"></script>
+    <script src="js/overlays.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

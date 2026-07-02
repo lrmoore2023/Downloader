@@ -21,7 +21,7 @@ def _base_config(destination, cookies_path=None, cookies_browser=None, has_video
         "replies": False,
         "quoted": False,
         "videos": True,
-        "filename": "{date:%Y.%m.%d} - {tweet_id}_{num}.{extension}",
+        "filename": "{date:%Y.%m.%d} - Twitter - {tweet_id}_{num}.{extension}",
         "directory": directory,
         "sleep-request": 1.0,
     }

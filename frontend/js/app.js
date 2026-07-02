@@ -1,8 +1,8 @@
 /* ── Main App Controller ──────────────────────────────────────── */
 
-// ── pywebview progress callbacks (called from Python backend) ──
+// ── Download progress callbacks (pushed from the Python backend) ──
 
-window.onDownloadProgress = function(data) {
+window.onCreatorProgress = function (data) {
     switch (data.type) {
         case 'download':
             Logger.download(data.message);
@@ -13,9 +13,11 @@ window.onDownloadProgress = function(data) {
             Logger.skip(data.message);
             incrementStat('statSkipped');
             break;
-        case 'url':
-            Logger.info(data.message);
+        case 'error':
+            Logger.error(data.message);
+            incrementStat('statErrors');
             break;
+        case 'url':
         case 'info':
             Logger.info(data.message);
             break;
@@ -24,7 +26,85 @@ window.onDownloadProgress = function(data) {
     }
 };
 
-// ── Live progress strip ────────────────────────────────────────
+window.onCreatorComplete = function (data) {
+    setDownloadingState(false);
+    refreshYears();
+    if (typeof renderPendingLinks === 'function') renderPendingLinks();
+
+    const msg = `Done. Downloaded: ${data.downloaded} | Skipped: ${data.skipped} | Errors: ${data.errors}`;
+    if (data.cancelled) Logger.info('Operation cancelled.');
+    Logger.success(msg);
+
+    if (data.cancelled) {
+        showToast('Cancelled', 'info');
+    } else if (data.errors === 0) {
+        showToast(`Done! ${data.downloaded} file(s) downloaded`, 'success');
+    } else {
+        showToast(`Finished with ${data.errors} error(s)`, 'info');
+    }
+};
+
+window.onCreatorError = function (data) {
+    Logger.error(data.message);
+    incrementStat('statErrors');
+    if (data.subtype === 'auth') {
+        showToast('Twitter auth failed — cookies may have expired (Settings)', 'error');
+    }
+};
+
+window.onCreatorVerifyResult = function (data) {
+    setDownloadingState(false);
+    if (data.error) {
+        Logger.error('Verify failed: ' + data.error);
+        showToast('Verify failed', 'error');
+        return;
+    }
+    Logger.info(`Verify complete — checked ${data.checked}, present ${data.present}, broken ${data.count}.`);
+    if (data.cancelled) { Logger.info('Verify cancelled.'); return; }
+    if (data.count === 0) { showToast('All present files look good', 'success'); return; }
+
+    data.items.slice(0, 50).forEach(it => Logger.error(`BROKEN: ${it.filename} (${it.reason})`));
+    if (confirm(`${data.count} broken file(s) found. Re-download them now?`)) {
+        setDownloadingState(true);
+        pywebview.api.start_creator_repair(currentCreatorId).then(res => {
+            if (res && res.error) { setDownloadingState(false); showToast(res.error, 'error'); }
+        });
+    }
+};
+
+window.onCreatorRepairComplete = function (data) {
+    setDownloadingState(false);
+    if (data.cancelled) Logger.info('Repair cancelled.');
+    Logger.success(`Repair done — repaired ${data.repaired}, still bad ${data.still_bad}.`);
+    if (data.error) Logger.error(data.error);
+    showToast(`Repaired ${data.repaired} file(s)`, data.still_bad ? 'info' : 'success');
+};
+
+// ── Library import callbacks ────────────────────────────────────
+
+window.onImportProgress = function (data) {
+    Logger.info(data.message);
+};
+
+window.onImportComplete = function (data) {
+    setDownloadingState(false);
+    if (data.error) {
+        Logger.error('Import failed: ' + data.error);
+        showToast('Import failed', 'error');
+        return;
+    }
+    Logger.success(
+        `Import done — matched ${data.matched_cf} coomerfans + ${data.matched_tw} twitter `
+        + `(resolved ${data.resolved_online} online), +${data.links_added} new link(s). `
+        + `Now ${data.creators_total} creator(s).`);
+    if (data.unmatched && data.unmatched.length) {
+        Logger.info(`${data.unmatched.length} archive DB(s) had no folder match: ${data.unmatched.join(', ')}`);
+    }
+    showToast(`Imported — ${data.links_added} new link(s)`, data.cancelled ? 'info' : 'success');
+    refreshCreators(currentCreatorId);
+};
+
+// ── Live progress strip (header) ────────────────────────────────
 
 function updateLiveProgress(filename) {
     document.getElementById('runFile').textContent = filename || '';
@@ -32,59 +112,26 @@ function updateLiveProgress(filename) {
         document.getElementById('statDownloaded').textContent;
 }
 
-window.onDownloadComplete = function(data) {
-    setDownloadingState(false);
-    refreshYearDropdown();
-    refreshRecentArtists();
-
-    const msg = `Download complete. Downloaded: ${data.downloaded} | Skipped: ${data.skipped} | Errors: ${data.errors}`;
-
-    if (data.cancelled) {
-        Logger.info('Download was cancelled.');
-    }
-
-    Logger.success(msg);
-
-    if (data.errors === 0 && !data.cancelled) {
-        showToast(`Done! ${data.downloaded} files downloaded`, 'success');
-    } else if (data.cancelled) {
-        showToast('Download cancelled', 'info');
-    }
-};
-
-window.onDownloadError = function(data) {
-    Logger.error(data.message);
-    incrementStat('statErrors');
-
-    if (data.subtype === 'auth') {
-        showToast('Authentication failed - cookies may have expired', 'error');
-    }
-};
-
-// ── Sidebar tab switching ──────────────────────────────────────
-
-function setupTabs() {
-    document.querySelectorAll('.sidebar-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            const name = tab.dataset.tab;
-            document.querySelectorAll('.sidebar-tab').forEach(t =>
-                t.classList.toggle('active', t === tab));
-            document.querySelectorAll('.tab-panel').forEach(p =>
-                p.classList.toggle('active', p.id === `${name}Tab`));
-            document.getElementById('headerSubtitle').textContent =
-                tab.getAttribute('title') || name;
-        });
-    });
-}
-
-// ── Stat counter helper ────────────────────────────────────────
+// ── Stats helpers ───────────────────────────────────────────────
 
 function incrementStat(id) {
     const el = document.getElementById(id);
     el.textContent = parseInt(el.textContent, 10) + 1;
 }
 
-// ── Toast notifications ────────────────────────────────────────
+function resetStats() {
+    document.getElementById('statDownloaded').textContent = '0';
+    document.getElementById('statSkipped').textContent = '0';
+    document.getElementById('statErrors').textContent = '0';
+    document.getElementById('runCount').textContent = '0';
+}
+
+function clearLog() {
+    Logger.clear();
+    resetStats();
+}
+
+// ── Toast notifications ─────────────────────────────────────────
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
@@ -92,7 +139,6 @@ function showToast(message, type = 'info') {
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
     container.appendChild(toast);
-
     setTimeout(() => {
         toast.style.opacity = '0';
         toast.style.transition = 'opacity 0.3s ease';
@@ -100,104 +146,44 @@ function showToast(message, type = 'info') {
     }, 4000);
 }
 
-// ── Clear log ──────────────────────────────────────────────────
+// ── Close overlays on backdrop click / Escape ───────────────────
 
-function clearLog() {
-    Logger.clear();
-    resetStats();
+function dismissOverlay(ov) {
+    if (ov.id === 'settingsOverlay') persistSettings();
+    ov.classList.remove('visible');
 }
 
-// ── State persistence ──────────────────────────────────────────
-
-async function saveState() {
-    const state = {
-        cookies_path: cookiesPath,
-        cookies_browser: cookiesBrowser,
-        auth_method: currentAuthMethod,
-        archive_dir: archiveDir,
-        library_root: libraryRoot,
-        has_videos: hasVideos,
-        last_url: document.getElementById('accountUrl').value,
-        last_destination: document.getElementById('destFolder').value,
-    };
-    await pywebview.api.save_state(state);
-}
-
-async function loadState() {
-    const state = await pywebview.api.load_state();
-
-    if (state.auth_method) {
-        setAuthMethod(state.auth_method);
-    }
-
-    if (state.cookies_path) {
-        cookiesPath = state.cookies_path;
-        document.getElementById('cookiesPath').value = state.cookies_path;
-        // Re-validate on load
-        const result = await pywebview.api.validate_cookies(state.cookies_path);
-        updateCookieStatus(result);
-    }
-
-    if (state.cookies_browser) {
-        cookiesBrowser = state.cookies_browser;
-        document.getElementById('browserSelect').value = state.cookies_browser;
-        document.getElementById('browserStatus').textContent = `${state.cookies_browser} cookies ready`;
-        document.getElementById('browserStatus').className = 'status-badge status-ok';
-    }
-
-    if (state.archive_dir) {
-        archiveDir = state.archive_dir;
-        document.getElementById('archiveDir').value = state.archive_dir;
-    }
-
-    if (state.library_root) {
-        libraryRoot = state.library_root;
-        document.getElementById('libraryRoot').value = state.library_root;
-    }
-
-    if (state.has_videos) {
-        hasVideos = true;
-        document.getElementById('hasVideosBox').classList.add('checked');
-    }
-
-    if (state.last_url) {
-        document.getElementById('accountUrl').value = state.last_url;
-    }
-
-    if (state.last_destination) {
-        document.getElementById('destFolder').value = state.last_destination;
-        refreshYearDropdown();
-    }
-}
-
-// ── URL field: live auto-resolve destination + save ────────────
-
-document.getElementById('accountUrl').addEventListener('input', handleUrlInput);
-
-document.getElementById('accountUrl').addEventListener('blur', () => {
-    showUrlError(false);
-    resolveDestinationFromUrl();
-    saveState();
+document.querySelectorAll('.modal-overlay').forEach(ov => {
+    ov.addEventListener('mousedown', e => {
+        if (e.target === ov) dismissOverlay(ov);
+    });
 });
 
-// ── Initialize ─────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        document.querySelectorAll('.modal-overlay.visible').forEach(dismissOverlay);
+    }
+});
 
-window.addEventListener('pywebviewready', async function() {
+// ── Initialize ──────────────────────────────────────────────────
+
+window.addEventListener('pywebviewready', async function () {
     Logger.init();
     Logger.info('Downloader initialized. Ready.');
-    setupTabs();
-    await loadState();
-    await refreshRecentArtists();
 
-    // Coomerfans tab init
-    const fullState = await pywebview.api.load_state();
-    await cfLoadState(fullState);
-
-    // Clean up .db files for artist directories that no longer exist
-    if (archiveDir) {
-        const cleanup = await pywebview.api.cleanup_orphaned_archives(archiveDir);
-        if (cleanup.removed > 0) {
-            Logger.info(`Cleaned up ${cleanup.removed} orphaned archive(s): ${cleanup.usernames.join(', ')}`);
+    // Consolidate legacy per-tab state into the creator model (idempotent).
+    try {
+        const m = await pywebview.api.migrate_state();
+        if (m && m.migrated) {
+            Logger.info(`Migrated existing data into ${m.creators} creator(s). Backup saved as app_state.json.pre-migrate.bak.`);
         }
+    } catch (e) {
+        Logger.error('Migration note: ' + e);
     }
+
+    const state = await pywebview.api.load_state();
+    loadSettingsFromState(state);
+    currentSort = state.creator_sort || 'recent';
+    document.getElementById('creatorSort').value = currentSort;
+    await refreshCreators(state.last_creator || '');
 });

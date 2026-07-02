@@ -7,6 +7,14 @@ __pycache__/
 app_state.json
 *.corrupt
 *.tmp
+*.bak
+*.tsv
+
+# Cached creator profile images
+.avatars/
+
+# Cached media thumbnails (local fallback; usually on the NAS archive dir)
+.thumbs/
 
 # Claude Code local settings
 .claude/

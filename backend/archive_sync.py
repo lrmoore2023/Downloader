@@ -2,8 +2,10 @@ import os
 import re
 import sqlite3
 
-# Matches filenames like: 2025.03.15 - 1234567890_1.jpg
-_FILENAME_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2} - (\d+)_(\d+)\.\w+$")
+# Matches twitter filenames, both the original and the newer "- Twitter -" form:
+#   2025.03.15 - 1234567890_1.jpg
+#   2025.03.15 - Twitter - 1234567890_1.jpg
+_FILENAME_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2} - (?:Twitter - )?(\d+)_(\d+)\.\w+$")
 
 
 def scan_files_for_entries(destination, has_videos=True):
