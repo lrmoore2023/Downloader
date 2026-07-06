@@ -9,6 +9,7 @@ function chipsFromSummary(s) {
     if (s.patreon) out.push(chipHtml('Patreon', s.patreon));
     if (s.fanbox) out.push(chipHtml('Fanbox', s.fanbox));
     if (s.twitter) out.push('<span class="chip chip-twitter">Twitter</span>');
+    if (s.derpibooru) out.push(chipHtml('Derpibooru', s.derpibooru));
     return out.join('');
 }
 

@@ -68,7 +68,7 @@ def t_parse_media():
     check("kinds image+video+video", kinds == ["image", "video", "video"])
     check("dt parsed", p["dt"] and p["dt"].year == 2026)
     check("media url built", p["media"][1]["url"]
-          == "https://file.pawchive.st/data/22/a3/b.mp4?f=teaser.mp4")
+          == "https://file.pawchive.pw/data/22/a3/b.mp4?f=teaser.mp4")
 
     m = ps.parse_post(POST_MEGA)
     check("mega: file counts as media", len(m["media"]) == 1)
@@ -96,6 +96,20 @@ def t_filenames():
     check("sanitize strips illegal", ps.sanitize_filename('a:b?<c>.mp4') == "abc.mp4",
           ps.sanitize_filename('a:b?<c>.mp4'))
     check("add_index_suffix before ext", ps.add_index_suffix("x - y.mp4", 1) == "x - y_1.mp4")
+    # archive attachments (zip/rar/...) -> 'archive' kind, routed to the year folder
+    check("zip -> archive kind", ps._kind_and_ext("pack.zip") == ("archive", "zip"))
+    check("rar -> archive kind", ps._kind_and_ext("pack.rar") == ("archive", "rar"))
+    ap = ps.target_path("D", "archive", p["dt"], "2026.05.12 - Patreon - pack.zip").replace("\\", "/")
+    check("archive -> year folder", ap == "D/2026/2026.05.12 - Patreon - pack.zip", ap)
+    ip = ps.target_path("D", "image", p["dt"], "x.png").replace("\\", "/")
+    check("image -> images/year folder", ip == "D/Images/2026/x.png", ip)
+    # page-order decoration (images only): ordinal + optional time token
+    check("build_filename ordinal",
+          ps.build_filename(p["dt"], "patreon", "a.png", ordinal=2, width=2)
+          == "2026.05.12 - Patreon - 02 - a.png")
+    check("build_filename time+ordinal",
+          ps.build_filename(p["dt"], "patreon", "a.png", ordinal=1, width=2, include_time=True)
+          == f"2026.05.12 {p['dt']:%H.%M} - Patreon - 01 - a.png")
 
 
 def t_manifest_merge():
@@ -125,9 +139,140 @@ def t_manifest_merge():
     check("markdown written", os.path.isfile(pl.md_path))
 
 
+def t_extract():
+    """Auto-extract: media pulled into the library (subfolder folded into the name),
+    non-media kept together under an archive-named folder, original deleted, and the
+    whole thing idempotent."""
+    import zipfile
+    from datetime import datetime
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_archive import Archive, entry_key
+    from backend import pawchive_extract as px
+
+    # classify: only known image/video exts are media; unknown is NOT (unlike _kind_and_ext)
+    check("classify image", px.classify("2.png") == "image")
+    check("classify video", px.classify("a.MP4") == "video")
+    check("classify txt -> None", px.classify("read me.txt") is None)
+    check("classify unknown -> None", px.classify("model.obj") is None)
+
+    dest = tempfile.mkdtemp(prefix="pawx_")
+    # A pack: root media + root non-media + a subfolder with a same-named image + a
+    # nested asset tree.
+    zpath = os.path.join(dest, "2026", "2026.05.04 - Patreon - MyPack.zip")
+    os.makedirs(os.path.dirname(zpath), exist_ok=True)
+    with zipfile.ZipFile(zpath, "w") as z:
+        z.writestr("b.mp4", b"vid")
+        z.writestr("2.png", b"img-root")
+        z.writestr("notes.txt", b"hello")
+        z.writestr("textless/2.png", b"img-alt")     # same name, different folder
+        z.writestr("textless/c.webm", b"vid2")
+        z.writestr("assets/model.obj", b"obj")
+        z.writestr("assets/sub/data.bin", b"bin")
+
+    r = PawchiveRunner(workers=2, extract=True)
+    r._destination = dest
+    r._service = "patreon"
+    r._archive = Archive(os.path.join(dest, "arc.db"))
+    entry = entry_key("p1", 1)
+    r._archive.record(entry, "p1", os.path.basename(zpath), "archive", "2026")
+    job = {"dt": datetime(2026, 5, 4), "media_kind": "archive", "post_id": "p1",
+           "name": "MyPack.zip", "entry": entry, "post_title": "My Pack"}
+
+    r._extract_archive(zpath, job, entry)
+
+    def has(p):
+        return os.path.isfile(os.path.join(dest, p))
+    check("root video -> year", has("2026/2026.05.04 - Patreon - b.mp4"))
+    check("root image -> Images/year", has("Images/2026/2026.05.04 - Patreon - 2.png"))
+    check("subfolder video foldered name", has("2026/2026.05.04 - Patreon - textless - c.webm"))
+    check("subfolder image foldered name",
+          has("Images/2026/2026.05.04 - Patreon - textless - 2.png"))
+    stem = "2026/2026.05.04 - Patreon - MyPack"
+    check("leftover txt in archive folder", has(f"{stem}/notes.txt"))
+    check("leftover asset structure preserved", has(f"{stem}/assets/sub/data.bin"))
+    check("leftover model preserved", has(f"{stem}/assets/model.obj"))
+    check("no media left in archive folder", not has(f"{stem}/b.mp4")
+          and not os.path.isdir(os.path.join(dest, stem, "textless")))
+    # This pack had leftovers → the original archive is MOVED into the leftover folder
+    # (not deleted), so the project stays complete.
+    check("archive moved into leftover folder (not deleted)",
+          not os.path.isfile(zpath) and has(f"{stem}/2026.05.04 - Patreon - MyPack.zip"))
+    check("entry marked extracted", r._archive.is_extracted(entry))
+    check("job_present true after extract (zip moved)", r._job_present(job))
+
+    # Idempotent: extracting again is a no-op, _process_media skips.
+    r._extract_archive(zpath, job, entry)
+    r.skipped_count = 0
+    r._process_media(job)
+    check("re-run skips extracted archive", r.skipped_count == 1)
+
+    # Pure-media pack: no leftovers → the redundant archive IS deleted.
+    z2 = os.path.join(dest, "2026", "2026.05.04 - Patreon - MediaOnly.zip")
+    with zipfile.ZipFile(z2, "w") as z:
+        z.writestr("only.png", b"img")
+        z.writestr("clip.mp4", b"vid")
+    e2 = entry_key("p2", 1)
+    r._archive.record(e2, "p2", os.path.basename(z2), "archive", "2026")
+    job2 = dict(job, post_id="p2", name="MediaOnly.zip", entry=e2, post_title="Media Only")
+    r._extract_archive(z2, job2, e2)
+    check("pure-media archive deleted", not os.path.isfile(z2))
+    check("pure-media has no leftover folder",
+          not os.path.isdir(os.path.join(dest, "2026", "2026.05.04 - Patreon - MediaOnly")))
+    r._archive.close()
+
+
+def t_resolved_and_skip():
+    """Item 2: runner saves don't clobber user 'resolved' flags. Item 6: skip &
+    remember marks a file so it's never re-fetched."""
+    from datetime import datetime
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_archive import Archive, entry_key
+    from backend.pawchive_links import PawchiveLinks, make_key
+
+    # ── resolved survives a stale runner-side save ──
+    dest = tempfile.mkdtemp(prefix="pawres_")
+    jpath = os.path.join(dest, "_pawchive_links.json")
+    url = "https://mega.nz/x"
+    post = {"post_id": "p1", "title": "T", "dt": None, "service": "patreon",
+            "external_links": [{"url": url, "host": "mega.nz", "kind": "manual"}]}
+    runner_links = PawchiveLinks(jpath)          # long-lived (like the runner holds)
+    runner_links.autosave = False
+    runner_links.upsert_post(post, {})
+    runner_links.save()
+    # user checks it off via a separate instance (like api.py)
+    api_links = PawchiveLinks(jpath)
+    key = make_key("p1", url)
+    api_links.mark_resolved(key)
+    # stale runner save WITHOUT the merge would wipe it; with reload it survives
+    runner_links.reload_resolved_from_disk()
+    runner_links.save()
+    reloaded = PawchiveLinks(jpath)
+    survived = reloaded.data["posts"]["p1"]["links"][url].get("resolved") is True
+    check("resolved flag survives runner save", survived)
+
+    # ── skip & remember ──
+    r = PawchiveRunner(workers=2)
+    r._archive = Archive(os.path.join(dest, "sk.db"))
+    r._destination = dest
+    entry = entry_key("p9", 3)
+    job = {"dt": datetime(2026, 1, 2), "media_kind": "video", "post_id": "p9",
+           "name": "big.mp4", "entry": entry, "url": "http://x/big.mp4"}
+    r._mark_skipped(job, entry, "big.mp4")
+    check("is_skipped after mark", r._archive.is_skipped(entry))
+    check("skipped job counts present", r._job_present(job))
+    r.skipped_count = 0
+    r._process_media(job)
+    check("skipped file not re-downloaded", r.skipped_count == 1)
+    # request_skip registers the entry for the live loop
+    r.request_skip("some_entry")
+    check("request_skip registers", r._skip_requested("some_entry"))
+    r._archive.close()
+
+
 def main():
     print("Running pawchive offline tests...")
-    for t in (t_urls, t_parse_media, t_links_classify, t_filenames, t_manifest_merge):
+    for t in (t_urls, t_parse_media, t_links_classify, t_filenames, t_manifest_merge,
+              t_extract, t_resolved_and_skip):
         try:
             t()
         except Exception as e:

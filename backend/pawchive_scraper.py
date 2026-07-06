@@ -30,20 +30,71 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlsplit, quote
 
-import requests
 from bs4 import BeautifulSoup
+
+# HTTP backend: prefer curl_cffi (impersonates a real Chrome TLS/JA3 + HTTP2
+# fingerprint) so DDoS-Guard stops rate-limiting us as a bot — this is the single
+# biggest lever against the 429 wall on the file CDN. Fall back to stock `requests`
+# if the wheel isn't available on this platform (the app still runs, just without
+# impersonation). `_net` is the drop-in requests-compatible module either way, and
+# the exception aliases below let callers catch the right classes regardless of
+# which backend loaded (curl_cffi's exceptions do NOT subclass requests').
+try:
+    from curl_cffi import requests as _net
+    from curl_cffi.requests import exceptions as _exc
+    from curl_cffi import CurlHttpVersion as _HTTPV
+    _IMPERSONATE = "chrome"       # latest Chrome profile curl_cffi ships
+    # Force HTTP/1.1: DDoS-Guard resets multiplexed HTTP/2 streams under load, which
+    # surfaces as "curl (92) http/2 stream not closed cleanly" errors mid-download.
+    # HTTP/1.1 (one request per connection) sidesteps that entirely; the TLS/JA3
+    # fingerprint stays Chrome, and the file CDN serves 206 over HTTP/1.1 all the same.
+    _HTTP_VERSION = _HTTPV.V1_1
+    USING_IMPERSONATION = True
+except Exception:                 # not installed / import failure -> plain requests
+    import requests as _net
+    _exc = _net
+    _IMPERSONATE = None
+    _HTTP_VERSION = None
+    USING_IMPERSONATION = False
+
+# Backend-agnostic exception aliases (same names/hierarchy in both backends).
+HTTPError = _exc.HTTPError
+ConnectionError = _exc.ConnectionError
+Timeout = _exc.Timeout
+RequestException = _exc.RequestException
 
 # Reuse the shared bits that are identical to coomerfans.
 from backend.coomerfans_scraper import (
     IMAGE_EXTS, VIDEO_EXTS, ext_from_url, target_path, DEFAULT_UA,
 )
 
-BASE = "https://pawchive.st"
-FILE_BASE = "https://file.pawchive.st"
+# pawchive.st and pawchive.pw are equal mirrors of the same backend — .st now just
+# 301-redirects to .pw. So we target .pw directly to avoid paying a redirect
+# round-trip on every request (which itself counts against DDoS-Guard's rate limit).
+# Links to either domain collapse to the same creator (parse_creator_url ignores host).
+BASE = "https://pawchive.pw"
+FILE_BASE = "https://file.pawchive.pw"
 API = BASE + "/api/v1"
+
+PRIMARY_HOST = "pawchive.pw"
+# Kept only as a genuine second host for the icon/avatar fallback in api.py; the
+# download runner no longer fails over between hosts (see PawchiveRunner).
+MIRROR_HOST = "pawchive.st"
+MIRROR_BASE = "https://" + MIRROR_HOST
+
+
+def to_mirror(url):
+    """Rewrite a primary-host URL to the other mirror. Retained for the api.py icon
+    fallback; the download runner no longer calls this."""
+    return (url or "").replace(PRIMARY_HOST, MIRROR_HOST)
 
 PAGE_SIZE = 50           # listing returns 50 posts per ?o= step
 MAX_OFFSET = 5_000_000   # safety cap on pagination
+
+# Pack/archive attachments (posts sometimes ship a mix of mp4 + zip/rar). These
+# aren't viewable media, so they're stored in the year folder (like videos)
+# rather than images/, under the standard 'date - SITE - name' name.
+ARCHIVE_EXTS = {"zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst"}
 
 # service slug -> display code used in filenames (Title case; default = svc.title())
 SITE_CODES = {"patreon": "Patreon", "fanbox": "Fanbox"}
@@ -66,28 +117,62 @@ _CREATOR_RE = re.compile(r"/([A-Za-z0-9_]+)/user/([^/?#]+)")
 _POST_RE = re.compile(r"/([A-Za-z0-9_]+)/user/([^/]+)/post/([^/?#]+)")
 _ILLEGAL_FS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WS = re.compile(r"\s+")
+# Bare (non-hyperlinked) URLs pasted into a post body. Runs on extracted text, so
+# it stops at whitespace — which keeps mega '#<key>' fragments intact.
+_URL_RE = re.compile(r'https?://[^\s<>"\']+', re.I)
 
 
 # ── Session ─────────────────────────────────────────────────────────
 
-def make_session(user_agent=None, cookies_path=None):
-    """requests Session with a browser UA (pawchive 403s non-browser UAs) that
-    auto-carries the DDoS-Guard cookie set on the first hit."""
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": user_agent or DEFAULT_UA,
-        "Referer": BASE + "/",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
-    if cookies_path and os.path.isfile(cookies_path):
+def _load_cookies(session, cookies_path):
+    """Load a Netscape/Mozilla cookies.txt into `session`, copying each cookie in
+    individually so it works for both the requests and curl_cffi cookie jars
+    (curl_cffi's jar is its own type — assigning a MozillaCookieJar to .cookies
+    would not behave)."""
+    try:
+        from http.cookiejar import MozillaCookieJar
+        jar = MozillaCookieJar()
+        jar.load(cookies_path, ignore_discard=True, ignore_expires=True)
+        for c in jar:
+            session.cookies.set(c.name, c.value, domain=c.domain, path=c.path)
+    except Exception:
+        pass
+
+
+def make_session(user_agent=None, cookies_path=None, proxies=None):
+    """HTTP Session that gets past DDoS-Guard's bot rate-limiting.
+
+    When curl_cffi is available it impersonates a real Chrome (matching TLS/JA3 +
+    HTTP2 fingerprint AND the corresponding browser headers, incl. User-Agent) — so
+    we do NOT set our own User-Agent in that mode (a UA that doesn't match the JA3 is
+    itself a bot tell). Without curl_cffi it falls back to a plain requests Session
+    with a browser UA. Either way the Session auto-carries the DDoS-Guard cookie set
+    on the first hit."""
+    if USING_IMPERSONATION:
+        s = _net.Session(impersonate=_IMPERSONATE, http_version=_HTTP_VERSION)
+        # impersonate already installs a matching UA + header order; only add the
+        # request-context headers a browser XHR would send.
+        s.headers.update({
+            "Referer": BASE + "/",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+    else:
+        s = _net.Session()
+        s.headers.update({
+            "User-Agent": user_agent or DEFAULT_UA,
+            "Referer": BASE + "/",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+    if proxies:
+        # Both backends accept a {"http": ..., "https": ...} dict on .proxies.
         try:
-            from http.cookiejar import MozillaCookieJar
-            jar = MozillaCookieJar()
-            jar.load(cookies_path, ignore_discard=True, ignore_expires=True)
-            s.cookies = jar
+            s.proxies.update(proxies)
         except Exception:
             pass
+    if cookies_path and os.path.isfile(cookies_path):
+        _load_cookies(s, cookies_path)
     return s
 
 
@@ -148,14 +233,61 @@ def sanitize_filename(name, max_len=180):
     return name[:max_len].strip()
 
 
-def build_filename(dt, service, original_name):
+def _clean_title(title):
+    """Strip filesystem-illegal chars + collapse whitespace from a post title,
+    without length-truncating it (that's _truncate_title's job)."""
+    t = _ILLEGAL_FS.sub("", title or "")
+    return _WS.sub(" ", t).strip().strip(".").strip()
+
+
+def _truncate_title(title, room):
+    """Shorten a (cleaned) title to fit `room` chars, kept legible: prefer a word
+    boundary and mark the cut with '…'. Returns '' when there's no useful room."""
+    if room < 4:
+        return ""
+    if len(title) <= room:
+        return title
+    cut = title[:room - 1].rstrip()
+    sp = cut.rfind(" ")
+    if sp >= max(4, room // 2):     # break on a word if it stays readable
+        cut = cut[:sp].rstrip()
+    return cut + "…"
+
+
+def build_filename(dt, service, original_name, ordinal=None, width=2,
+                   include_time=False, post_title=None, max_len=None):
     """'2026.05.12 - Patreon - Label stream night X teaser.mp4'.
 
-    The original file name (incl. its extension) is preserved; only the
-    'YYYY.MM.DD - SITE - ' prefix is prepended. Collision suffixes are added by
-    the runner via add_index_suffix()."""
+    The original file name (incl. its extension) is preserved; only a prefix is
+    prepended. Collision suffixes are added by the runner via add_index_suffix().
+
+    Optional page-order decoration (images only; see the runner):
+      * include_time -> add ' HH.MM' to the date so same-day posts stay grouped
+        ('2026.05.12 14.32 - Patreon - ...').
+      * ordinal      -> insert a zero-padded 'NN - ' after the site code so a
+        post's images sort in page order ('... - Patreon - 01 - name.png').
+        `width` sets the zero-padding.
+
+    Archives pass `post_title` to get '... - SITE - POST TITLE - ORIGINAL NAME'
+    so you know which post a zip/rar belongs to. If `max_len` is given and the
+    whole name would exceed it (Windows path limit), ONLY the post title is
+    truncated — the original filename is never modified.
+    """
     date_str = f"{dt:%Y.%m.%d}" if dt else "0000.00.00"
-    return f"{date_str} - {site_code(service)} - {sanitize_filename(original_name)}"
+    if include_time and dt:
+        date_str += f" {dt:%H.%M}"
+    prefix = f"{date_str} - {site_code(service)} - "
+    if ordinal is not None:
+        prefix += f"{ordinal:0{width}d} - "
+    if post_title:
+        # 255 = NTFS component cap; the original name is otherwise preserved whole.
+        name = sanitize_filename(original_name, max_len=255)
+        title = _clean_title(post_title)
+        if max_len:
+            room = max_len - len(prefix) - len(name) - len(" - ")
+            title = _truncate_title(title, room)
+        return f"{prefix}{title} - {name}" if title else f"{prefix}{name}"
+    return f"{prefix}{sanitize_filename(original_name)}"
 
 
 def filename_prefix(dt, service):
@@ -179,6 +311,10 @@ def _kind_and_ext(path_or_url):
         return "video", ext
     if ext in IMAGE_EXTS:
         return "image", ext
+    if ext in ARCHIVE_EXTS:
+        # Packs (zip/rar/...) go to the year folder, not images/, and skip the
+        # video-only ffprobe check and the image-only page-order numbering.
+        return "archive", ext
     # Unknown extension: treat as image (safer default for on-site attachments;
     # the runner still stores it and serves it).
     return "image", (ext or "bin")
@@ -200,6 +336,44 @@ def _classify_link(url):
         if host == h or host.endswith("." + h):
             return "manual"
     return "reference"
+
+
+# Default "junk" link filters — social/store/paywalled links that carry no
+# downloadable content worth surfacing. The UI seeds these into app_state and the
+# user can add/remove any of them, so nothing here is hard-coded into behavior.
+DEFAULT_LINK_FILTERS = [
+    "youtube.com", "youtu.be", "instagram.com", "twitch.tv",
+    "twitter.com", "x.com", "newgrounds.com", "artstation.com",
+    "picarto.tv", "shop.", "patreon.com/posts/",
+]
+
+
+def link_is_filtered(url, patterns):
+    """True if `url` matches any user filter pattern. Matching rules (documented
+    in the Settings UI so patterns are predictable):
+      * a pattern with '/'      → substring match on the whole URL
+        (e.g. 'patreon.com/posts/' hides paywalled post links, keeps profiles)
+      * a pattern ending in '.' → host-prefix match ('shop.' hides shop.* hosts)
+      * a plain domain          → exact host or subdomain match
+        ('youtube.com' hides youtube.com and m.youtube.com, not myyoutube.com)
+    """
+    if not url or not patterns:
+        return False
+    u = url.lower()
+    host = _host_of(url)
+    for p in patterns:
+        p = (p or "").strip().lower()
+        if not p:
+            continue
+        if "/" in p:
+            if p in u:
+                return True
+        elif p.endswith("."):
+            if host.startswith(p):
+                return True
+        elif host == p or host.endswith("." + p):
+            return True
+    return False
 
 
 # ── Date parsing ────────────────────────────────────────────────────
@@ -355,6 +529,11 @@ def extract_external_links(content_html, embed=None):
         soup = BeautifulSoup(content_html, "html.parser")
         for a in soup.find_all("a", href=True):
             add(a["href"], a.get_text(strip=True))
+        # Many creators paste links as plain text (mega/gdrive/etc.), not <a> tags,
+        # so also scan the visible text. add() dedups, so URLs already linked above
+        # aren't double-counted.
+        for m in _URL_RE.finditer(soup.get_text(" ")):
+            add(m.group(0).rstrip(".,;:!?)]}'\""), "")
 
     if embed and embed.get("url"):
         add(embed["url"], embed.get("subject") or embed.get("description") or "")

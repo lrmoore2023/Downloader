@@ -90,6 +90,37 @@ class Archive:
             )
             self._conn.commit()
 
+    def set_extracted(self, entry):
+        """Mark an archive entry as already unpacked (pawchive auto-extract), so
+        re-runs never re-download or re-extract it — even after the original
+        .zip/.rar has been deleted. Stored in the otherwise-unused path_key column."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE archive SET path_key = 'extracted' WHERE entry = ?", (entry,)
+            )
+            self._conn.commit()
+
+    def is_extracted(self, entry):
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT path_key FROM archive WHERE entry = ?", (entry,)
+            )
+            row = cur.fetchone()
+            return bool(row and row[0] == "extracted")
+
+    def set_skipped(self, entry, post_id, filename, kind, year):
+        """Mark a download as user-skipped so future runs never re-fetch it (the
+        'skip & remember' action). Upserts a row flagged in the path_key column."""
+        self.record(entry, post_id, filename, kind, year, path_key="skipped")
+
+    def is_skipped(self, entry):
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT path_key FROM archive WHERE entry = ?", (entry,)
+            )
+            row = cur.fetchone()
+            return bool(row and row[0] == "skipped")
+
     def rows(self):
         """All archive rows as dicts (used by Verify & Repair)."""
         with self._lock:

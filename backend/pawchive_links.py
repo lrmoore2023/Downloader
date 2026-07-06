@@ -101,6 +101,27 @@ class PawchiveLinks:
         with self._lock:
             self._save()
 
+    def reload_resolved_from_disk(self):
+        """Pull user 'resolved' flags that another instance wrote to disk (the API's
+        check-off action) into our in-memory data, so a subsequent save() from a
+        long-lived instance (the runner holds one for the whole crawl) doesn't clobber
+        the checkboxes the user ticked meanwhile. Only ever sets resolved=True in — it
+        never un-resolves, so it can't fight a concurrent writer."""
+        with self._lock:
+            disk = self._load()
+            for pid, dpost in disk.get("posts", {}).items():
+                mpost = self.data.get("posts", {}).get(pid)
+                if not isinstance(mpost, dict):
+                    continue
+                mlinks = mpost.get("links", {})
+                for url, dlink in (dpost.get("links", {}) or {}).items():
+                    if not isinstance(dlink, dict) or not dlink.get("resolved"):
+                        continue
+                    mlink = mlinks.get(url)
+                    if isinstance(mlink, dict):
+                        mlink["resolved"] = True
+                        mlink["resolved_at"] = dlink.get("resolved_at")
+
     def _save(self):
         """Atomic write of the JSON + regenerated Markdown. Best-effort: if the
         destination isn't writable (e.g. NAS offline) this raises OSError, which
@@ -184,6 +205,24 @@ class PawchiveLinks:
             link["resolved_at"] = _now_iso() if resolved else None
             self._save()
             return True
+
+    def mark_many_resolved(self, keys, resolved=True):
+        """Set/clear the 'resolved' flag on several links in a single write
+        (post-level checkbox and undo). Returns the number actually updated."""
+        n = 0
+        with self._lock:
+            for key in keys or []:
+                post_id, url = split_key(key)
+                link = (self.data.get("posts", {}).get(post_id, {})
+                        .get("links", {}).get(url))
+                if not link:
+                    continue
+                link["resolved"] = bool(resolved)
+                link["resolved_at"] = _now_iso() if resolved else None
+                n += 1
+            if n:
+                self._save()
+        return n
 
     # ── queries ──────────────────────────────────────────────────
     @staticmethod

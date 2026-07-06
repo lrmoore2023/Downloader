@@ -830,6 +830,27 @@
     color: var(--danger);
 }
 
+.link-reset {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: var(--radius);
+    height: 28px;
+    padding: 0 10px;
+    cursor: pointer;
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    transition: var(--transition);
+}
+
+.link-reset:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 /* ── Header view toggle ───────────────────────────────────────── */
 
 .header-toggle {
@@ -1154,6 +1175,36 @@
     color: #c4b5fd;
 }
 
+/* At-a-glance amber highlight for mega / google-drive / tinyurl links (badge + URL). */
+.badge.badge-host.host-alt {
+    background: rgba(224, 166, 75, 0.16);
+    border-color: rgba(224, 166, 75, 0.5);
+    color: var(--warn);
+}
+.pending-url.host-alt { color: var(--warn); }
+
+/* Active-downloads panel: one row per in-flight file, each with a Skip button. */
+.active-list { display: flex; flex-direction: column; gap: 4px; }
+.active-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 8px; border-radius: 6px;
+    background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.active-name {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: var(--text-muted);
+}
+.active-skip { flex: none; }
+.active-skip[disabled] { opacity: 0.6; cursor: default; }
+
+/* Derpibooru: teal/green brand accent. */
+.link-badge.badge-derpibooru {
+    background: rgba(45, 212, 191, 0.14);
+    border-color: rgba(45, 212, 191, 0.4);
+    color: #5eead4;
+}
+
 .pending-links { padding-top: 4px; padding-bottom: 4px; }
 
 /* Quiet, clickable section header — the amber count is the only accent. */
@@ -1228,7 +1279,51 @@
     color: var(--text-muted);
 }
 
-.pending-post .btn-tiny { margin-left: auto; }
+/* Copy-name-prefix button sits just after the date (flex gap), not pushed to the
+   far right, so it's easy to reach. */
+.pending-post .btn-tiny { margin-left: 4px; }
+
+/* Post-level "resolve all" checkbox sits before the title; center it against the
+   baseline-aligned row and tint it so it reads as the group-wide action. */
+.pending-check-all {
+    align-self: center;
+    accent-color: var(--warn);
+    cursor: pointer;
+}
+
+/* Editable link-filter patterns in Settings, shown as removable chips. */
+.filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    padding: 3px 4px 3px 9px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+    color: var(--text-primary);
+}
+
+.filter-chip-x {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 0 3px;
+    border-radius: var(--radius-pill);
+}
+
+.filter-chip-x:hover { color: var(--danger, #e05a5a); }
 
 .pending-rows {
     display: flex;

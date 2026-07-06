@@ -6,23 +6,40 @@ const Settings = {
     archiveDir: '',
     libraryRoot: '',
     concurrency: 5,
+    pawConcurrency: 6,
+    pawExtract: true,
     cookiesPath: '',
     cookiesBrowser: '',
     authMethod: 'file',
+    derpibooruApiKey: '',
+    derpibooruFilterId: '56027',
 };
 
 function loadSettingsFromState(state) {
     Settings.archiveDir = state.archive_dir || '';
     Settings.libraryRoot = state.library_root || '';
     Settings.concurrency = state.cf_concurrency || 5;
+    Settings.pawConcurrency = state.pawchive_concurrency || 6;
+    Settings.pawExtract = state.pawchive_extract !== false;
     Settings.cookiesPath = state.cookies_path || '';
     Settings.cookiesBrowser = state.cookies_browser || '';
     Settings.authMethod = state.auth_method || 'file';
+    Settings.derpibooruApiKey = state.derpibooru_api_key || '';
+    Settings.derpibooruFilterId = state.derpibooru_filter_id || '56027';
 
     document.getElementById('setArchiveDir').value = Settings.archiveDir;
     document.getElementById('setLibraryRoot').value = Settings.libraryRoot;
     document.getElementById('setConcurrency').value = Settings.concurrency;
     document.getElementById('setConcurrencyVal').textContent = `${Settings.concurrency} downloads at once`;
+    const pawEl = document.getElementById('setPawConcurrency');
+    if (pawEl) {
+        pawEl.value = Settings.pawConcurrency;
+        document.getElementById('setPawConcurrencyVal').textContent = `${Settings.pawConcurrency} downloads at once`;
+    }
+    const pawExtractEl = document.getElementById('setPawExtract');
+    if (pawExtractEl) pawExtractEl.checked = Settings.pawExtract;
+    const dbKeyEl = document.getElementById('setDerpiApiKey');
+    if (dbKeyEl) dbKeyEl.value = Settings.derpibooruApiKey;
 
     setAuthMethod(Settings.authMethod);
     if (Settings.cookiesPath) {
@@ -42,22 +59,93 @@ function persistSettings() {
         archive_dir: Settings.archiveDir,
         library_root: Settings.libraryRoot,
         cf_concurrency: Settings.concurrency,
+        pawchive_concurrency: Settings.pawConcurrency,
+        pawchive_extract: Settings.pawExtract,
         cookies_path: Settings.cookiesPath,
         cookies_browser: Settings.cookiesBrowser,
         auth_method: Settings.authMethod,
+        derpibooru_api_key: Settings.derpibooruApiKey,
+        derpibooru_filter_id: Settings.derpibooruFilterId,
     });
+}
+
+// Derpibooru API key — read from the input on change and persist.
+function setUpdateDerpiApiKey() {
+    const el = document.getElementById('setDerpiApiKey');
+    Settings.derpibooruApiKey = (el.value || '').trim();
+    persistSettings();
 }
 
 // ── Settings overlay ────────────────────────────────────────────
 
 async function openSettings() {
     document.getElementById('settingsOverlay').classList.add('visible');
+    loadLinkFilters();
     try {
         const roots = await pywebview.api.list_library_roots();
         document.getElementById('setRootsInfo').textContent = roots.length
             ? 'Will scan: ' + roots.join('   ·   ')
             : 'No library roots detected yet — add a creator first, then scan.';
     } catch (e) { /* ignore */ }
+}
+
+// ── Pawchive link filters (user-editable junk list) ─────────────
+Settings.linkFilters = [];
+Settings.linkFilterDefaults = [];
+
+async function loadLinkFilters() {
+    try {
+        const r = await pywebview.api.get_link_filters();
+        Settings.linkFilters = (r && r.filters) || [];
+        Settings.linkFilterDefaults = (r && r.defaults) || [];
+    } catch (e) { Settings.linkFilters = []; }
+    renderLinkFilters();
+}
+
+function renderLinkFilters() {
+    const box = document.getElementById('linkFilterList');
+    if (!box) return;
+    if (!Settings.linkFilters.length) {
+        box.innerHTML = '<span class="field-hint">No filters — every external link is shown.</span>';
+        return;
+    }
+    box.innerHTML = Settings.linkFilters.map(p =>
+        `<span class="filter-chip">${escapeHtml(p)}<button class="filter-chip-x" title="Remove"
+             onclick="removeLinkFilter('${encodeURIComponent(p)}')">&times;</button></span>`
+    ).join('');
+}
+
+// Persist the current list and refresh the pending panel so edits show at once.
+function saveLinkFilters() {
+    pywebview.api.set_link_filters(Settings.linkFilters).then(() => {
+        if (typeof renderPendingLinks === 'function') renderPendingLinks();
+    });
+}
+
+function addLinkFilter() {
+    const input = document.getElementById('linkFilterInput');
+    const val = (input.value || '').trim().toLowerCase();
+    if (!val) return;
+    if (!Settings.linkFilters.includes(val)) {
+        Settings.linkFilters.push(val);
+        saveLinkFilters();
+        renderLinkFilters();
+    }
+    input.value = '';
+    input.focus();
+}
+
+function removeLinkFilter(encoded) {
+    const p = decodeURIComponent(encoded);
+    Settings.linkFilters = Settings.linkFilters.filter(x => x !== p);
+    saveLinkFilters();
+    renderLinkFilters();
+}
+
+function resetLinkFilters() {
+    Settings.linkFilters = [...Settings.linkFilterDefaults];
+    saveLinkFilters();
+    renderLinkFilters();
 }
 
 function closeSettings() {
@@ -117,6 +205,17 @@ function setUpdateConcurrency() {
     document.getElementById('setConcurrencyVal').textContent = `${v} downloads at once`;
 }
 
+function setUpdatePawConcurrency() {
+    const v = parseInt(document.getElementById('setPawConcurrency').value, 10);
+    Settings.pawConcurrency = v;
+    document.getElementById('setPawConcurrencyVal').textContent = `${v} downloads at once`;
+}
+
+function setUpdatePawExtract() {
+    Settings.pawExtract = document.getElementById('setPawExtract').checked;
+    persistSettings();
+}
+
 // ── Twitter auth (cookies) ──────────────────────────────────────
 
 function setAuthMethod(method) {
@@ -170,13 +269,11 @@ async function extractBrowserCookies() {
 
 let cfgEditingId = '';      // '' = creating a new creator
 let cfgLinksData = [];      // working copy of link records
-let cfgHasVideos = false;
 
 function openConfigure() {
     if (!currentCreator) { showToast('Select a creator first', 'error'); return; }
     cfgEditingId = currentCreator.id;
     cfgLinksData = currentCreator.links.map(l => ({ ...l }));
-    cfgHasVideos = !!currentCreator.has_videos;
     document.getElementById('configureTitle').textContent = 'Configure Creator';
     document.getElementById('cfgName').value = currentCreator.name || '';
     document.getElementById('cfgCategory').value = currentCreator.category || '';
@@ -188,7 +285,6 @@ function openConfigure() {
 function openNewCreator() {
     cfgEditingId = '';
     cfgLinksData = [];
-    cfgHasVideos = false;
     document.getElementById('configureTitle').textContent = 'New Creator';
     document.getElementById('cfgName').value = '';
     document.getElementById('cfgCategory').value = '';
@@ -199,7 +295,6 @@ function openNewCreator() {
 
 function openConfigureCommon() {
     if (typeof refreshCategoryDatalist === 'function') refreshCategoryDatalist();
-    document.getElementById('cfgVideosBox').classList.toggle('checked', cfgHasVideos);
     document.getElementById('cfgNewLink').value = '';
     document.getElementById('cfgLinkPreview').textContent = '';
     renderCfgLinks();
@@ -208,11 +303,6 @@ function openConfigureCommon() {
 
 function closeConfigure() {
     document.getElementById('configureOverlay').classList.remove('visible');
-}
-
-function cfgToggleVideos() {
-    cfgHasVideos = !cfgHasVideos;
-    document.getElementById('cfgVideosBox').classList.toggle('checked', cfgHasVideos);
 }
 
 async function cfgBrowseDest() {
@@ -232,6 +322,7 @@ function cfgOpenDest() {
 
 function platformLabel(link) {
     if (link.platform === 'twitter') return { badge: 'Twitter', cls: 'badge-twitter', name: '@' + (link.username || '?') };
+    if (link.platform === 'derpibooru') return { badge: 'Derpibooru', cls: 'badge-derpibooru', name: link.name || link.query || '?' };
     const svc = { onlyfans: 'OF', fansly: 'Fansly', patreon: 'Patreon', fanbox: 'Fanbox' }[link.service]
         || (link.service || '?');
     const cls = link.platform === 'pawchive' ? 'badge-pawchive' : '';
@@ -246,12 +337,21 @@ function renderCfgLinks() {
     }
     el.innerHTML = cfgLinksData.map((l, i) => {
         const p = platformLabel(l);
+        // "Reset history" only makes sense for a link that's already saved (i.e.
+        // may have a download archive). Newly-pasted links have no history yet.
+        const saved = cfgEditingId && currentCreator
+            && currentCreator.links.some(x => (x.url || '') === l.url);
+        const resetBtn = saved
+            ? `<button class="link-reset" onclick="cfgResetLink(${i})"
+                 title="Clear this site's download history so the next download re-fetches everything. Your files are kept.">Reset history</button>`
+            : '';
         return `<div class="link-row">
             <span class="link-badge ${p.cls}">${p.badge}</span>
             <div class="link-meta">
                 <span class="link-name">${escapeHtml(p.name)}</span>
                 <span class="link-url">${escapeHtml(l.url)}</span>
             </div>
+            ${resetBtn}
             <button class="link-remove" onclick="cfgRemoveLink(${i})" title="Remove link">&times;</button>
         </div>`;
     }).join('');
@@ -267,13 +367,31 @@ function cfgRemoveLink(index) {
     renderCfgLinks();
 }
 
+// Clear one site's download history (its archive DB) so the next download
+// re-fetches everything. Media files on disk are untouched.
+async function cfgResetLink(index) {
+    const l = cfgLinksData[index];
+    if (!l || !cfgEditingId) return;
+    const p = platformLabel(l);
+    if (!confirm(`Clear the download history for ${p.badge} — ${p.name}?\n\n`
+        + `The next download will re-fetch everything for this site. `
+        + `Your downloaded files are NOT deleted.`)) return;
+    const res = await pywebview.api.reset_link_archive(cfgEditingId, l.url);
+    if (res && res.error) { showToast(res.error, 'error'); return; }
+    if (res.existed) {
+        showToast(`History cleared for ${p.badge} — next download re-fetches everything`, 'success');
+    } else {
+        showToast(`No history to clear for ${p.badge}`, 'info');
+    }
+}
+
 async function cfgPreviewLink() {
     const url = document.getElementById('cfgNewLink').value.trim();
     const preview = document.getElementById('cfgLinkPreview');
     if (!url) { preview.textContent = ''; return; }
     const info = await pywebview.api.resolve_link(url);
     if (!info.valid) {
-        preview.textContent = 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, or x.com/…';
+        preview.textContent = 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, derpibooru.org/search?q=…, or x.com/…';
         return;
     }
     if (info.platform === 'coomerfans') {
@@ -282,6 +400,8 @@ async function cfgPreviewLink() {
     } else if (info.platform === 'pawchive') {
         const svc = info.service ? info.service.charAt(0).toUpperCase() + info.service.slice(1) : 'Pawchive';
         preview.textContent = `Detected: ${svc} (pawchive) — ${info.name || info.user_id}  ·  click Add Link`;
+    } else if (info.platform === 'derpibooru') {
+        preview.textContent = `Detected: Derpibooru — ${info.query}  ·  click Add Link`;
     } else {
         preview.textContent = `Detected: Twitter — @${info.username}  ·  click Add Link`;
     }
@@ -326,7 +446,6 @@ async function cfgSave() {
         name: document.getElementById('cfgName').value.trim(),
         category: document.getElementById('cfgCategory').value.trim(),
         destination,
-        has_videos: cfgHasVideos,
         links: cfgLinksData.map(l => ({ url: l.url })),
     };
     const res = await pywebview.api.save_creator(creator);
@@ -340,12 +459,19 @@ async function cfgSave() {
 async function cfgDelete() {
     if (!cfgEditingId) return;
     const name = document.getElementById('cfgName').value.trim() || 'this creator';
-    if (!confirm(`Forget "${name}"? This only removes it from the list — your downloaded files and archives are not deleted.`)) {
+    if (!confirm(`Forget "${name}"? This removes it from the list. Your downloaded media files are NOT deleted.`)) {
         return;
     }
-    await pywebview.api.delete_creator(cfgEditingId);
+    const wipeArchive = confirm(
+        `Also delete the download archive(s) for "${name}"?\n\n` +
+        `OK — delete the archive database(s) AND reset the pawchive links list (so a future re-download starts fresh: re-downloads everything, applies current naming, and shows every external link again).\n\n` +
+        `Cancel — keep the archive and your resolved-link checkmarks (re-adding the creator resumes where it left off; media files are untouched either way).`);
+    const res = await pywebview.api.delete_creator(cfgEditingId, wipeArchive);
     closeConfigure();
-    showToast('Creator removed from list', 'info');
+    const n = (res && res.deleted_archives) ? res.deleted_archives.length : 0;
+    showToast(wipeArchive
+        ? `Creator removed; ${n} archive database(s) deleted`
+        : 'Creator removed from list', 'info');
     currentCreatorId = '';
     document.getElementById('creatorSelect').value = '';
     await refreshCreators('');

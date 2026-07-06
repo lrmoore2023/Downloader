@@ -19,7 +19,7 @@ from backend.coomerfans_archive import Archive, entry_key
 
 def _path_for(destination, kind, year, filename):
     if kind == "image":
-        return os.path.join(destination, "images", year, filename)
+        return os.path.join(destination, "Images", year, filename)
     return os.path.join(destination, year, filename)
 
 

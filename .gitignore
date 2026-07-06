@@ -10,6 +10,9 @@ app_state.json
 *.bak
 *.tsv
 
+# Per-run pawchive diagnostics (regenerated every run)
+pawchive_diag.jsonl
+
 # Cached creator profile images
 .avatars/
 

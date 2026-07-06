@@ -130,10 +130,14 @@ def build_filename(dt, service, name, index, ext):
 
 
 def target_path(destination, kind, dt, filename):
-    """Videos -> <dest>/<year>/, images -> <dest>/images/<year>/."""
+    """Videos -> <dest>/<year>/, images -> <dest>/Images/<year>/.
+
+    'Images' is capitalized to match the Twitter layout so every creator's image
+    folder has one consistent name. (Windows/NAS shares are case-insensitive, so
+    this also resolves to any pre-existing lowercase 'images' folder.)"""
     year = f"{dt:%Y}" if dt else "unknown"
     if kind == "image":
-        return os.path.join(destination, "images", year, filename)
+        return os.path.join(destination, "Images", year, filename)
     return os.path.join(destination, year, filename)
 
 

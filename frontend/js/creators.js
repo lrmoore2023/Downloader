@@ -30,9 +30,10 @@ function onSortChange() {
 // ── Summary helpers ────────────────────────────────────────────
 
 function summarize(links) {
-    const s = { onlyfans: 0, fansly: 0, twitter: 0, patreon: 0, fanbox: 0 };
+    const s = { onlyfans: 0, fansly: 0, twitter: 0, patreon: 0, fanbox: 0, derpibooru: 0 };
     (links || []).forEach(l => {
         if (l.platform === 'twitter') s.twitter += 1;
+        else if (l.platform === 'derpibooru') s.derpibooru += 1;
         else if (l.platform === 'coomerfans' || l.platform === 'pawchive')
             s[l.service] = (s[l.service] || 0) + 1;
     });
@@ -125,6 +126,8 @@ async function onCreatorChange() {
     buildScopeControl();
     updateActionAvailability();
     await refreshYears();
+    pendingUndo = [];          // undo history is per-creator
+    lastPendingSig = null;
     renderPendingLinks();
     persistLastCreator(currentCreatorId);
 }
@@ -136,7 +139,21 @@ function escapeHtml(s) {
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-async function renderPendingLinks() {
+// Undo history of resolve actions for the current creator: each entry is
+// {creatorId, keys:[...]} so Ctrl-Z can bring a link (or a whole post) back.
+let pendingUndo = [];
+// Signature of the last rendered item set — lets the download-time poll skip a
+// DOM rebuild (which would disrupt an in-progress click) when nothing changed.
+let lastPendingSig = null;
+
+// Hosts worth spotting at a glance (rendered amber): mega, google drive, tinyurl.
+function isHighlightHost(host) {
+    const h = (host || '').toLowerCase();
+    return h.includes('mega.') || h.includes('drive.google') ||
+           h.includes('docs.google') || h.includes('tinyurl.com');
+}
+
+async function renderPendingLinks(fromPoll = false) {
     const panel = document.getElementById('pendingLinks');
     if (!panel) return;
     const id = currentCreatorId;
@@ -153,6 +170,10 @@ async function renderPendingLinks() {
         return;
     }
     const items = res.items || [];
+    // Skip needless re-renders during the download poll so a click isn't disrupted.
+    const sig = id + '::' + items.map(i => i.key).join('|');
+    if (fromPoll && sig === lastPendingSig) return;
+    lastPendingSig = sig;
     if (!items.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
 
     // Group the flat list by post so multiple links from one post sit together.
@@ -172,18 +193,29 @@ async function renderPendingLinks() {
                 ? '<span class="badge badge-failed">failed</span>' : '';
             const missing = (i.missing && i.missing.length)
                 ? `<span class="pending-missing">missing: ${escapeHtml(i.missing.join(', '))}</span>` : '';
+            // Highlight the hosts the user cares about spotting at a glance (mega,
+            // google drive, tinyurl) in amber instead of the default colors.
+            const alt = isHighlightHost(i.host) ? ' host-alt' : '';
             return `<div class="pending-row">
                 <input type="checkbox" class="pending-check" title="Mark done — hides this link and won't come back on re-scan"
-                       onchange="resolvePendingLink(this, '${escapeHtml(i.key)}')">
-                <span class="badge badge-host">${escapeHtml(i.host)}</span>${failed}
-                <a class="pending-url" href="#" onclick="openLink('${encodeURIComponent(i.url)}');return false;"
+                       onchange="resolvePendingLink(this, '${encodeURIComponent(i.key)}')">
+                <span class="badge badge-host${alt}">${escapeHtml(i.host)}</span>${failed}
+                <a class="pending-url${alt}" href="#" onclick="openLink('${encodeURIComponent(i.url)}');return false;"
                    title="${escapeHtml(i.url)}">${escapeHtml(i.url)}</a>
                 <button class="btn-tiny" onclick="copyText('${encodeURIComponent(i.url)}')">Copy</button>
                 ${missing}
             </div>`;
         }).join('');
+        const groupKeys = encodeURIComponent(JSON.stringify(g.links.map(l => l.key)));
+        const multi = g.links.length > 1;
+        const allBox = multi
+            ? `<input type="checkbox" class="pending-check pending-check-all"
+                      title="Mark all ${g.links.length} links in this post done"
+                      onchange="resolvePostLinks(this, '${groupKeys}')">`
+            : '';
         return `<div class="pending-group">
             <div class="pending-post">
+              ${allBox}
               <a class="pending-posttitle" href="#" onclick="openLink('${encodeURIComponent(g.post_url)}');return false;"
                  title="Open this post on pawchive.st">${escapeHtml(g.title || '(untitled)')}</a>
               <span class="pending-date">${escapeHtml(g.date)}</span>
@@ -200,7 +232,7 @@ async function renderPendingLinks() {
           <span class="pending-caret">${caret}</span>
           <span>Links needing attention</span>
           <span class="pending-count">${items.length}</span>
-          <span class="field-hint pending-hint">manual downloads &amp; failed grabs — check off when done</span>
+          <span class="field-hint pending-hint">manual downloads &amp; failed grabs — check off when done (Ctrl+Z to undo)</span>
         </div>
         <div class="pending-list" ${pendingCollapsed ? 'style="display:none"' : ''}>${groupsHtml}</div>`;
 }
@@ -215,10 +247,13 @@ function togglePending() {
     if (caret) caret.textContent = pendingCollapsed ? '▸' : '▾';
 }
 
-function resolvePendingLink(cb, key) {
+function resolvePendingLink(cb, encKey) {
+    const key = decodeURIComponent(encKey);
+    const id = currentCreatorId;
     cb.disabled = true;
-    pywebview.api.set_link_resolved(currentCreatorId, key, true).then(r => {
+    pywebview.api.set_link_resolved(id, key, true).then(r => {
         if (r && r.error) { cb.disabled = false; cb.checked = false; showToast(r.error, 'error'); return; }
+        pendingUndo.push({ creatorId: id, keys: [key] });
         const group = cb.closest('.pending-group');
         const row = cb.closest('.pending-row');
         if (row) row.remove();
@@ -228,6 +263,50 @@ function resolvePendingLink(cb, key) {
         if (panel && !panel.querySelector('.pending-row')) renderPendingLinks();
     });
 }
+
+// Post-level checkbox: resolve every link in one post in a single batch.
+function resolvePostLinks(cb, encKeys) {
+    let keys;
+    try { keys = JSON.parse(decodeURIComponent(encKeys)); } catch (e) { return; }
+    const id = currentCreatorId;
+    cb.disabled = true;
+    pywebview.api.set_links_resolved(id, keys, true).then(r => {
+        if (r && r.error) { cb.disabled = false; cb.checked = false; showToast(r.error, 'error'); return; }
+        pendingUndo.push({ creatorId: id, keys });
+        const group = cb.closest('.pending-group');
+        if (group) group.remove();
+        const panel = document.getElementById('pendingLinks');
+        if (panel && !panel.querySelector('.pending-row')) renderPendingLinks();
+    });
+}
+
+// Ctrl+Z: bring back the most recently resolved link (or whole post), one per press.
+function undoPendingResolve() {
+    // Drop history that belongs to a different creator (selection changed).
+    while (pendingUndo.length && pendingUndo[pendingUndo.length - 1].creatorId !== currentCreatorId) {
+        pendingUndo.pop();
+    }
+    if (!pendingUndo.length) return false;
+    const action = pendingUndo.pop();
+    pywebview.api.set_links_resolved(action.creatorId, action.keys, false).then(r => {
+        if (r && r.error) { showToast(r.error, 'error'); return; }
+        lastPendingSig = null;            // force the panel to rebuild
+        renderPendingLinks();
+        showToast(action.keys.length > 1
+            ? `Restored ${action.keys.length} links` : 'Restored link', 'info');
+    });
+    return true;
+}
+
+document.addEventListener('keydown', (e) => {
+    if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        const el = document.activeElement;
+        // Let real text fields keep their native undo.
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')
+            && el.type !== 'checkbox') return;
+        if (undoPendingResolve()) e.preventDefault();
+    }
+});
 
 function openLink(encoded) {
     pywebview.api.open_url(decodeURIComponent(encoded));
@@ -343,6 +422,7 @@ function renderChips() {
     if (s.patreon) chips.push(chipHtml('Patreon', s.patreon));
     if (s.fanbox) chips.push(chipHtml('Fanbox', s.fanbox));
     if (s.twitter) chips.push('<span class="chip chip-twitter">Twitter</span>');
+    if (s.derpibooru) chips.push(chipHtml('Derpibooru', s.derpibooru));
     el.innerHTML = chips.join('');
 }
 
@@ -372,6 +452,7 @@ function buildScopeControl() {
     if (s.patreon) opts.push(['patreon', 'Patreon']);
     if (s.fanbox) opts.push(['fanbox', 'Fanbox']);
     if (s.twitter) opts.push(['twitter', 'Twitter']);
+    if (s.derpibooru) opts.push(['derpibooru', 'Derpibooru']);
 
     opts.forEach(([val, label]) => {
         const b = document.createElement('button');
@@ -394,7 +475,9 @@ function buildLinkScope() {
         o.value = l.url;
         o.textContent = (l.platform === 'twitter')
             ? `Twitter @${l.username}`
-            : `${svcLabel(l.service)} ${l.name || l.user_id}`;
+            : (l.platform === 'derpibooru')
+                ? `Derpibooru ${l.name || l.query}`
+                : `${svcLabel(l.service)} ${l.name || l.user_id}`;
         sel.appendChild(o);
     });
 }
@@ -459,7 +542,7 @@ function startDownload(mode) {
     let year = null;
     if (mode === 'redownload_year') {
         year = document.getElementById('redownloadYear').value;
-        if (!year) { showToast('Select a year to redownload', 'error'); return; }
+        if (!year) { showToast('Select a year to download', 'error'); return; }
     }
     setDownloadingState(true);
     resetStats();
@@ -504,11 +587,25 @@ function openCreatorFolder() {
 
 // ── Busy state (buttons + live indicator) ───────────────────────
 
+let pendingPollTimer = null;
+
 function setDownloadingState(downloading) {
     isBusy = downloading;
     document.getElementById('btnCancel').style.display = downloading ? '' : 'none';
     document.getElementById('creatorSelect').disabled = downloading;
     document.getElementById('runningIndicator').classList.toggle('visible', downloading);
-    if (!downloading) document.getElementById('runFile').textContent = '';
+    if (!downloading) {
+        document.getElementById('runFile').textContent = '';
+        if (typeof clearActiveDownloads === 'function') clearActiveDownloads();
+    }
+    // While downloading, surface external links as soon as the crawl writes them
+    // (that happens before the file downloads finish) so there's something to do
+    // in parallel. The signature guard keeps this from disrupting active clicks.
+    if (downloading) {
+        if (!pendingPollTimer) pendingPollTimer = setInterval(() => renderPendingLinks(true), 5000);
+    } else if (pendingPollTimer) {
+        clearInterval(pendingPollTimer);
+        pendingPollTimer = null;
+    }
     updateActionAvailability();
 }

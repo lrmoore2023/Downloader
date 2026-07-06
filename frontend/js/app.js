@@ -17,6 +17,12 @@ window.onCreatorProgress = function (data) {
             Logger.error(data.message);
             incrementStat('statErrors');
             break;
+        case 'dl_start':
+            addActiveDownload(data.id, data.message);
+            break;
+        case 'dl_stop':
+            removeActiveDownload(data.id);
+            break;
         case 'url':
         case 'info':
             Logger.info(data.message);
@@ -110,6 +116,57 @@ function updateLiveProgress(filename) {
     document.getElementById('runFile').textContent = filename || '';
     document.getElementById('runCount').textContent =
         document.getElementById('statDownloaded').textContent;
+}
+
+// ── Active downloads panel (live, per-file, skippable) ──────────
+
+function addActiveDownload(id, filename) {
+    if (!id) return;
+    const list = document.getElementById('activeDownloads');
+    const section = document.getElementById('activeSection');
+    if (!list) return;
+    if (document.getElementById('active-' + cssId(id))) return;   // dedupe
+    const row = document.createElement('div');
+    row.className = 'active-row';
+    row.id = 'active-' + cssId(id);
+    const name = document.createElement('span');
+    name.className = 'active-name';
+    name.textContent = filename || id;
+    name.title = filename || id;
+    const btn = document.createElement('button');
+    btn.className = 'btn-tiny active-skip';
+    btn.textContent = 'Skip';
+    btn.title = "Skip this file (won't re-download on future runs)";
+    btn.onclick = () => skipDownload(id, btn);
+    row.appendChild(name);
+    row.appendChild(btn);
+    list.appendChild(row);
+    if (section) section.style.display = '';
+}
+
+function removeActiveDownload(id) {
+    const row = document.getElementById('active-' + cssId(id));
+    if (row) row.remove();
+    const list = document.getElementById('activeDownloads');
+    const section = document.getElementById('activeSection');
+    if (section && list && !list.children.length) section.style.display = 'none';
+}
+
+function clearActiveDownloads() {
+    const list = document.getElementById('activeDownloads');
+    const section = document.getElementById('activeSection');
+    if (list) list.innerHTML = '';
+    if (section) section.style.display = 'none';
+}
+
+function skipDownload(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Skipping…'; }
+    try { pywebview.api.skip_download(id); } catch (e) { /* ignore */ }
+}
+
+// Make an entry key safe for use in an element id.
+function cssId(s) {
+    return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 // ── Stats helpers ───────────────────────────────────────────────

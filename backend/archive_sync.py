@@ -1,11 +1,61 @@
 import os
 import re
+import shutil
 import sqlite3
 
 # Matches twitter filenames, both the original and the newer "- Twitter -" form:
 #   2025.03.15 - 1234567890_1.jpg
 #   2025.03.15 - Twitter - 1234567890_1.jpg
 _FILENAME_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2} - (?:Twitter - )?(\d+)_(\d+)\.\w+$")
+
+# Twitter still-image extensions that belong under Images/<year>. Everything else
+# gallery-dl produces (mp4 videos, and animated_gifs — which Twitter serves as
+# mp4) stays in <year>. Deliberately excludes 'gif'/'bmp': Twitter "gifs" are mp4.
+_TWITTER_IMAGE_EXTS = {"jpg", "jpeg", "png", "webp"}
+
+
+def reorganize_twitter_media(twitter_dest):
+    """Move Twitter image files from <twitter_dest>/<year>/ into
+    <twitter_dest>/Images/<year>/, so images and videos are separated the same way
+    coomerfans/pawchive lay them out.
+
+    gallery-dl can't do this split itself (it picks the download directory
+    per-tweet, before file extensions are known), so we fix the layout here after
+    each download. Idempotent and safe to run repeatedly; the Twitter archive is
+    keyed by tweet id (not path), so moving files never affects it. Returns the
+    number of files moved."""
+    moved = 0
+    if not os.path.isdir(twitter_dest):
+        return 0
+    for name in sorted(os.listdir(twitter_dest)):
+        year_dir = os.path.join(twitter_dest, name)
+        if not (os.path.isdir(year_dir) and re.match(r"^\d{4}$", name)):
+            continue
+        for filename in os.listdir(year_dir):
+            src = os.path.join(year_dir, filename)
+            if not os.path.isfile(src):
+                continue
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if ext not in _TWITTER_IMAGE_EXTS:
+                continue
+            dst_dir = os.path.join(twitter_dest, "Images", name)
+            dst = os.path.join(dst_dir, filename)
+            if os.path.exists(dst):
+                continue   # already in place from a prior run — don't clobber
+            os.makedirs(dst_dir, exist_ok=True)
+            try:
+                shutil.move(src, dst)
+                moved += 1
+            except OSError:
+                pass
+        # If moving images emptied the <year> folder (a year with no videos),
+        # drop the now-empty folder so only Images/<year> remains.
+        try:
+            if not os.listdir(year_dir):
+                os.rmdir(year_dir)
+        except OSError:
+            pass
+    return moved
 
 
 def scan_files_for_entries(destination, has_videos=True):

@@ -306,25 +306,31 @@ class CoomerfansRunner:
         if self._cancelled():
             return
         entry = entry_key(job["post_id"], job["index"])
-        redownload = self._mode == "redownload_year"
 
         # If we have downloaded this exact item before, reuse its recorded name.
         recorded = self._archive.get_filename(entry) if self._archive else None
         if recorded:
             prev_path = target_path(self._destination, job["kind"], job["dt"], recorded)
-            if os.path.isfile(prev_path) and not redownload:
-                self._bump("skip")          # already present, normal run -> skip
+            if os.path.isfile(prev_path):
+                self._bump("skip")          # already downloaded -> never re-fetch
                 return
-            # redownload (overwrite) or repair a deleted file -> same filename
+            # In the archive but missing on disk -> re-fetch to the same name.
             self._download_stream(job, prev_path, entry, recorded)
             return
 
-        # New item (no archive record): assign a collision-free name.
+        # New item (no archive record). If the correctly-named file is already on
+        # disk (archive lost, files copied in), adopt it and skip — the name is
+        # unique per post_id+index, so it's the same item, not a collision.
+        natural = build_filename(job["dt"], self._service, job["name"],
+                                 job["index"], job["ext"])
+        natural_path = target_path(self._destination, job["kind"], job["dt"], natural)
+        with self._fname_lock:
+            if natural_path not in self._claimed and os.path.isfile(natural_path):
+                self._claimed.add(natural_path)
+                self._bump("skip")
+                self._record(entry, job, natural)
+                return
         dest_path, filename = self._assign_path(job, entry)
-        if os.path.isfile(dest_path) and not redownload:
-            self._bump("skip")              # file exists (e.g. archive lost) -> skip
-            self._record(entry, job, filename)
-            return
         self._download_stream(job, dest_path, entry, filename)
 
     def _assign_path(self, job, entry):

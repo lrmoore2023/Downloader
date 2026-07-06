@@ -4,17 +4,24 @@ import tempfile
 import uuid
 
 
-def _base_config(destination, cookies_path=None, cookies_browser=None, has_videos=True):
-    """Build the base gallery-dl config dict."""
-    # When the artist has videos/gifs, separate images into an Images/ subfolder.
-    # When they don't, everything goes directly into year folders.
-    if has_videos:
-        directory = {
-            "extension in ('jpg', 'jpeg', 'png', 'webp')": ["Images", "{date:%Y}"],
-            "": ["{date:%Y}"],
-        }
-    else:
-        directory = ["{date:%Y}"]
+# Twitter/X media downloads (pbs.twimg.com) are fairly forgiving, so pace the
+# extractor lighter than the old 1.0s. This is gallery-dl's own pacing and is
+# entirely independent of the pawchive adaptive throttle. Lower = faster; raise
+# toward 1.0 if X starts 429'ing.
+TWITTER_SLEEP_REQUEST = 0.5
+
+
+def _base_config(destination, cookies_path=None, cookies_browser=None):
+    """Build the base gallery-dl config dict.
+
+    gallery-dl writes every file into a flat <year> folder here. It CANNOT split
+    images vs videos into different folders itself: the download directory is
+    chosen per-tweet (on gallery-dl's Message.Directory), before any file's
+    extension/type is known, so a conditional like "extension in (...)" never
+    matches. Instead, the runner moves images into Images/<year> after the
+    download (see archive_sync.reorganize_twitter_media), giving the same
+    images→Images/<year>, videos/gifs→<year> layout as coomerfans/pawchive."""
+    directory = ["{date:%Y}"]
 
     twitter_config = {
         "retweets": False,
@@ -23,7 +30,7 @@ def _base_config(destination, cookies_path=None, cookies_browser=None, has_video
         "videos": True,
         "filename": "{date:%Y.%m.%d} - Twitter - {tweet_id}_{num}.{extension}",
         "directory": directory,
-        "sleep-request": 1.0,
+        "sleep-request": TWITTER_SLEEP_REQUEST,
     }
 
     if cookies_path:
@@ -46,26 +53,26 @@ def _base_config(destination, cookies_path=None, cookies_browser=None, has_video
     return config
 
 
-def build_config(destination, cookies_path=None, cookies_browser=None, has_videos=True):
+def build_config(destination, cookies_path=None, cookies_browser=None):
     """Build a gallery-dl config for full artist download. Returns temp config file path."""
-    config = _base_config(destination, cookies_path, cookies_browser, has_videos)
+    config = _base_config(destination, cookies_path, cookies_browser)
     return _write_temp_config(config)
 
 
-def build_latest_config(destination, cookies_path=None, cookies_browser=None, latest_year=2026, has_videos=True):
+def build_latest_config(destination, cookies_path=None, cookies_browser=None, latest_year=2026):
     """Build a gallery-dl config for fetching latest posts only. Returns temp config file path."""
-    config = _base_config(destination, cookies_path, cookies_browser, has_videos)
+    config = _base_config(destination, cookies_path, cookies_browser)
     config["extractor"]["twitter"]["post-filter"] = f"date.year >= {latest_year}"
     return _write_temp_config(config)
 
 
-def build_redownload_config(destination, year, cookies_path=None, cookies_browser=None, has_videos=True):
+def build_redownload_config(destination, year, cookies_path=None, cookies_browser=None):
     """Build a gallery-dl config for redownloading a specific year.
 
     No archive is used — gallery-dl's file-existence check (skip: true)
     ensures only missing files are downloaded.
     """
-    config = _base_config(destination, cookies_path, cookies_browser, has_videos)
+    config = _base_config(destination, cookies_path, cookies_browser)
     config["extractor"]["twitter"]["post-filter"] = f"date.year == {year}"
     return _write_temp_config(config)
 

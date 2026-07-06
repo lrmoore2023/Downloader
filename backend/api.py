@@ -18,11 +18,18 @@ from backend.coomerfans_verify import find_broken, repair_broken
 from backend.coomerfans_archive import Archive as CfArchive
 from backend.pawchive_scraper import (
     parse_creator_url as pw_parse_creator_url, make_session as pw_make_session,
-    fetch_profile as pw_fetch_profile, BASE as PW_BASE,
+    fetch_profile as pw_fetch_profile, creator_url as pw_creator_url,
+    link_is_filtered, DEFAULT_LINK_FILTERS,
+    BASE as PW_BASE, MIRROR_BASE as PW_MIRROR_BASE,
 )
 from backend.pawchive_links import PawchiveLinks
+from backend.derpibooru_scraper import (
+    parse_creator_url as db_parse_creator_url, query_label as db_query_label,
+    search_url as db_search_url,
+)
 from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
+    pawchive_archive_path, twitter_archive_path, derpibooru_archive_path,
 )
 from backend.library_import import scan_library
 from backend.media_library import scan_creator_media
@@ -31,6 +38,23 @@ from backend.media_server import MediaServer
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_FILE = os.path.join(APP_DIR, "app_state.json")
 AVATAR_DIR = os.path.join(APP_DIR, ".avatars")
+
+
+def _sniff_image_mime(data):
+    """Image MIME from magic bytes (gif/png/jpeg/webp), or None if not an image.
+    Pawchive serves icons as 'application/octet-stream', so the header can't be
+    trusted — and the real type must ride along in the data URI so GIFs animate."""
+    if not data or len(data) < 12:
+        return None
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def _replace_with_retry(src, dst, attempts=10, delay=0.1):
@@ -106,9 +130,13 @@ class Api:
             "archive_dir": "",
             "library_root": "",
             "cf_concurrency": 5,
+            "pawchive_concurrency": 6,
+            "pawchive_extract": True,
             "cookies_path": "",
             "cookies_browser": "",
             "auth_method": "file",
+            "derpibooru_api_key": "",
+            "derpibooru_filter_id": "56027",
             "last_creator": "",
             "window": {},
         }
@@ -476,6 +504,11 @@ class Api:
                     pass
                 return {"valid": True, "platform": "pawchive", "service": pw["service"],
                         "user_id": pw["user_id"], "name": name, "url": url}
+        if "derpibooru.org" in url.lower():
+            db = db_parse_creator_url(url)
+            if db:
+                return {"valid": True, "platform": "derpibooru", "query": db["query"],
+                        "name": db_query_label(db["query"]), "url": url}
         username = self._extract_username(url)
         if username:
             return {"valid": True, "platform": "twitter", "username": username, "url": url}
@@ -490,18 +523,30 @@ class Api:
             return {"platform": "coomerfans", "service": info["service"],
                     "user_id": info["user_id"], "name": info["name"], "url": info["url"]}
         if info["platform"] == "pawchive":
+            # Canonicalize to the .st domain so a .pw and a .st link for the same
+            # creator dedupe to one (save_creator dedupes by URL). .pw/.st are
+            # identical mirrors, so the host carries no information.
             return {"platform": "pawchive", "service": info["service"],
-                    "user_id": info["user_id"], "name": info["name"], "url": info["url"]}
+                    "user_id": info["user_id"], "name": info["name"],
+                    "url": pw_creator_url(info["service"], info["user_id"])}
+        if info["platform"] == "derpibooru":
+            # Canonicalize to a normalized search URL so two links for the same
+            # query dedupe to one (save_creator dedupes by URL).
+            return {"platform": "derpibooru", "query": info["query"],
+                    "name": info["name"], "url": db_search_url(info["query"])}
         return {"platform": "twitter", "username": info["username"], "url": info["url"]}
 
     # ── Creator CRUD ────────────────────────────────────────────────
 
     @staticmethod
     def _summary(links):
-        s = {"onlyfans": 0, "fansly": 0, "twitter": 0, "patreon": 0, "fanbox": 0}
+        s = {"onlyfans": 0, "fansly": 0, "twitter": 0, "patreon": 0, "fanbox": 0,
+             "derpibooru": 0}
         for l in links or []:
             if l.get("platform") == "twitter":
                 s["twitter"] += 1
+            elif l.get("platform") == "derpibooru":
+                s["derpibooru"] += 1
             elif l.get("platform") in ("coomerfans", "pawchive"):
                 svc = l.get("service")
                 s[svc] = s.get(svc, 0) + 1
@@ -595,12 +640,15 @@ class Api:
         if not c:
             return {"none": True}
         acct = self._avatar_account(c)
-        # Fall back to a pawchive account so pawchive-only creators still get an
-        # avatar (icon endpoint: /icons/{service}/{user_id}).
+        # Fall back to a pawchive account, then a twitter handle, so creators
+        # without a coomerfans link still get an avatar.
         if not acct:
             pw = next((l for l in c.get("links", []) if l.get("platform") == "pawchive"), None)
             if pw:
                 return self._pawchive_avatar(pw.get("service"), pw.get("user_id"))
+            tw = next((l for l in c.get("links", []) if l.get("platform") == "twitter"), None)
+            if tw:
+                return self._twitter_avatar(tw.get("username"))
             return {"none": True}
         service, user_id = acct
         cache = os.path.join(AVATAR_DIR, f"coomerfans_{service}_{user_id}.jpg")
@@ -629,10 +677,43 @@ class Api:
         return {"data": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")}
 
     def _pawchive_avatar(self, service, user_id):
-        """A pawchive creator's icon as a base64 data URI (cached), or {none}."""
+        """A pawchive creator's icon (gif/png/jpeg/webp) as a base64 data URI,
+        cached, or {none}. The icon endpoint serves 'application/octet-stream',
+        so the image type is sniffed from the bytes, not the Content-Type — and
+        the data URI carries the real type so animated GIFs still animate."""
         if not service or not user_id:
             return {"none": True}
-        cache = os.path.join(AVATAR_DIR, f"pawchive_{service}_{user_id}.jpg")
+        cache = os.path.join(AVATAR_DIR, f"pawchive_{service}_{user_id}.img")
+        data = None
+        try:
+            if os.path.isfile(cache) and os.path.getsize(cache) > 0:
+                with open(cache, "rb") as f:
+                    data = f.read()
+            else:
+                data = self._fetch_pawchive_icon(service, user_id)
+                if data:
+                    try:
+                        os.makedirs(AVATAR_DIR, exist_ok=True)
+                        with open(cache, "wb") as f:
+                            f.write(data)
+                    except OSError:
+                        pass
+        except Exception:
+            data = None
+        mime = _sniff_image_mime(data)
+        if not data or not mime:
+            return {"none": True}
+        return {"data": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}
+
+    def _twitter_avatar(self, username):
+        """A twitter/X creator's profile image, base64 data URI (cached), or {none}.
+        X blocks direct avatar fetches (returns its SPA HTML), so this goes through
+        unavatar.io, which resolves the handle to the real avatar. Best-effort:
+        falls back to initials in the UI if it can't be fetched."""
+        if not username:
+            return {"none": True}
+        safe = re.sub(r"[^A-Za-z0-9_]", "", username)
+        cache = os.path.join(AVATAR_DIR, f"twitter_{safe}.img")
         data = None
         try:
             if os.path.isfile(cache) and os.path.getsize(cache) > 0:
@@ -640,9 +721,9 @@ class Api:
                     data = f.read()
             else:
                 r = pw_make_session().get(
-                    f"{PW_BASE}/icons/{service}/{user_id}", timeout=(15, 30))
-                ctype = (r.headers.get("Content-Type") or "").lower()
-                if r.status_code == 200 and r.content and "image" in ctype:
+                    f"https://unavatar.io/twitter/{username}?fallback=false",
+                    timeout=(15, 30))
+                if r.status_code == 200 and r.content:
                     data = r.content
                     try:
                         os.makedirs(AVATAR_DIR, exist_ok=True)
@@ -652,9 +733,23 @@ class Api:
                         pass
         except Exception:
             data = None
-        if not data:
+        mime = _sniff_image_mime(data)
+        if not data or not mime:
             return {"none": True}
-        return {"data": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")}
+        return {"data": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}
+
+    def _fetch_pawchive_icon(self, service, user_id):
+        """Raw icon bytes from /icons/{service}/{user_id}. Uses .st, falling back
+        to the .pw mirror only when the primary host can't be reached (a real HTTP
+        answer like 404 means the icon is simply absent — the mirror won't differ)."""
+        path = f"/icons/{service}/{user_id}"
+        for base in (PW_BASE, PW_MIRROR_BASE):
+            try:
+                r = pw_make_session().get(base + path, timeout=(15, 30))
+            except Exception:
+                continue   # host unreachable — try the mirror
+            return r.content if (r.status_code == 200 and r.content) else None
+        return None
 
     # ── Pawchive external-links manifest ────────────────────────────
 
@@ -676,10 +771,43 @@ class Api:
             return {"reachable": False, "items": [], "counts": {}, "pawchive": True}
         try:
             pl = PawchiveLinks(self._pawchive_links_path(c))
+            filters = self._link_filters()
+            items = [i for i in pl.pending()
+                     if not link_is_filtered(i.get("url", ""), filters)]
+            counts = {"outstanding": len(items),
+                      "failed": sum(1 for i in items if i.get("status") == "failed")}
             return {"reachable": True, "pawchive": True,
-                    "items": pl.pending(), "counts": pl.counts()}
+                    "items": items, "counts": counts}
         except Exception as e:
             return {"reachable": False, "items": [], "counts": {}, "error": str(e)}
+
+    # ── Link filters (user-editable "junk link" list) ───────────────
+    def _link_filters(self, state=None):
+        """The active filter patterns: the user's saved list, or the defaults when
+        it has never been set."""
+        state = state if state is not None else self.load_state()
+        f = state.get("link_filters")
+        return list(f) if isinstance(f, list) else list(DEFAULT_LINK_FILTERS)
+
+    def get_link_filters(self):
+        """Current filter patterns + the built-in defaults (so the UI can offer a
+        'reset' / show which are standard)."""
+        return {"filters": self._link_filters(),
+                "defaults": list(DEFAULT_LINK_FILTERS)}
+
+    def set_link_filters(self, patterns):
+        """Replace the filter list (add/remove/edit from the Settings UI). Patterns
+        are de-duplicated and trimmed; order is preserved."""
+        seen, clean = set(), []
+        for p in (patterns or []):
+            p = (p or "").strip().lower()
+            if p and p not in seen:
+                seen.add(p)
+                clean.append(p)
+        state = self.load_state()
+        state["link_filters"] = clean
+        self.save_state(state)
+        return {"ok": True, "filters": clean}
 
     def set_link_resolved(self, creator_id, key, resolved=True):
         """Mark a pending external link resolved (the UI checkbox) so it stops
@@ -696,6 +824,23 @@ class Api:
             if not ok:
                 return {"error": "Link not found"}
             return {"ok": True, "resolved": bool(resolved), "counts": pl.counts()}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def set_links_resolved(self, creator_id, keys, resolved=True):
+        """Resolve/unresolve several pending links at once (post-level checkbox
+        and Ctrl-Z undo), with a single manifest write for the whole batch."""
+        c = self.load_state().get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        dest = c.get("destination", "")
+        if not dest or not os.path.isdir(dest):
+            return {"error": "Destination folder is not reachable"}
+        try:
+            pl = PawchiveLinks(self._pawchive_links_path(c))
+            n = pl.mark_many_resolved(keys or [], bool(resolved))
+            return {"ok": True, "updated": n, "resolved": bool(resolved),
+                    "counts": pl.counts()}
         except Exception as e:
             return {"error": str(e)}
 
@@ -755,15 +900,110 @@ class Api:
         self.save_state(state)
         return {"id": new_id, "name": name}
 
-    def delete_creator(self, creator_id):
-        """Forget a creator's mapping. Never deletes files or archive DBs."""
+    def delete_creator(self, creator_id, delete_archives=False):
+        """Forget a creator's mapping. Optionally also delete its per-link archive
+        DB(s) so a future re-download starts completely fresh (re-downloads
+        everything under the current naming scheme). Downloaded media files are
+        never touched."""
         state = self.load_state()
         creators = state.get("creators", {})
-        if creators.pop(creator_id, None) is not None:
-            state["creators"] = creators
-            self.save_state(state)
-            return {"ok": True}
-        return {"ok": False}
+        c = creators.get(creator_id)
+        if c is None:
+            return {"ok": False}
+        deleted = self._delete_creator_archives(c, state) if delete_archives else []
+        creators.pop(creator_id, None)
+        state["creators"] = creators
+        self.save_state(state)
+        return {"ok": True, "deleted_archives": deleted}
+
+    def reset_link_archive(self, creator_id, link_url):
+        """Clear one link's download history so its next download re-fetches
+        everything for that site. Deletes only the per-link archive DB (+ sqlite
+        side files); downloaded media files are never touched. Use this when files
+        were removed on disk outside the app and the archive still thinks they're
+        present."""
+        if self._creator_runner and self._creator_runner.is_running:
+            return {"error": "A download is in progress — wait for it to finish."}
+        state = self.load_state()
+        c = state.get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        link = next((l for l in c.get("links", [])
+                     if (l.get("url") or "") == link_url), None)
+        if not link:
+            return {"error": "Link not found"}
+        path = self._archive_path_for_link(
+            link, (state.get("archive_dir") or "").strip(), c.get("destination", ""))
+        if not path:
+            return {"error": "This platform keeps no clearable history."}
+        existed = os.path.isfile(path)
+        try:
+            self._delete_archive_db(path)
+        except OSError as e:
+            return {"error": f"Couldn't clear history: {e}"}
+        return {"ok": True, "label": link_label(link), "existed": existed}
+
+    @staticmethod
+    def _archive_path_for_link(link, archive_dir, dest):
+        """Absolute path of a single link's per-link archive DB, or None if the
+        platform keeps no per-link archive. Mirrors the paths the runners use."""
+        platform = link.get("platform")
+        try:
+            if platform == "coomerfans":
+                return cf_archive_path(archive_dir, link, dest)
+            if platform == "pawchive":
+                return pawchive_archive_path(archive_dir, link, dest)
+            if platform == "twitter":
+                return twitter_archive_path(
+                    archive_dir, link.get("username"), os.path.join(dest, "Twitter"))
+            if platform == "derpibooru":
+                return derpibooru_archive_path(archive_dir, link, dest)
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _delete_archive_db(path):
+        """Delete an archive DB and its sqlite side files. Returns True if the
+        main .db file was actually removed."""
+        main_deleted = False
+        for p in (path, path + "-wal", path + "-shm", path + "-journal"):
+            try:
+                if p and os.path.isfile(p):
+                    os.remove(p)
+                    if p == path:
+                        main_deleted = True
+            except OSError:
+                pass
+        return main_deleted
+
+    def _delete_creator_archives(self, creator, state):
+        """Remove each of a creator's per-link archive DBs (+ sqlite side files).
+        Returns the basenames of the main .db files actually deleted."""
+        archive_dir = (state.get("archive_dir") or "").strip()
+        dest = creator.get("destination", "")
+        removed = []
+        for link in creator.get("links", []):
+            path = self._archive_path_for_link(link, archive_dir, dest)
+            if not path:
+                continue
+            if self._delete_archive_db(path):
+                removed.append(os.path.basename(path))
+
+        # A pawchive creator also keeps the external-links manifest (the resolved
+        # checkmarks) at its destination. Clearing archives means "start fresh", so
+        # drop the manifest too — otherwise a re-download keeps every link you'd
+        # previously marked done hidden.
+        if any(l.get("platform") == "pawchive" for l in creator.get("links", [])):
+            jp = os.path.join(dest, "_pawchive_links.json")
+            for p in (jp, os.path.splitext(jp)[0] + ".md"):
+                try:
+                    if os.path.isfile(p):
+                        os.remove(p)
+                        removed.append(os.path.basename(p))
+                except OSError:
+                    pass
+        return removed
 
     def _touch_creator(self, creator_id):
         try:
@@ -797,14 +1037,23 @@ class Api:
                 scan(sub)
         return years
 
+    # Earliest year offered in the "Download Year" picker. Covers Twitter's
+    # founding (2006); anything a creator has on disk is merged in on top, so
+    # older content still appears once it's been downloaded.
+    _EARLIEST_SELECTABLE_YEAR = 2006
+
     def get_creator_years(self, creator_id):
-        """Years present across the creator's coomerfans subtree and twitter subtree."""
+        """Years selectable for a single-year download. Always offers a recent
+        range so a brand-new creator can pick a year *before* anything has been
+        downloaded, merged with any years already present on disk (newest first)."""
         c = self.load_state().get("creators", {}).get(creator_id)
         if not c:
             return []
         dest = c.get("destination", "")
-        years = self._years_in(dest, "images")                       # coomerfans
-        years |= self._years_in(os.path.join(dest, "twitter"), "Images")  # twitter
+        years = self._years_in(dest, "Images")                       # coomerfans/pawchive/derpibooru
+        years |= self._years_in(os.path.join(dest, "Twitter"), "Images")  # twitter
+        current = datetime.now(timezone.utc).year
+        years |= set(range(self._EARLIEST_SELECTABLE_YEAR, current + 1))
         return sorted(years, reverse=True)
 
     # ── In-app media browser/player ─────────────────────────────────
@@ -845,7 +1094,7 @@ class Api:
         """Run a download across a scope of the creator's links.
 
         scope ∈ {everything, twitter, coomerfans, onlyfans, fansly, pawchive,
-                 patreon, fanbox}
+                 patreon, fanbox, derpibooru}
         mode  ∈ {full, latest, redownload_year}
         """
         if self._creator_runner and self._creator_runner.is_running:
@@ -858,7 +1107,7 @@ class Api:
         if not c.get("links"):
             return {"error": "This creator has no links yet — add some in Configure Links."}
         if mode == "redownload_year" and not year:
-            return {"error": "Select a year to redownload"}
+            return {"error": "Select a year to download"}
         if not filter_links(c["links"], scope):
             return {"error": f"No '{scope}' links for this creator."}
 
@@ -866,9 +1115,19 @@ class Api:
             workers = max(3, min(10, int(state.get("cf_concurrency") or 5)))
         except (TypeError, ValueError):
             workers = 5
+        # pawchive's own concurrency knob. Its CDN bandwidth-caps each connection to
+        # ~1 MB/s, so throughput scales with parallel (independent) connections — ~6
+        # is the sweet spot. Clamped to the runner's 1..10 range.
+        try:
+            pawchive_workers = max(1, min(10, int(state.get("pawchive_concurrency") or 6)))
+        except (TypeError, ValueError):
+            pawchive_workers = 6
+        pawchive_extract = state.get("pawchive_extract", True) is not False
 
         self._touch_creator(creator_id)
-        self._creator_runner = CreatorRunner(workers=workers)
+        self._creator_runner = CreatorRunner(workers=workers,
+                                             pawchive_workers=pawchive_workers,
+                                             pawchive_extract=pawchive_extract)
         self._creator_thread = threading.Thread(
             target=self._run_creator_download,
             args=(c, scope, mode, year),
@@ -887,6 +1146,8 @@ class Api:
             archive_dir=(state.get("archive_dir") or "").strip(),
             cookies_path=state.get("cookies_path") or "",
             cookies_browser=state.get("cookies_browser") or "",
+            derpibooru_api_key=state.get("derpibooru_api_key") or "",
+            derpibooru_filter_id=state.get("derpibooru_filter_id") or "",
             on_progress=lambda d: self._push_js("onCreatorProgress", d),
             on_complete=lambda d: self._push_js("onCreatorComplete", d),
             on_error=lambda d: self._push_js("onCreatorError", d),
@@ -897,6 +1158,13 @@ class Api:
         if self._creator_runner and self._creator_runner.is_running:
             self._creator_runner.cancel()
         return {"status": "cancelling"}
+
+    def skip_download(self, entry_id):
+        """Skip a single in-progress download (by its entry id) without cancelling
+        the whole run. Remembered so future runs never re-fetch it (pawchive)."""
+        if self._creator_runner and self._creator_runner.is_running:
+            self._creator_runner.request_skip(entry_id)
+        return {"status": "skipping", "id": entry_id}
 
     def get_creator_status(self):
         r = self._creator_runner

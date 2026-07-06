@@ -6,8 +6,8 @@ as a flag rather than raised, so an offline NAS shows an empty "not reachable"
 state instead of crashing the UI.
 
 Layout (see coomerfans_scraper / config_builder):
-  coomerfans  videos <dest>/<year>/            images <dest>/images/<year>/
-  twitter     videos <dest>/twitter/<year>/    images <dest>/twitter/Images/<year>/
+  coomerfans  videos <dest>/<year>/            images <dest>/Images/<year>/
+  twitter     videos <dest>/Twitter/<year>/    images <dest>/Twitter/Images/<year>/
 Filenames start "YYYY.MM.DD"; coomerfans ones carry " - OF - " / " - Fansly - ".
 """
 
@@ -82,8 +82,8 @@ def scan_creator_media(destination):
 
     items = []
     _collect(items, dest, twitter=False)                              # coomerfans videos
-    _collect(items, os.path.join(dest, "images"), twitter=False)      # coomerfans images
-    tw = os.path.join(dest, "twitter")
+    _collect(items, os.path.join(dest, "Images"), twitter=False)      # coomerfans images
+    tw = os.path.join(dest, "Twitter")
     _collect(items, tw, twitter=True)                                 # twitter videos
     _collect(items, os.path.join(tw, "Images"), twitter=True)         # twitter images
 

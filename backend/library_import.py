@@ -12,7 +12,7 @@ Correlation (which account lives in which folder):
   * coomerfans — the DB records each item's `filename`; a folder owns the
     account if it physically contains one of those files.
   * twitter   — the gallery-dl DB records `twitter_<tweetid>_0_<num>` entries;
-    a folder owns the account if its <folder>/twitter/ subtree contains files
+    a folder owns the account if its <folder>/Twitter/ subtree contains files
     for those tweet ids.
 
 For coomerfans accounts whose URL name-slug isn't already known, the canonical
@@ -102,15 +102,15 @@ def _folder_cf_basenames(folder):
     names = set()
     for d in _year_dirs(folder):
         names |= _files_in(d)
-    for d in _year_dirs(os.path.join(folder, "images")):
+    for d in _year_dirs(os.path.join(folder, "Images")):
         names |= _files_in(d)
     return names
 
 
 def _folder_tw_tweetids(folder):
-    """Tweet ids present under <folder>/twitter/ (<year>/ + Images/<year>/)."""
+    """Tweet ids present under <folder>/Twitter/ (<year>/ + Images/<year>/)."""
     ids = set()
-    tw = os.path.join(folder, "twitter")
+    tw = os.path.join(folder, "Twitter")
     if not os.path.isdir(tw):
         return ids
     dirs = _year_dirs(tw) + _year_dirs(os.path.join(tw, "Images"))
@@ -260,11 +260,11 @@ def scan_library(roots, archive_dir, session, known_cf=None,
             log(f"  ⚠ no folder match for {base}")
             continue
         tw_map[user] = {
-            "destination": os.path.join(folder, "twitter"),
+            "destination": os.path.join(folder, "Twitter"),
             "url": f"https://x.com/{user}", "last_used": "",
         }
         matched_tw += 1
-        log(f"  {base} → {os.path.basename(folder)}/twitter")
+        log(f"  {base} → {os.path.basename(folder)}/Twitter")
 
     report = {
         "folders": len(folders),

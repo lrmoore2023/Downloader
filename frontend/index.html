@@ -126,10 +126,16 @@
                                 <path d="M1 4v6h6M23 20v-6h-6"/>
                                 <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
                             </svg>
-                            Redownload Year
+                            Download Year
                         </button>
-                        <span class="field-hint">Re-fetches a year for the links in the selected scope.</span>
+                        <span class="field-hint">Downloads (or re-fetches) a single year for the links in the selected scope — pick a year even before a full download.</span>
                     </div>
+                </div>
+
+                <!-- Active downloads (live list of in-flight files, each skippable) -->
+                <div class="section active-section" id="activeSection" style="display: none;">
+                    <div class="section-title" style="margin-bottom: 8px;">Active downloads</div>
+                    <div class="active-list" id="activeDownloads"></div>
                 </div>
 
                 <!-- Output Log -->
@@ -235,19 +241,11 @@
                         </svg>
                     </button>
                 </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <label class="checkbox-option" onclick="cfgToggleVideos()">
-                        <div class="checkbox-box" id="cfgVideosBox"></div>
-                        <span class="checkbox-label">Has videos/gifs (Twitter images split into an Images/ subfolder)</span>
-                    </label>
-                </div>
-
                 <div class="section-title" style="margin-top: 6px;">Links</div>
                 <div class="links-list" id="cfgLinks"></div>
 
                 <div class="form-row" style="margin-top: 12px;">
-                    <input type="text" class="input-field" id="cfgNewLink" placeholder="Paste a coomerfans (OF/Fansly) or X/Twitter URL…">
+                    <input type="text" class="input-field" id="cfgNewLink" placeholder="Paste a coomerfans (OF/Fansly), X/Twitter, or derpibooru search URL…">
                     <button class="btn btn-secondary btn-sm" id="cfgAddBtn" onclick="cfgAddLink()">Add Link</button>
                 </div>
                 <div class="field-hint" id="cfgLinkPreview" style="min-height: 16px;"></div>
@@ -291,6 +289,57 @@
                 <div class="form-row">
                     <span class="form-label"></span>
                     <span class="field-hint">Coomerfans simultaneous downloads. Raise for big cold-storage backfills; lower if rate-limited.</span>
+                </div>
+
+                <div class="section-title" style="margin-top: 16px;">Derpibooru</div>
+                <div class="form-row">
+                    <span class="form-label">API Key</span>
+                    <input type="password" class="input-field" id="setDerpiApiKey"
+                           placeholder="Your derpibooru API key…"
+                           onchange="setUpdateDerpiApiKey()" onblur="setUpdateDerpiApiKey()">
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Found on derpibooru under Account → Settings. Logs downloads in as your account (with the “Everything” filter) so gated images/videos are accessible. Without it, only logged-out content is fetched.</span>
+                </div>
+
+                <div class="section-title" style="margin-top: 16px;">Pawchive</div>
+                <div class="form-row">
+                    <span class="form-label">Concurrency</span>
+                    <input type="range" id="setPawConcurrency" class="slider-field" min="1" max="10" step="1" value="6" oninput="setUpdatePawConcurrency()">
+                    <span id="setPawConcurrencyVal" class="field-hint" style="min-width: 140px;">6 downloads at once</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Pawchive simultaneous downloads. Its CDN caps each connection's speed, so more parallel downloads = faster overall (~6 is the sweet spot). Lower it only if you see repeated rate-limit blocks.</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Auto-extract</span>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="setPawExtract" onchange="setUpdatePawExtract()">
+                        <span>Unzip downloaded archives (zip/rar) into the library</span>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">After a pack downloads, sort its images into Images/&lt;year&gt; and videos into &lt;year&gt; (named like your other files); any other files are kept together in a folder named after the archive. The original archive is deleted once extracted.</span>
+                </div>
+
+                <div class="section-title" style="margin-top: 16px;">Pawchive Link Filters</div>
+                <div class="field-hint" style="margin-bottom: 10px;">
+                    Hide junk from the “Links needing attention” list. Enter a domain
+                    (<code>youtube.com</code> — also matches subdomains), a subdomain prefix
+                    ending in a dot (<code>shop.</code>), or part of a URL containing a slash
+                    (<code>patreon.com/posts/</code> hides paywalled posts but keeps profiles).
+                    Changes apply immediately — no re-download needed.
+                </div>
+                <div id="linkFilterList" class="filter-chips"></div>
+                <div class="form-row" style="margin-top: 8px;">
+                    <input type="text" class="input-field" id="linkFilterInput"
+                           placeholder="Add a pattern (e.g. tiktok.com)…"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault();addLinkFilter();}">
+                    <button class="btn btn-secondary btn-sm" onclick="addLinkFilter()">Add</button>
+                    <button class="btn btn-ghost btn-sm" onclick="resetLinkFilters()">Reset to defaults</button>
                 </div>
 
                 <div class="section-title" style="margin-top: 16px;">Rebuild Library</div>
