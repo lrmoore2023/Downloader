@@ -403,6 +403,9 @@ class CreatorRunner:
             year=year,
             errors_path=errors_path,
             links_path=links_path,
+            # Per-link filename tag: name files "<date> - Patreon - …" etc. so a
+            # channel that mirrors a Patreon/Fanbox blends with the creator's files.
+            site_label=link.get("tag"),
         )
         self._accumulate(stats)
 

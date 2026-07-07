@@ -343,6 +343,16 @@ function cfgOpenDest() {
     if (dest) pywebview.api.open_folder(dest);
 }
 
+// Filename site-code choices for a Discord link ('' = default "Discord").
+const DISCORD_TAG_OPTS = [
+    ['', 'Discord'], ['patreon', 'Patreon'], ['fanbox', 'Fanbox'],
+    ['onlyfans', 'OnlyFans'], ['fansly', 'Fansly'],
+];
+
+function cfgSetTag(index, value) {
+    if (cfgLinksData[index]) cfgLinksData[index].tag = value;
+}
+
 function platformLabel(link) {
     if (link.platform === 'twitter') return { badge: 'Twitter', cls: 'badge-twitter', name: '@' + (link.username || '?') };
     if (link.platform === 'derpibooru') return { badge: 'Derpibooru', cls: 'badge-derpibooru', name: link.name || link.query || '?' };
@@ -369,12 +379,23 @@ function renderCfgLinks() {
             ? `<button class="link-reset" onclick="cfgResetLink(${i})"
                  title="Clear this site's download history so the next download re-fetches everything. Your files are kept.">Reset history</button>`
             : '';
+        // Discord channels often mirror a Patreon/Fanbox — let each pick the site
+        // tag its files are named with, so they blend with the creator's others.
+        const tagSel = l.platform === 'discord'
+            ? `<label class="link-tag" title="Name this channel's downloaded files with this site tag (e.g. tag a Patreon-mirror channel as Patreon so its files sit alongside your Patreon downloads).">
+                 <span>Label as</span>
+                 <select onchange="cfgSetTag(${i}, this.value)">${DISCORD_TAG_OPTS.map(
+                    ([v, lab]) => `<option value="${v}"${(l.tag || '') === v ? ' selected' : ''}>${lab}</option>`
+                 ).join('')}</select>
+               </label>`
+            : '';
         return `<div class="link-row">
             <span class="link-badge ${p.cls}">${p.badge}</span>
             <div class="link-meta">
                 <span class="link-name">${escapeHtml(p.name)}</span>
                 <span class="link-url">${escapeHtml(l.url)}</span>
             </div>
+            ${tagSel}
             ${resetBtn}
             <button class="link-remove" onclick="cfgRemoveLink(${i})" title="Remove link">&times;</button>
         </div>`;
@@ -472,7 +493,7 @@ async function cfgSave() {
         name: document.getElementById('cfgName').value.trim(),
         category: document.getElementById('cfgCategory').value.trim(),
         destination,
-        links: cfgLinksData.map(l => ({ url: l.url })),
+        links: cfgLinksData.map(l => ({ url: l.url, tag: l.tag || '' })),
     };
     const res = await pywebview.api.save_creator(creator);
     if (res && res.error) { showToast(res.error, 'error'); return; }

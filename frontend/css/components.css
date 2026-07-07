@@ -868,6 +868,28 @@
     color: var(--accent);
 }
 
+/* Per-Discord-link filename tag picker. */
+.link-tag {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.link-tag select {
+    height: 28px;
+    padding: 0 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    cursor: pointer;
+}
+.link-tag select:hover { border-color: var(--accent); }
+
 /* ── Header view toggle ───────────────────────────────────────── */
 
 .header-toggle {

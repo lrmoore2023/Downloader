@@ -82,6 +82,16 @@ def test_build_filename_prefix_matches_errors_panel_regex():
     assert prefix_re.match(ds.build_filename(dt, "clip.mp4"))
 
 
+def test_build_filename_label_override():
+    dt = datetime(2026, 5, 3, tzinfo=timezone.utc)
+    assert ds.build_filename(dt, "set.zip", "patreon") == "2026.05.03 - Patreon - set.zip"
+    assert ds.build_filename(dt, "set.zip", "fanbox") == "2026.05.03 - Fanbox - set.zip"
+    assert ds.build_filename(dt, "set.zip", "onlyfans") == "2026.05.03 - OF - set.zip"
+    # empty / unknown -> default Discord
+    assert ds.build_filename(dt, "set.zip", "") == "2026.05.03 - Discord - set.zip"
+    assert ds.build_filename(dt, "set.zip", "bogus") == "2026.05.03 - Discord - set.zip"
+
+
 def test_add_index_suffix():
     assert ds.add_index_suffix("2026.05.05 - Discord - a.png", 1) == \
         "2026.05.05 - Discord - a_1.png"

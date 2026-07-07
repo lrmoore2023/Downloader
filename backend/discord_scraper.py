@@ -110,6 +110,19 @@ def site_code():
     return "Discord"
 
 
+# A Discord channel is often just a mirror of an artist's Patreon/Fanbox (or
+# OnlyFans/Fansly) sets, so a link can opt to tag its files with that platform's
+# code instead of "Discord" — making them blend with the rest of that creator's
+# library. Values mirror the coomerfans/pawchive site codes.
+LABEL_CODES = {"discord": "Discord", "patreon": "Patreon", "fanbox": "Fanbox",
+               "onlyfans": "OF", "fansly": "Fansly"}
+
+
+def label_code(label):
+    """The filename site code for a link's chosen label ('' / unknown -> Discord)."""
+    return LABEL_CODES.get((label or "").lower(), "Discord")
+
+
 def sanitize_filename(name, max_len=180):
     """Make an arbitrary attachment name safe for Windows/NTFS while preserving it
     as much as possible. Keeps the extension; trims overlong middles."""
@@ -126,15 +139,17 @@ def sanitize_filename(name, max_len=180):
     return name[:max_len].strip()
 
 
-def build_filename(dt, original_name):
+def build_filename(dt, original_name, label=None):
     """'2026.05.05 - Discord - cool_render.png'.
 
     The original attachment name (incl. its extension) is preserved behind a
-    'YYYY.MM.DD - Discord - ' prefix so api._PREFIX_RE / the errors panel
-    recognise it. Missing date -> '0000.00.00' (matches the other engines).
+    'YYYY.MM.DD - <CODE> - ' prefix so api._PREFIX_RE / the errors panel
+    recognise it. `label` overrides the site code (e.g. 'patreon' -> 'Patreon')
+    so a Patreon-mirror channel's files match the creator's other files; defaults
+    to 'Discord'. Missing date -> '0000.00.00' (matches the other engines).
     Collision suffixes are added by the runner via add_index_suffix()."""
     date_str = f"{dt:%Y.%m.%d}" if dt else "0000.00.00"
-    return f"{date_str} - {site_code()} - {sanitize_filename(original_name)}"
+    return f"{date_str} - {label_code(label)} - {sanitize_filename(original_name)}"
 
 
 def add_index_suffix(filename, n):

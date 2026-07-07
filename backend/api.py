@@ -1027,6 +1027,13 @@ class Api:
             if key in seen:
                 continue
             seen.add(key)
+            # A discord link can carry a filename tag ("patreon"/"fanbox"/…) so
+            # its downloads blend with the creator's other-platform files. Only
+            # persist a recognized value; anything else means the default (Discord).
+            if built.get("platform") == "discord":
+                tag = ((l or {}).get("tag") or "").lower()
+                if tag in ("patreon", "fanbox", "onlyfans", "fansly"):
+                    built["tag"] = tag
             links.append(built)
 
         name = (creator.get("name") or "").strip() or self._basename(destination)

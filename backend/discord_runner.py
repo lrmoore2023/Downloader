@@ -89,6 +89,7 @@ class DiscordRunner:
         self._guild_id = None
         self._channel_id = None
         self._mode = "full"
+        self._label = None         # filename site-code override (e.g. 'patreon')
         self._auth_failed = False
 
     # ── public contract ──────────────────────────────────────
@@ -113,7 +114,7 @@ class DiscordRunner:
     def run(self, creator_url, destination, mode, archive_path,
             on_progress, on_complete, on_error,
             token=None, token_type="user", year=None,
-            errors_path=None, links_path=None):
+            errors_path=None, links_path=None, site_label=None):
         self.downloaded_count = self.skipped_count = self.error_count = 0
         self._cancel_event.clear()
         self._claimed.clear()
@@ -124,6 +125,7 @@ class DiscordRunner:
         self._on_progress = on_progress
         self._destination = destination
         self._mode = mode
+        self._label = site_label or None
 
         try:
             creator = parse_creator_url(creator_url)
@@ -371,7 +373,7 @@ class DiscordRunner:
                                   job["media_kind"] == "video")
             return
         # Correctly-named file already on disk (archive cleared, etc.) -> adopt it.
-        natural = build_filename(job["dt"], job["filename"])
+        natural = build_filename(job["dt"], job["filename"], self._label)
         natural_path = target_path(self._destination, job["media_kind"], job["dt"], natural)
         with self._fname_lock:
             if natural_path not in self._claimed and os.path.isfile(natural_path):
@@ -386,7 +388,7 @@ class DiscordRunner:
     def _assign_path(self, job):
         """Collision-free '<date> - Discord - <name>' path; '_n' before the ext on
         clash so nothing is ever overwritten."""
-        base = build_filename(job["dt"], job["filename"])
+        base = build_filename(job["dt"], job["filename"], self._label)
         with self._fname_lock:
             path = target_path(self._destination, job["media_kind"], job["dt"], base)
             if path not in self._claimed and not os.path.isfile(path):
