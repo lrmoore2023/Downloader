@@ -30,10 +30,11 @@ function onSortChange() {
 // ── Summary helpers ────────────────────────────────────────────
 
 function summarize(links) {
-    const s = { onlyfans: 0, fansly: 0, twitter: 0, patreon: 0, fanbox: 0, derpibooru: 0 };
+    const s = { onlyfans: 0, fansly: 0, twitter: 0, patreon: 0, fanbox: 0, derpibooru: 0, discord: 0 };
     (links || []).forEach(l => {
         if (l.platform === 'twitter') s.twitter += 1;
         else if (l.platform === 'derpibooru') s.derpibooru += 1;
+        else if (l.platform === 'discord') s.discord += 1;
         else if (l.platform === 'coomerfans' || l.platform === 'pawchive')
             s[l.service] = (s[l.service] || 0) + 1;
     });
@@ -522,6 +523,7 @@ function renderChips() {
     if (s.fanbox) chips.push(chipHtml('Fanbox', s.fanbox));
     if (s.twitter) chips.push('<span class="chip chip-twitter">Twitter</span>');
     if (s.derpibooru) chips.push(chipHtml('Derpibooru', s.derpibooru));
+    if (s.discord) chips.push('<span class="chip chip-discord">Discord</span>');
     el.innerHTML = chips.join('');
 }
 
@@ -552,6 +554,7 @@ function buildScopeControl() {
     if (s.fanbox) opts.push(['fanbox', 'Fanbox']);
     if (s.twitter) opts.push(['twitter', 'Twitter']);
     if (s.derpibooru) opts.push(['derpibooru', 'Derpibooru']);
+    if (s.discord) opts.push(['discord', 'Discord']);
 
     opts.forEach(([val, label]) => {
         const b = document.createElement('button');
@@ -576,7 +579,9 @@ function buildLinkScope() {
             ? `Twitter @${l.username}`
             : (l.platform === 'derpibooru')
                 ? `Derpibooru ${l.name || l.query}`
-                : `${svcLabel(l.service)} ${l.name || l.user_id}`;
+                : (l.platform === 'discord')
+                    ? `Discord ${l.name || l.channel_id}`
+                    : `${svcLabel(l.service)} ${l.name || l.user_id}`;
         sel.appendChild(o);
     });
 }

@@ -630,6 +630,12 @@
     color: var(--text-secondary);
 }
 
+.chip.chip-discord {
+    background: rgba(88, 101, 242, 0.16);
+    border-color: rgba(88, 101, 242, 0.45);
+    color: #a5b0ff;
+}
+
 .chip .chip-count {
     font-family: var(--font-mono);
     color: var(--text-primary);
@@ -1214,6 +1220,13 @@
     background: rgba(45, 212, 191, 0.14);
     border-color: rgba(45, 212, 191, 0.4);
     color: #5eead4;
+}
+
+/* Discord: blurple brand accent. */
+.link-badge.badge-discord {
+    background: rgba(88, 101, 242, 0.16);
+    border-color: rgba(88, 101, 242, 0.45);
+    color: #a5b0ff;
 }
 
 .pending-links { padding-top: 4px; padding-bottom: 4px; }

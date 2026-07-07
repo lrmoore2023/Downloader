@@ -27,10 +27,14 @@ from backend.derpibooru_scraper import (
     parse_creator_url as db_parse_creator_url, query_label as db_query_label,
     search_url as db_search_url,
 )
+from backend.discord_scraper import (
+    parse_creator_url as dc_parse_creator_url, channel_url as dc_channel_url,
+    channel_name as dc_channel_name, make_session as dc_make_session,
+)
 from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
     pawchive_archive_path, twitter_archive_path, derpibooru_archive_path,
-    errors_db_path,
+    discord_archive_path, errors_db_path,
 )
 from backend.download_errors import open_readonly as open_errors_store
 from backend.library_import import scan_library
@@ -139,6 +143,8 @@ class Api:
             "auth_method": "file",
             "derpibooru_api_key": "",
             "derpibooru_filter_id": "56027",
+            "discord_token": "",
+            "discord_token_type": "user",
             "last_creator": "",
             "window": {},
         }
@@ -511,6 +517,25 @@ class Api:
             if db:
                 return {"valid": True, "platform": "derpibooru", "query": db["query"],
                         "name": db_query_label(db["query"]), "url": url}
+        if "/channels/" in url.lower() and (
+                "discord.com" in url.lower() or "discordapp.com" in url.lower()):
+            dc = dc_parse_creator_url(url)
+            if dc:
+                # Best-effort channel-name lookup using the saved token (the URL
+                # doesn't carry the name); falls back to the channel id in the UI.
+                name = ""
+                state = self.load_state()
+                token = (state.get("discord_token") or "").strip()
+                if token:
+                    try:
+                        name = dc_channel_name(
+                            dc_make_session(token=token,
+                                            token_type=state.get("discord_token_type") or "user"),
+                            dc["channel_id"]) or ""
+                    except Exception:
+                        pass
+                return {"valid": True, "platform": "discord", "guild_id": dc["guild_id"],
+                        "channel_id": dc["channel_id"], "name": name, "url": url}
         username = self._extract_username(url)
         if username:
             return {"valid": True, "platform": "twitter", "username": username, "url": url}
@@ -536,6 +561,12 @@ class Api:
             # query dedupe to one (save_creator dedupes by URL).
             return {"platform": "derpibooru", "query": info["query"],
                     "name": info["name"], "url": db_search_url(info["query"])}
+        if info["platform"] == "discord":
+            # Canonicalize to the bare channel URL so a jump link (…/channel/msg)
+            # and a channel link dedupe to one (save_creator dedupes by URL).
+            return {"platform": "discord", "guild_id": info["guild_id"],
+                    "channel_id": info["channel_id"], "name": info.get("name") or "",
+                    "url": dc_channel_url(info["guild_id"], info["channel_id"])}
         return {"platform": "twitter", "username": info["username"], "url": info["url"]}
 
     # ── Creator CRUD ────────────────────────────────────────────────
@@ -543,12 +574,14 @@ class Api:
     @staticmethod
     def _summary(links):
         s = {"onlyfans": 0, "fansly": 0, "twitter": 0, "patreon": 0, "fanbox": 0,
-             "derpibooru": 0}
+             "derpibooru": 0, "discord": 0}
         for l in links or []:
             if l.get("platform") == "twitter":
                 s["twitter"] += 1
             elif l.get("platform") == "derpibooru":
                 s["derpibooru"] += 1
+            elif l.get("platform") == "discord":
+                s["discord"] += 1
             elif l.get("platform") in ("coomerfans", "pawchive"):
                 svc = l.get("service")
                 s[svc] = s.get(svc, 0) + 1
@@ -753,29 +786,61 @@ class Api:
             return r.content if (r.status_code == 200 and r.content) else None
         return None
 
-    # ── Pawchive external-links manifest ────────────────────────────
+    # ── External-links manifest (pawchive + discord) ────────────────
 
     def _pawchive_links_path(self, creator):
         return os.path.join(creator.get("destination", ""), "_pawchive_links.json")
 
+    def _link_manifest_paths(self, creator):
+        """Manifest JSON paths relevant to a creator: pawchive and/or discord,
+        depending on which link platforms it has. Both stores share the same
+        format (PawchiveLinks), so the panel aggregates across them."""
+        dest = creator.get("destination", "")
+        platforms = {l.get("platform") for l in creator.get("links", [])}
+        paths = []
+        if "pawchive" in platforms:
+            paths.append(os.path.join(dest, "_pawchive_links.json"))
+        if "discord" in platforms:
+            paths.append(os.path.join(dest, "_discord_links.json"))
+        return paths
+
+    def _pending_counts(self, creator):
+        """Filtered outstanding/failed counts aggregated across the creator's
+        manifests (used for the button badge)."""
+        filters = self._link_filters()
+        items = []
+        for p in self._link_manifest_paths(creator):
+            if not os.path.isfile(p):
+                continue
+            try:
+                items.extend(i for i in PawchiveLinks(p).pending()
+                             if not link_is_filtered(i.get("url", ""), filters))
+            except Exception:
+                pass
+        return {"outstanding": len(items),
+                "failed": sum(1 for i in items if i.get("status") == "failed")}
+
     def list_pending_links(self, creator_id):
         """Outstanding external links (manual downloads + failed auto-grabs) for a
-        creator's pawchive posts. reachable:false when the destination folder
-        can't be read (e.g. the NAS is offline)."""
+        creator's pawchive/discord posts. reachable:false when the destination
+        folder can't be read (e.g. the NAS is offline)."""
         c = self.load_state().get("creators", {}).get(creator_id)
         if not c:
             return {"reachable": False, "items": [], "counts": {}, "error": "Creator not found"}
-        has_pw = any(l.get("platform") == "pawchive" for l in c.get("links", []))
-        if not has_pw:
+        paths = self._link_manifest_paths(c)
+        if not paths:
             return {"reachable": True, "items": [], "counts": {}, "pawchive": False}
         dest = c.get("destination", "")
         if not dest or not os.path.isdir(dest):
             return {"reachable": False, "items": [], "counts": {}, "pawchive": True}
         try:
-            pl = PawchiveLinks(self._pawchive_links_path(c))
             filters = self._link_filters()
-            items = [i for i in pl.pending()
-                     if not link_is_filtered(i.get("url", ""), filters)]
+            items = []
+            for p in paths:
+                if not os.path.isfile(p):
+                    continue
+                items.extend(i for i in PawchiveLinks(p).pending()
+                             if not link_is_filtered(i.get("url", ""), filters))
             counts = {"outstanding": len(items),
                       "failed": sum(1 for i in items if i.get("status") == "failed")}
             return {"reachable": True, "pawchive": True,
@@ -911,11 +976,13 @@ class Api:
         if not dest or not os.path.isdir(dest):
             return {"error": "Destination folder is not reachable"}
         try:
-            pl = PawchiveLinks(self._pawchive_links_path(c))
-            ok = pl.mark_resolved(key, bool(resolved))
-            if not ok:
-                return {"error": "Link not found"}
-            return {"ok": True, "resolved": bool(resolved), "counts": pl.counts()}
+            for p in self._link_manifest_paths(c):
+                if not os.path.isfile(p):
+                    continue
+                if PawchiveLinks(p).mark_resolved(key, bool(resolved)):
+                    return {"ok": True, "resolved": bool(resolved),
+                            "counts": self._pending_counts(c)}
+            return {"error": "Link not found"}
         except Exception as e:
             return {"error": str(e)}
 
@@ -929,10 +996,13 @@ class Api:
         if not dest or not os.path.isdir(dest):
             return {"error": "Destination folder is not reachable"}
         try:
-            pl = PawchiveLinks(self._pawchive_links_path(c))
-            n = pl.mark_many_resolved(keys or [], bool(resolved))
+            n = 0
+            for p in self._link_manifest_paths(c):
+                if not os.path.isfile(p):
+                    continue
+                n += PawchiveLinks(p).mark_many_resolved(keys or [], bool(resolved))
             return {"ok": True, "updated": n, "resolved": bool(resolved),
-                    "counts": pl.counts()}
+                    "counts": self._pending_counts(c)}
         except Exception as e:
             return {"error": str(e)}
 
@@ -1050,6 +1120,8 @@ class Api:
                     archive_dir, link.get("username"), os.path.join(dest, "Twitter"))
             if platform == "derpibooru":
                 return derpibooru_archive_path(archive_dir, link, dest)
+            if platform == "discord":
+                return discord_archive_path(archive_dir, link, dest)
         except Exception:
             return None
         return None
@@ -1082,12 +1154,11 @@ class Api:
             if self._delete_archive_db(path):
                 removed.append(os.path.basename(path))
 
-        # A pawchive creator also keeps the external-links manifest (the resolved
-        # checkmarks) at its destination. Clearing archives means "start fresh", so
-        # drop the manifest too — otherwise a re-download keeps every link you'd
-        # previously marked done hidden.
-        if any(l.get("platform") == "pawchive" for l in creator.get("links", [])):
-            jp = os.path.join(dest, "_pawchive_links.json")
+        # A pawchive/discord creator also keeps an external-links manifest (the
+        # resolved checkmarks) at its destination. Clearing archives means "start
+        # fresh", so drop the manifest too — otherwise a re-download keeps every
+        # link you'd previously marked done hidden.
+        for jp in self._link_manifest_paths(creator):
             for p in (jp, os.path.splitext(jp)[0] + ".md"):
                 try:
                     if os.path.isfile(p):
@@ -1244,6 +1315,8 @@ class Api:
             cookies_browser=state.get("cookies_browser") or "",
             derpibooru_api_key=state.get("derpibooru_api_key") or "",
             derpibooru_filter_id=state.get("derpibooru_filter_id") or "",
+            discord_token=state.get("discord_token") or "",
+            discord_token_type=state.get("discord_token_type") or "user",
             on_progress=lambda d: self._push_js("onCreatorProgress", d),
             on_complete=lambda d: self._push_js("onCreatorComplete", d),
             on_error=lambda d: self._push_js("onCreatorError", d),

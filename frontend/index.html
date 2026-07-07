@@ -255,7 +255,7 @@
                 <div class="links-list" id="cfgLinks"></div>
 
                 <div class="form-row" style="margin-top: 12px;">
-                    <input type="text" class="input-field" id="cfgNewLink" placeholder="Paste a coomerfans (OF/Fansly), X/Twitter, or derpibooru search URL…">
+                    <input type="text" class="input-field" id="cfgNewLink" placeholder="Paste a coomerfans (OF/Fansly), X/Twitter, derpibooru search, or Discord channel URL…">
                     <button class="btn btn-secondary btn-sm" id="cfgAddBtn" onclick="cfgAddLink()">Add Link</button>
                 </div>
                 <div class="field-hint" id="cfgLinkPreview" style="min-height: 16px;"></div>
@@ -311,6 +311,25 @@
                 <div class="form-row">
                     <span class="form-label"></span>
                     <span class="field-hint">Found on derpibooru under Account → Settings. Logs downloads in as your account (with the “Everything” filter) so gated images/videos are accessible. Without it, only logged-out content is fetched.</span>
+                </div>
+
+                <div class="section-title" style="margin-top: 16px;">Discord</div>
+                <div class="form-row">
+                    <span class="form-label">Token</span>
+                    <input type="password" class="input-field" id="setDiscordToken"
+                           placeholder="Your Discord token…"
+                           onchange="setUpdateDiscordToken()" onblur="setUpdateDiscordToken()">
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Token type</span>
+                    <select class="input-field" id="setDiscordTokenType" onchange="setUpdateDiscordTokenType()">
+                        <option value="user">User account token</option>
+                        <option value="bot">Bot token</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Downloads media from a specific channel (paste its URL in Configure Links). <b>Bot token</b>: zero-risk, but only works on servers where you can add a bot — create one at discord.com/developers, enable the Message Content intent, and give it View Channel + Read Message History. <b>User token</b>: works on any server you can read (grab it from your browser: DevTools → Network → any discord.com/api request → the <code>authorization</code> header). Read-only — it never posts — but automating a user account is against Discord's ToS, so prefer a secondary account for servers you don't own.</span>
                 </div>
 
                 <div class="section-title" style="margin-top: 16px;">Pawchive</div>

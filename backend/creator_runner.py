@@ -32,6 +32,7 @@ from backend.derpibooru_runner import DerpibooruRunner
 from backend.derpibooru_scraper import (
     query_label as db_query_label, query_slug as db_query_slug,
 )
+from backend.discord_runner import DiscordRunner
 from backend.config_builder import (
     build_config, build_latest_config, build_redownload_config, cleanup_config,
 )
@@ -67,6 +68,8 @@ def filter_links(links, scope):
                 if l.get("platform") == "pawchive" and l.get("service") == scope]
     if scope == "derpibooru":
         return [l for l in links if l.get("platform") == "derpibooru"]
+    if scope == "discord":
+        return [l for l in links if l.get("platform") == "discord"]
     if scope and scope.startswith("link:"):
         target = scope[len("link:"):]
         return [l for l in links if (l.get("url") or "") == target]
@@ -79,6 +82,8 @@ def link_label(link):
         return f"Twitter @{link.get('username') or '?'}"
     if link.get("platform") == "derpibooru":
         return f"Derpibooru {link.get('name') or db_query_label(link.get('query'))}"
+    if link.get("platform") == "discord":
+        return f"Discord {link.get('name') or link.get('channel_id') or '?'}"
     name = link.get("name") or link.get("user_id") or "?"
     if link.get("platform") == "pawchive":
         return f"{pw_site_code(link.get('service'))} {name}"
@@ -111,6 +116,16 @@ def derpibooru_archive_path(archive_dir, link, destination):
     if archive_dir and os.path.isdir(archive_dir):
         return os.path.join(archive_dir, f"derpibooru_{slug}.db")
     return os.path.join(destination, f".derpibooru-{slug}-archive.db")
+
+
+def discord_archive_path(archive_dir, link, destination):
+    """Per-link discord archive DB, keyed by channel id (discord is channel-based).
+    Mirrors cf_archive_path's scheme."""
+    archive_dir = (archive_dir or "").strip()
+    cid = link.get("channel_id") or "unknown"
+    if archive_dir and os.path.isdir(archive_dir):
+        return os.path.join(archive_dir, f"discord_{cid}.db")
+    return os.path.join(destination, f".discord-{cid}-archive.db")
 
 
 def twitter_archive_path(archive_dir, username, twitter_dest):
@@ -149,6 +164,8 @@ class CreatorRunner:
         self._current = None   # the active sub-runner, so cancel() can reach it
         self._derpibooru_api_key = None
         self._derpibooru_filter_id = None
+        self._discord_token = None
+        self._discord_token_type = "user"
 
     @property
     def is_running(self):
@@ -175,9 +192,12 @@ class CreatorRunner:
     # ── batch entry point ────────────────────────────────────────
     def run(self, creator, scope, mode, year, archive_dir,
             cookies_path, cookies_browser, on_progress, on_complete, on_error,
-            derpibooru_api_key=None, derpibooru_filter_id=None):
+            derpibooru_api_key=None, derpibooru_filter_id=None,
+            discord_token=None, discord_token_type=None):
         self._derpibooru_api_key = derpibooru_api_key or None
         self._derpibooru_filter_id = derpibooru_filter_id or None
+        self._discord_token = discord_token or None
+        self._discord_token_type = discord_token_type or "user"
         self._running = True
         self._cancel.clear()
         self.downloaded_count = self.skipped_count = self.error_count = 0
@@ -213,6 +233,9 @@ class CreatorRunner:
                     elif link.get("platform") == "derpibooru":
                         self._run_derpibooru(link, creator, mode, year, archive_dir,
                                              on_progress, on_error)
+                    elif link.get("platform") == "discord":
+                        self._run_discord(link, creator, mode, year, archive_dir,
+                                          on_progress, on_error)
                     else:
                         on_progress({"type": "info",
                                      "message": f"Unknown platform '{link.get('platform')}', skipped."})
@@ -337,6 +360,49 @@ class CreatorRunner:
             api_key=self._derpibooru_api_key,
             filter_id=self._derpibooru_filter_id,
             year=year,
+        )
+        self._accumulate(stats)
+
+    def _run_discord(self, link, creator, mode, year, archive_dir, on_progress, on_error):
+        # Discord shares the coomerfans root layout (<dest>/<year>/ +
+        # <dest>/Images/<year>/); no site subfolder. It has no targeted
+        # error-recovery path (a failed signed CDN URL must be re-fetched from the
+        # message anyway), so "Redownload Errors" is a full re-crawl: it re-fetches
+        # fresh URLs and retries anything missing, re-recording what still fails.
+        if mode == "errors":
+            mode = "full"
+        destination = creator["destination"]
+        archive_path = discord_archive_path(archive_dir, link, destination)
+        errors_path = errors_db_path(archive_path)
+        # The stateful external-links manifest lives at the creator root (shared
+        # layout, no subfolder) — a separate file from pawchive's.
+        links_path = os.path.join(destination, "_discord_links.json")
+        prog = self._prefix(link, on_progress)
+        err = self._prefix(link, on_error)
+
+        # Same curation rule as the others: 'latest' is a top-up over a prior
+        # download; with no archive there's nothing to top up.
+        if mode == "latest" and not os.path.isfile(archive_path):
+            prog({"type": "info",
+                  "message": "no prior download — skipping latest (run Download Everything first)"})
+            return
+
+        runner = DiscordRunner(workers=self.workers)
+        self._current = runner
+        stats = {}
+        runner.run(
+            creator_url=link["url"],
+            destination=destination,
+            mode=mode,
+            archive_path=archive_path,
+            on_progress=prog,
+            on_complete=lambda d: stats.update(d),
+            on_error=err,
+            token=self._discord_token,
+            token_type=self._discord_token_type,
+            year=year,
+            errors_path=errors_path,
+            links_path=links_path,
         )
         self._accumulate(stats)
 

@@ -13,6 +13,8 @@ const Settings = {
     authMethod: 'file',
     derpibooruApiKey: '',
     derpibooruFilterId: '56027',
+    discordToken: '',
+    discordTokenType: 'user',
 };
 
 function loadSettingsFromState(state) {
@@ -26,6 +28,8 @@ function loadSettingsFromState(state) {
     Settings.authMethod = state.auth_method || 'file';
     Settings.derpibooruApiKey = state.derpibooru_api_key || '';
     Settings.derpibooruFilterId = state.derpibooru_filter_id || '56027';
+    Settings.discordToken = state.discord_token || '';
+    Settings.discordTokenType = state.discord_token_type || 'user';
 
     document.getElementById('setArchiveDir').value = Settings.archiveDir;
     document.getElementById('setLibraryRoot').value = Settings.libraryRoot;
@@ -40,6 +44,10 @@ function loadSettingsFromState(state) {
     if (pawExtractEl) pawExtractEl.checked = Settings.pawExtract;
     const dbKeyEl = document.getElementById('setDerpiApiKey');
     if (dbKeyEl) dbKeyEl.value = Settings.derpibooruApiKey;
+    const dcTokEl = document.getElementById('setDiscordToken');
+    if (dcTokEl) dcTokEl.value = Settings.discordToken;
+    const dcTypeEl = document.getElementById('setDiscordTokenType');
+    if (dcTypeEl) dcTypeEl.value = Settings.discordTokenType;
 
     setAuthMethod(Settings.authMethod);
     if (Settings.cookiesPath) {
@@ -66,6 +74,8 @@ function persistSettings() {
         auth_method: Settings.authMethod,
         derpibooru_api_key: Settings.derpibooruApiKey,
         derpibooru_filter_id: Settings.derpibooruFilterId,
+        discord_token: Settings.discordToken,
+        discord_token_type: Settings.discordTokenType,
     });
 }
 
@@ -73,6 +83,19 @@ function persistSettings() {
 function setUpdateDerpiApiKey() {
     const el = document.getElementById('setDerpiApiKey');
     Settings.derpibooruApiKey = (el.value || '').trim();
+    persistSettings();
+}
+
+// Discord token + type — read from the inputs on change and persist.
+function setUpdateDiscordToken() {
+    const el = document.getElementById('setDiscordToken');
+    Settings.discordToken = (el.value || '').trim();
+    persistSettings();
+}
+
+function setUpdateDiscordTokenType() {
+    const el = document.getElementById('setDiscordTokenType');
+    Settings.discordTokenType = el.value === 'bot' ? 'bot' : 'user';
     persistSettings();
 }
 
@@ -323,6 +346,7 @@ function cfgOpenDest() {
 function platformLabel(link) {
     if (link.platform === 'twitter') return { badge: 'Twitter', cls: 'badge-twitter', name: '@' + (link.username || '?') };
     if (link.platform === 'derpibooru') return { badge: 'Derpibooru', cls: 'badge-derpibooru', name: link.name || link.query || '?' };
+    if (link.platform === 'discord') return { badge: 'Discord', cls: 'badge-discord', name: link.name || link.channel_id || '?' };
     const svc = { onlyfans: 'OF', fansly: 'Fansly', patreon: 'Patreon', fanbox: 'Fanbox' }[link.service]
         || (link.service || '?');
     const cls = link.platform === 'pawchive' ? 'badge-pawchive' : '';
@@ -391,7 +415,7 @@ async function cfgPreviewLink() {
     if (!url) { preview.textContent = ''; return; }
     const info = await pywebview.api.resolve_link(url);
     if (!info.valid) {
-        preview.textContent = 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, derpibooru.org/search?q=…, or x.com/…';
+        preview.textContent = 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, derpibooru.org/search?q=…, discord.com/channels/…, or x.com/…';
         return;
     }
     if (info.platform === 'coomerfans') {
@@ -402,6 +426,8 @@ async function cfgPreviewLink() {
         preview.textContent = `Detected: ${svc} (pawchive) — ${info.name || info.user_id}  ·  click Add Link`;
     } else if (info.platform === 'derpibooru') {
         preview.textContent = `Detected: Derpibooru — ${info.query}  ·  click Add Link`;
+    } else if (info.platform === 'discord') {
+        preview.textContent = `Detected: Discord — ${info.name || ('channel ' + info.channel_id)}  ·  click Add Link`;
     } else {
         preview.textContent = `Detected: Twitter — @${info.username}  ·  click Add Link`;
     }
