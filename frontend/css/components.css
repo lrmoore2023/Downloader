@@ -577,6 +577,13 @@
     line-height: 1.45;
 }
 
+/* Compact numbered steps inside a field hint (e.g. Discord token how-to). */
+.hint-steps {
+    margin: 4px 0;
+    padding-left: 18px;
+}
+.hint-steps li { margin: 1px 0; }
+
 /* ── Inline error text ────────────────────────────────────────── */
 
 .field-error {

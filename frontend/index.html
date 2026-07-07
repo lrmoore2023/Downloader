@@ -329,7 +329,17 @@
                 </div>
                 <div class="form-row">
                     <span class="form-label"></span>
-                    <span class="field-hint">Downloads media from a specific channel (paste its URL in Configure Links). <b>Bot token</b>: zero-risk, but only works on servers where you can add a bot — create one at discord.com/developers, enable the Message Content intent, and give it View Channel + Read Message History. <b>User token</b>: works on any server you can read (grab it from your browser: DevTools → Network → any discord.com/api request → the <code>authorization</code> header). Read-only — it never posts — but automating a user account is against Discord's ToS, so prefer a secondary account for servers you don't own.</span>
+                    <div class="field-hint">
+                        Downloads media from a specific channel (paste its URL in Configure Links).
+                        <b>Get a user token from your browser:</b>
+                        <ol class="hint-steps">
+                            <li>Log in at discord.com, press <b>F12</b> → <b>Network</b> tab.</li>
+                            <li>Type <code>messages</code> in the filter, then click any channel.</li>
+                            <li>Click the <code>messages</code> request → <b>Headers</b> → copy the <code>authorization</code> value.</li>
+                            <li>Paste it above; set type to <b>User account</b>.</li>
+                        </ol>
+                        Read-only (never posts), but automating a user account breaks Discord's ToS — prefer a <b>secondary account</b> for servers you don't own. <b>Bot token:</b> only for servers you can add a bot to (create at discord.com/developers, enable the Message Content intent).
+                    </div>
                 </div>
 
                 <div class="section-title" style="margin-top: 16px;">Pawchive</div>
