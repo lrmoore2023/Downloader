@@ -121,6 +121,14 @@ def twitter_archive_path(archive_dir, username, twitter_dest):
     return os.path.join(twitter_dest, ".gallery-dl-archive.db")
 
 
+def errors_db_path(archive_path):
+    """Per-link failure store, a sibling of that link's archive DB (so it lives
+    wherever the archive lives — the archive_dir when configured, else the
+    destination). '<stem>.db' -> '<stem>.errors.db'."""
+    root, ext = os.path.splitext(archive_path)
+    return f"{root}.errors{ext or '.db'}"
+
+
 class CreatorRunner:
     """Runs a batch of links for one creator. Mirrors the per-engine public
     contract (run/cancel/is_running + downloaded/skipped/error counters)."""
@@ -183,7 +191,8 @@ class CreatorRunner:
 
             verb = {"full": "Download Everything",
                     "latest": "Fetch Latest",
-                    "redownload_year": f"Download {year}"}.get(mode, mode)
+                    "redownload_year": f"Download {year}",
+                    "errors": "Redownload Errors"}.get(mode, mode)
             on_progress({"type": "info",
                          "message": f"{verb} — scope '{scope}', {len(links)} link(s)."})
 
@@ -222,8 +231,15 @@ class CreatorRunner:
 
     # ── per-platform runs ────────────────────────────────────────
     def _run_coomerfans(self, link, creator, mode, year, archive_dir, on_progress, on_error):
+        # Coomerfans has no targeted error-recovery path (its signed URLs must be
+        # re-parsed from the post anyway), so "Redownload Errors" is a full run: it
+        # re-attempts every missing/errored file through the normal download path,
+        # which records still-gone files and clears any that come back.
+        if mode == "errors":
+            mode = "full"
         destination = creator["destination"]
         archive_path = cf_archive_path(archive_dir, link, destination)
+        errors_path = errors_db_path(archive_path)
         prog = self._prefix(link, on_progress)
         err = self._prefix(link, on_error)
 
@@ -247,12 +263,14 @@ class CreatorRunner:
             on_complete=lambda d: stats.update(d),
             on_error=err,
             year=year,
+            errors_path=errors_path,
         )
         self._accumulate(stats)
 
     def _run_pawchive(self, link, creator, mode, year, archive_dir, on_progress, on_error):
         destination = creator["destination"]
         archive_path = pawchive_archive_path(archive_dir, link, destination)
+        errors_path = errors_db_path(archive_path)
         # The stateful external-links manifest lives at the creator root (no
         # pawchive subfolder — media shares the coomerfans root layout).
         links_path = os.path.join(destination, "_pawchive_links.json")
@@ -283,12 +301,16 @@ class CreatorRunner:
             on_complete=lambda d: stats.update(d),
             on_error=err,
             year=year,
+            errors_path=errors_path,
         )
         self._accumulate(stats)
 
     def _run_derpibooru(self, link, creator, mode, year, archive_dir, on_progress, on_error):
         # derpibooru shares the coomerfans root layout (<dest>/<year>/ +
-        # <dest>/Images/<year>/); no site subfolder.
+        # <dest>/Images/<year>/); no site subfolder. It has no failure store, so
+        # "Redownload Errors" is just a full re-scan that re-fetches anything missing.
+        if mode == "errors":
+            mode = "full"
         destination = creator["destination"]
         archive_path = derpibooru_archive_path(archive_dir, link, destination)
         prog = self._prefix(link, on_progress)
@@ -324,6 +346,7 @@ class CreatorRunner:
         twitter_dest = os.path.join(creator["destination"], "Twitter")
         username = link.get("username")
         archive_path = twitter_archive_path(archive_dir, username, twitter_dest)
+        errors_path = errors_db_path(archive_path)
         cp = cookies_path if not cookies_browser else None
         cb = cookies_browser or None
         prog = self._prefix(link, on_progress)
@@ -360,6 +383,10 @@ class CreatorRunner:
                 on_progress=prog,
                 on_complete=lambda d: stats.update(d),
                 on_error=err,
+                errors_path=errors_path,
+                # full/errors re-attempt everything, so wipe stale failures first and
+                # let the run re-record only what still breaks.
+                reset_errors=mode in ("full", "errors"),
             )
         finally:
             cleanup_config(config_path)

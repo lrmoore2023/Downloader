@@ -4,6 +4,8 @@ import subprocess
 import sys
 import threading
 
+from backend.download_errors import FailureStore
+
 
 class GalleryDlRunner:
     def __init__(self):
@@ -12,17 +14,34 @@ class GalleryDlRunner:
         self.downloaded_count = 0
         self.skipped_count = 0
         self.error_count = 0
+        self._errors = None
 
     @property
     def is_running(self):
         return self._process is not None and self._process.poll() is None
 
-    def run(self, url, config_path, archive_path, on_progress, on_complete, on_error):
-        """Run gallery-dl as a subprocess with real-time output parsing."""
+    def run(self, url, config_path, archive_path, on_progress, on_complete, on_error,
+            errors_path=None, reset_errors=False):
+        """Run gallery-dl as a subprocess with real-time output parsing.
+
+        Failure capture is best-effort: gallery-dl owns its own retries/archive and
+        its per-item errors don't cleanly map to a source tweet, so we record any
+        non-transient `[error]` line together with the media URL it was last working
+        on. `reset_errors=True` (used by the redownload-errors recovery run, which
+        re-attempts everything) wipes the store first so it reflects only what still
+        fails after the run."""
         self.downloaded_count = 0
         self.skipped_count = 0
         self.error_count = 0
         self._cancel_event.clear()
+
+        self._errors = FailureStore(errors_path) if errors_path else None
+        if self._errors and reset_errors:
+            try:
+                self._errors.clear_all(platform="twitter")
+            except Exception:
+                pass
+        current_url = None   # the media URL from the most recent "# <url>" line
 
         cmd = [
             sys.executable, "-m", "gallery_dl",
@@ -59,12 +78,21 @@ class GalleryDlRunner:
             parsed = self._parse_line(line)
             if parsed["type"] == "download":
                 self.downloaded_count += 1
+                current_url = None   # this item succeeded; drop its error context
                 on_progress(parsed)
             elif parsed["type"] == "skip":
                 self.skipped_count += 1
                 on_progress(parsed)
+            elif parsed["type"] == "url":
+                current_url = parsed.get("message") or current_url
+                on_progress(parsed)
             elif parsed["type"] == "error":
                 self.error_count += 1
+                # Transient categories (auth/cookies, network, rate limit) aren't a
+                # per-file "gone" — don't persist those. Everything else with a
+                # known media URL is a durable failure worth surfacing.
+                if parsed.get("subtype") not in ("auth", "network") and current_url:
+                    self._record_failure(current_url, url, parsed.get("message"))
                 on_error(parsed)
             else:
                 on_progress(parsed)
@@ -75,10 +103,28 @@ class GalleryDlRunner:
         if self._cancel_event.is_set():
             on_progress({"type": "info", "message": "Download cancelled by user"})
 
+        if self._errors:
+            try:
+                self._errors.close()
+            except Exception:
+                pass
+
         stats = self._stats()
         stats["return_code"] = return_code
         stats["cancelled"] = self._cancel_event.is_set()
         on_complete(stats)
+
+    def _record_failure(self, media_url, source_url, reason):
+        if not self._errors:
+            return
+        try:
+            self._errors.record_failure(
+                f"twitter_{media_url}", platform="twitter", url=media_url,
+                page_url=source_url, filename=os.path.basename(
+                    media_url.split("?", 1)[0]) or None,
+                reason=(reason or "gallery-dl error")[:300])
+        except Exception:
+            pass
 
     def cancel(self):
         """Cancel the running download."""

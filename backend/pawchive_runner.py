@@ -38,13 +38,14 @@ from backend import pawchive_extract
 from backend.pawchive_scraper import (
     make_session, parse_creator_url, iter_posts, fetch_json,
     parse_post, fetch_creator_name, build_filename, add_index_suffix,
-    target_path, site_code, _kind_and_ext, to_mirror, API, MIRROR_BASE,
+    target_path, site_code, _kind_and_ext, to_mirror, post_url, API, MIRROR_BASE,
     # HTTP-backend-agnostic exception classes (curl_cffi or requests) — the runner
     # MUST catch these, not requests.*, or every try/except silently stops catching.
     HTTPError, ConnectionError, Timeout, RequestException,
 )
 from backend.pawchive_archive import Archive, entry_key, ext_entry_key
 from backend.pawchive_links import PawchiveLinks
+from backend.download_errors import FailureStore
 # Reuse the proven low-level helpers verbatim.
 from backend.coomerfans_runner import (
     expected_total, ffprobe_ok, _TRANSIENT_READ_STATUSES,
@@ -262,6 +263,7 @@ class PawchiveRunner:
         self._on_progress = None
         self._archive = None
         self._links = None
+        self._errors = None       # FailureStore (persistent per-link failure record)
         self._session = None
         self._destination = None
         self._service = None
@@ -342,7 +344,8 @@ class PawchiveRunner:
                 self._succ_since = 0
 
     def run(self, creator_url, destination, mode, archive_path, links_path,
-            on_progress, on_complete, on_error, cookies_path=None, year=None):
+            on_progress, on_complete, on_error, cookies_path=None, year=None,
+            errors_path=None):
         self.downloaded_count = self.skipped_count = self.error_count = 0
         self._cancel_event.clear()
         with self._skip_lock:
@@ -379,6 +382,7 @@ class PawchiveRunner:
             # every request eat a timeout before failing over.
             self._check_primary_or_failover()
             self._archive = Archive(archive_path) if archive_path else None
+            self._errors = FailureStore(errors_path) if errors_path else None
             self._links = PawchiveLinks(links_path) if links_path else None
             if self._links:
                 # Batch manifest writes: mutate in memory during the crawl and
@@ -398,6 +402,13 @@ class PawchiveRunner:
             if self._extract_enabled:
                 self._extract_pool = ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix="pawextract")
+
+            # "Redownload Errors": re-attempt only this creator's recorded failures
+            # (fresh post fetch → fresh URL), instead of crawling the whole listing.
+            if mode == "errors":
+                self._recover_errors(year)
+                self._finish(on_complete)
+                return
 
             media_jobs, ext_jobs, posts = self._crawl(year)
             if self._cancelled():
@@ -426,6 +437,8 @@ class PawchiveRunner:
             self._diag.close()
             if self._archive:
                 self._archive.close()
+            if self._errors:
+                self._errors.close()
             self._running = False
 
     def _emit_diag_summary(self):
@@ -917,13 +930,22 @@ class PawchiveRunner:
             return ok
         finally:
             self._active_dec()
-            if not ok:
+            if ok:
+                # A prior run may have recorded this as a failure — it's on disk now.
+                self._clear_failure(entry)
+            else:
                 fail = job.get("_dl_fail") or {}
                 # A user "skip": abandon the partial and remember it so future runs
                 # never re-fetch it. (Done here, after the stream/file handles closed.)
                 if fail.get("reason") == "skipped":
                     self._discard(dest_path + ".part")
                     self._mark_skipped(job, entry, filename)
+                else:
+                    # Cancels aren't real failures; everything else (http_gone,
+                    # bounded_cap, terminal error page) is a durable failure worth
+                    # remembering so "Redownload Errors" can retry it later.
+                    if fail.get("reason") != "cancelled":
+                        self._record_failure(entry, job, filename, kind, url, fail)
                 self._diag.log("dl_end_fail", file=filename, kind=kind,
                                secs=round(time.monotonic() - job["_dl_t0"], 2),
                                reason=fail.get("reason"), status=fail.get("status"),
@@ -957,6 +979,34 @@ class PawchiveRunner:
         blind. Always returns False, for use as `return self._fail(...)`."""
         job["_dl_fail"] = {"reason": reason, "status": status, "attempt": attempt}
         return False
+
+    def _record_failure(self, entry, job, filename, kind, url, fail):
+        """Persist a durable failure so it survives the run (diag is overwritten) and
+        the UI can offer a redownload + the direct URL / post page for manual grab.
+
+        On-site media only — external direct links (catbox etc.) already surface via
+        the '_pawchive_links.json' manifest / 'Links needing attention' panel, so we
+        don't double-track them here."""
+        if not self._errors or job.get("jobkind") == "ext":
+            return
+        pid = job.get("post_id")
+        page = post_url(self._service, self._user_id, pid) if pid else None
+        try:
+            self._errors.record_failure(
+                entry, platform="pawchive", service=self._service,
+                user_id=self._user_id, post_id=pid, filename=filename, url=url,
+                page_url=page, media_kind=kind, status=fail.get("status"),
+                reason=fail.get("reason"))
+        except Exception:
+            pass
+
+    def _clear_failure(self, entry):
+        if not self._errors:
+            return
+        try:
+            self._errors.clear_failure(entry)
+        except Exception:
+            pass
 
     def _run_download(self, url, dest_path, entry, job, filename, is_video,
                       bounded=False):
@@ -1251,6 +1301,109 @@ class PawchiveRunner:
         while slept < seconds and not self._cancelled():
             time.sleep(0.5)
             slept += 0.5
+
+    # ── redownload-errors recovery ───────────────────────────
+    def _recover_errors(self, year):
+        """Re-attempt this creator's recorded on-site failures with a FRESH post
+        fetch (a pawchive re-upload changes the content-addressed URL, so an old 404
+        can resolve to a new path). Files still 404 after a refetch — or removed
+        from their post — are flipped to 'gone' with their post page, kept only for a
+        manual grab. If nothing was recorded (a creator downloaded before failure
+        tracking existed), fall back to a full crawl + reconcile, which re-attempts
+        every missing item and records fresh failures."""
+        failures = self._errors.list_failures(state="failed") if self._errors else []
+        if not failures:
+            self._info("No recorded errors for this creator — running a full "
+                       "crawl + reconcile to find and retry any missing files.")
+            media_jobs, ext_jobs, posts = self._crawl(year)
+            if self._cancelled():
+                return
+            self._info(f"{len(media_jobs)} media item(s) + {len(ext_jobs)} direct "
+                       f"external file(s) to fetch ({self.skipped_count} already present).")
+            self._download_all(media_jobs + ext_jobs)
+            self._drain_extractions()
+            if not self._cancelled():
+                self._reconcile(media_jobs)
+            self._finalize_manifest(posts)
+            return
+
+        self._info(f"Redownload Errors: retrying {len(failures)} recorded failure(s)...")
+        recovered = still_gone = 0
+        for f in failures:
+            if self._cancelled():
+                break
+            ok, gone = self._recover_one(f)
+            recovered += int(ok)
+            still_gone += int(gone)
+        self._drain_extractions()
+        self._info(f"Redownload Errors: {recovered} recovered, {still_gone} still "
+                   f"gone (kept for manual download).")
+
+    def _recover_one(self, f):
+        """Retry one recorded failure. Returns (recovered, confirmed_gone)."""
+        entry = f["entry"]
+        pid = f.get("post_id")
+        page = f.get("page_url") or (
+            post_url(self._service, self._user_id, pid) if pid else None)
+        if not pid:
+            return False, False           # can't refetch without a post id
+        full = self._read_post(pid)
+        if full is None:
+            self._info(f"Could not refetch post {pid} (network) — will retry later.")
+            return False, False           # transient: keep as 'failed'
+        post = parse_post(full)
+        media = self._match_media(post, entry, f.get("url"))
+        if media is None:
+            # the file is no longer part of the post → genuinely gone upstream
+            self._errors.mark_gone(entry, page_url=page)
+            self._info(f"Gone (removed from post): {f.get('filename') or entry}")
+            return False, True
+        is_video = media["kind"] == "video"
+        post_title = post.get("title") if media["kind"] == "archive" else None
+        job = {
+            "jobkind": "media", "post_id": pid, "entry": entry,
+            "media_kind": media["kind"], "url": media["url"], "name": media["name"],
+            "dt": post["dt"], "post_title": post.get("title", ""),
+        }
+        dest_path, filename = self._assign_path(
+            post["dt"], media["kind"], media["name"], post_title=post_title)
+        ok = self._download_stream(media["url"], dest_path, entry, job, filename,
+                                   is_video)
+        if ok:
+            self._info(f"Recovered: {filename}")
+            return True, False            # _download_stream already cleared the row
+        fail = job.get("_dl_fail") or {}
+        if fail.get("reason") == "http_gone":
+            self._errors.mark_gone(entry, page_url=page, status=fail.get("status"),
+                                   url=media["url"])
+            self._info(f"Still gone (HTTP {fail.get('status')}): {filename}")
+            return False, True
+        return False, False               # transient — left as 'failed' to retry
+
+    def _match_media(self, post, entry, old_url):
+        """Find the post media item a failure refers to: by its original name (from
+        the recorded '?f=' URL) first, else by the 1-based index in the entry key."""
+        name = self._name_from_url(old_url)
+        if name:
+            for m in post["media"]:
+                if (m.get("name") or "").lower() == name.lower():
+                    return m
+        tail = (entry or "").rsplit("_", 1)[-1]
+        if tail.isdigit():
+            idx = int(tail)
+            if 1 <= idx <= len(post["media"]):
+                return post["media"][idx - 1]
+        return None
+
+    @staticmethod
+    def _name_from_url(url):
+        """The original media name carried in a pawchive file URL's '?f=' param."""
+        if not url:
+            return None
+        for part in urlsplit(url).query.split("&"):
+            if part.startswith("f="):
+                return unquote(part[2:])
+        return None
 
     # ── reconciliation ───────────────────────────────────────
     def _reconcile(self, media_jobs):

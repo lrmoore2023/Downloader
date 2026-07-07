@@ -30,7 +30,9 @@ from backend.derpibooru_scraper import (
 from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
     pawchive_archive_path, twitter_archive_path, derpibooru_archive_path,
+    errors_db_path,
 )
+from backend.download_errors import open_readonly as open_errors_store
 from backend.library_import import scan_library
 from backend.media_library import scan_creator_media
 from backend.media_server import MediaServer
@@ -781,6 +783,96 @@ class Api:
         except Exception as e:
             return {"reachable": False, "items": [], "counts": {}, "error": str(e)}
 
+    def list_creator_errors(self, creator_id):
+        """Persisted per-file download failures for a creator, aggregated across all
+        its links' failure stores. Drives the 'Redownload Errors' button + panel:
+        `count` files that failed (retryable) and `gone` files confirmed missing
+        upstream (manual grab only — the direct URL + post page are provided)."""
+        c = self.load_state().get("creators", {}).get(creator_id)
+        if not c:
+            return {"count": 0, "failed": 0, "gone": 0, "items": [],
+                    "error": "Creator not found"}
+        state = self.load_state()
+        archive_dir = (state.get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        items, failed, gone = [], 0, 0
+        for link in c.get("links", []):
+            apath = self._archive_path_for_link(link, archive_dir, dest)
+            if not apath:
+                continue
+            store = None
+            try:
+                store = open_errors_store(errors_db_path(apath))
+                if store is None:
+                    continue
+                for f in store.list_failures():
+                    st = f.get("state") or "failed"
+                    if st == "dismissed":
+                        continue                      # user checked it off — hidden
+                    if st == "gone":
+                        gone += 1
+                    else:
+                        failed += 1
+                    items.append({
+                        "entry": f.get("entry"),
+                        "platform": f.get("platform"),
+                        "filename": f.get("filename"),
+                        "prefix": self._name_prefix(f.get("filename")),
+                        "url": f.get("url"),
+                        "page_url": f.get("page_url"),
+                        "media_kind": f.get("media_kind"),
+                        "status": f.get("status"),
+                        "reason": f.get("reason"),
+                        "attempts": f.get("attempts"),
+                        "state": st,
+                        "link": link_label(link),
+                    })
+            except Exception:
+                continue
+            finally:
+                if store is not None:
+                    store.close()
+        # failed first (actionable), then gone; each newest-looking last-attempt first
+        items.sort(key=lambda i: (i["state"] == "gone", i.get("filename") or ""))
+        return {"count": failed + gone, "failed": failed, "gone": gone, "items": items}
+
+    _PREFIX_RE = re.compile(r"^(\d{4}\.\d{2}\.\d{2}(?: \d{2}\.\d{2})? - [^-]+ - )")
+
+    @classmethod
+    def _name_prefix(cls, filename):
+        """The '<date> - SITE - ' prefix from a built filename, to copy in front of a
+        manually-downloaded file's own name (mirrors the pending-links prefix)."""
+        m = cls._PREFIX_RE.match(filename or "")
+        return m.group(1) if m else ""
+
+    def dismiss_creator_error(self, creator_id, entry):
+        """Hide one error entry (the panel checkbox). Persisted so a later run that
+        hits the same failure won't resurface it. Searches the creator's per-link
+        stores for the entry and dismisses it wherever found."""
+        c = self.load_state().get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        archive_dir = (self.load_state().get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        dismissed = False
+        for link in c.get("links", []):
+            apath = self._archive_path_for_link(link, archive_dir, dest)
+            if not apath:
+                continue
+            store = open_errors_store(errors_db_path(apath))
+            if store is None:
+                continue
+            try:
+                if store.dismiss(entry):
+                    dismissed = True
+            except Exception:
+                pass
+            finally:
+                store.close()
+            if dismissed:
+                break
+        return {"ok": True, "dismissed": dismissed}
+
     # ── Link filters (user-editable "junk link" list) ───────────────
     def _link_filters(self, state=None):
         """The active filter patterns: the user's saved list, or the defaults when
@@ -1095,7 +1187,11 @@ class Api:
 
         scope ∈ {everything, twitter, coomerfans, onlyfans, fansly, pawchive,
                  patreon, fanbox, derpibooru}
-        mode  ∈ {full, latest, redownload_year}
+        mode  ∈ {full, latest, redownload_year, errors}
+                 'errors' re-attempts only the creator's recorded download failures
+                 (pawchive refetches a fresh URL; coomerfans/twitter re-run and
+                 retry anything missing), flipping anything still gone to a
+                 manual-grab entry surfaced by list_creator_errors.
         """
         if self._creator_runner and self._creator_runner.is_running:
             return {"error": "A download is already in progress"}

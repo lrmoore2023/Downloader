@@ -36,6 +36,7 @@ window.onCreatorComplete = function (data) {
     setDownloadingState(false);
     refreshYears();
     if (typeof renderPendingLinks === 'function') renderPendingLinks();
+    if (typeof renderErrorLinks === 'function') renderErrorLinks();
 
     const msg = `Done. Downloaded: ${data.downloaded} | Skipped: ${data.skipped} | Errors: ${data.errors}`;
     if (data.cancelled) Logger.info('Operation cancelled.');

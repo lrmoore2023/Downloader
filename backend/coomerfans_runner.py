@@ -29,6 +29,7 @@ from backend.coomerfans_scraper import (
     refresh_media_url, build_filename, target_path, site_code,
 )
 from backend.coomerfans_archive import Archive, entry_key
+from backend.download_errors import FailureStore
 
 # HTTP statuses that mean "this (signed) URL is dead — re-parse the post for a
 # fresh one" rather than "retry the same URL".
@@ -110,8 +111,11 @@ class CoomerfansRunner:
 
         self._on_progress = None
         self._archive = None
+        self._errors = None       # FailureStore (persistent per-link failure record)
         self._session = None
         self._destination = None
+        self._service = None
+        self._user_id = None
         self._mode = "full"
 
     # ── public contract ──────────────────────────────────────
@@ -126,7 +130,8 @@ class CoomerfansRunner:
         return self._cancel_event.is_set()
 
     def run(self, creator_url, destination, mode, archive_path,
-            on_progress, on_complete, on_error, cookies_path=None, year=None):
+            on_progress, on_complete, on_error, cookies_path=None, year=None,
+            errors_path=None):
         self.downloaded_count = self.skipped_count = self.error_count = 0
         self._cancel_event.clear()
         self._claimed.clear()
@@ -142,8 +147,10 @@ class CoomerfansRunner:
                 on_complete(self._stats(cancelled=False))
                 return
             self._service = creator["service"]
+            self._user_id = creator.get("user_id")
             self._session = make_session(cookies_path=cookies_path)
             self._archive = Archive(archive_path) if archive_path else None
+            self._errors = FailureStore(errors_path) if errors_path else None
 
             jobs = self._crawl_and_parse(creator_url, year)
             if self._cancelled():
@@ -164,6 +171,8 @@ class CoomerfansRunner:
         finally:
             if self._archive:
                 self._archive.close()
+            if self._errors:
+                self._errors.close()
             self._running = False
 
     # ── crawl + parse ────────────────────────────────────────
@@ -408,6 +417,8 @@ class CoomerfansRunner:
                                 f"Gone (HTTP {r.status_code}) after {gone_refreshes} refresh attempts, "
                                 f"skipping: {filename}  [{job['post_url']}]"
                             )
+                            self._record_failure(entry, job, filename, url,
+                                                 r.status_code)
                             return False
                         self._sleep_cancellable(backoff)
                         backoff = min(backoff * 2, 120)
@@ -486,8 +497,31 @@ class CoomerfansRunner:
         os.replace(part, dest_path)
         self._bump("download")
         self._record(entry, job, filename, expected_size)
+        self._clear_failure(entry)   # a prior run's failure is now on disk
         self._progress_download(filename)
         return True
+
+    def _record_failure(self, entry, job, filename, url, status):
+        """Persist a durable 'gone' failure (survives the run; the diag/log don't)
+        so the UI can offer a redownload + the post page for a manual grab."""
+        if not self._errors:
+            return
+        try:
+            self._errors.record_failure(
+                entry, platform="coomerfans", service=self._service,
+                user_id=self._user_id, post_id=job.get("post_id"),
+                filename=filename, url=url, page_url=job.get("post_url"),
+                media_kind=job.get("kind"), status=status, reason="http_gone")
+        except Exception:
+            pass
+
+    def _clear_failure(self, entry):
+        if not self._errors:
+            return
+        try:
+            self._errors.clear_failure(entry)
+        except Exception:
+            pass
 
     @staticmethod
     def _discard(part):

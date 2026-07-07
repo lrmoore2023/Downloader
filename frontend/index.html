@@ -109,6 +109,13 @@
                             </svg>
                             Verify &amp; Repair
                         </button>
+                        <button class="btn btn-warning" id="btnRedownloadErrors" onclick="redownloadErrors()" style="display: none;" title="Re-attempt files that failed to download. Anything still gone upstream is listed below with its direct URL + post page for a manual grab.">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6"/>
+                                <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                            </svg>
+                            Redownload Errors (<span class="err-count">0</span>)
+                        </button>
                         <button class="btn btn-danger" id="btnCancel" onclick="cancelDownload()" style="display: none;">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
@@ -165,6 +172,9 @@
 
                 <!-- Pawchive: external links needing manual download (below the log) -->
                 <div class="section pending-links" id="pendingLinks" style="display: none;"></div>
+
+                <!-- Failed downloads (retryable + confirmed-gone) needing attention -->
+                <div class="section pending-links" id="errorLinks" style="display: none;"></div>
 
             </div><!-- /creatorView -->
 

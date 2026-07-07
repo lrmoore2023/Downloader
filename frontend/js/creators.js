@@ -129,6 +129,7 @@ async function onCreatorChange() {
     pendingUndo = [];          // undo history is per-creator
     lastPendingSig = null;
     renderPendingLinks();
+    renderErrorLinks();
     persistLastCreator(currentCreatorId);
 }
 
@@ -245,6 +246,104 @@ function togglePending() {
     const caret = document.querySelector('#pendingLinks .pending-caret');
     if (list) list.style.display = pendingCollapsed ? 'none' : '';
     if (caret) caret.textContent = pendingCollapsed ? '▸' : '▾';
+}
+
+// ── Failed downloads needing attention (all platforms) ──────────
+// Persistent per-file failures recorded during downloads: 'failed' items are
+// retried by the Redownload Errors button; 'gone' items are confirmed missing
+// upstream and listed with their direct URL + post page for a manual grab.
+let currentErrorCount = 0;
+let errorsCollapsed = false;
+
+async function renderErrorLinks() {
+    const panel = document.getElementById('errorLinks');
+    const btn = document.getElementById('btnRedownloadErrors');
+    if (!panel) return;
+    const id = currentCreatorId;
+    if (!id) {
+        currentErrorCount = 0;
+        panel.style.display = 'none'; panel.innerHTML = '';
+        if (btn) btn.style.display = 'none';
+        updateActionAvailability();
+        return;
+    }
+    let res;
+    try { res = await pywebview.api.list_creator_errors(id); }
+    catch (e) { return; }
+    if (currentCreatorId !== id) return;    // selection changed mid-fetch
+    const items = (res && res.items) || [];
+    currentErrorCount = res ? (res.count || 0) : 0;
+
+    if (btn) {
+        btn.style.display = currentErrorCount > 0 ? '' : 'none';
+        const c = btn.querySelector('.err-count');
+        if (c) c.textContent = currentErrorCount;
+    }
+    updateActionAvailability();
+
+    if (!items.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+
+    const rows = items.map(i => {
+        const gone = i.state === 'gone';
+        const badge = gone
+            ? '<span class="badge badge-gone">gone</span>'
+            : '<span class="badge badge-failed">failed</span>';
+        const status = i.status ? `<span class="pending-missing">HTTP ${i.status}</span>` : '';
+        const fileLink = i.url
+            ? `<a class="pending-url" href="#" onclick="openLink('${encodeURIComponent(i.url)}');return false;" title="${escapeHtml(i.url)}">file&nbsp;url</a>
+               <button class="btn-tiny" onclick="copyText('${encodeURIComponent(i.url)}')">Copy</button>` : '';
+        const pageLink = i.page_url
+            ? `<a class="pending-url" href="#" onclick="openLink('${encodeURIComponent(i.page_url)}');return false;" title="${escapeHtml(i.page_url)}">post&nbsp;page</a>
+               <button class="btn-tiny" onclick="copyText('${encodeURIComponent(i.page_url)}')">Copy</button>` : '';
+        const prefixBtn = i.prefix
+            ? `<button class="btn-tiny" onclick="copyText('${encodeURIComponent(i.prefix)}')" title="Paste in front of the manually-downloaded file's own name">Copy name prefix</button>` : '';
+        return `<div class="pending-row">
+            <input type="checkbox" class="pending-check" title="Dismiss — hide this error (won't come back on re-download)"
+                   onchange="dismissError(this, '${encodeURIComponent(i.entry)}')">
+            ${badge}
+            <span class="pending-fname" title="${escapeHtml(i.filename || i.entry || '')}">${escapeHtml(i.filename || i.entry || '(unknown)')}</span>
+            ${status}
+            ${fileLink} ${pageLink} ${prefixBtn}
+            <span class="field-hint">${escapeHtml(i.link || '')}</span>
+        </div>`;
+    }).join('');
+
+    const caret = errorsCollapsed ? '▸' : '▾';
+    const fc = res.failed || 0, gc = res.gone || 0;
+    panel.style.display = '';
+    panel.innerHTML = `<div class="pending-head" onclick="toggleErrors()">
+          <span class="pending-caret">${caret}</span>
+          <span>Errors needing attention</span>
+          <span class="pending-count">${currentErrorCount}</span>
+          <span class="field-hint pending-hint">${fc} retryable · ${gc} gone (grab manually via the URL / post page)</span>
+        </div>
+        <div class="pending-list" ${errorsCollapsed ? 'style="display:none"' : ''}>${rows}</div>`;
+}
+
+function toggleErrors() {
+    errorsCollapsed = !errorsCollapsed;
+    const list = document.querySelector('#errorLinks .pending-list');
+    const caret = document.querySelector('#errorLinks .pending-caret');
+    if (list) list.style.display = errorsCollapsed ? 'none' : '';
+    if (caret) caret.textContent = errorsCollapsed ? '▸' : '▾';
+}
+
+async function dismissError(cb, entryEnc) {
+    const entry = decodeURIComponent(entryEnc);
+    const id = currentCreatorId;
+    cb.disabled = true;
+    try {
+        const res = await pywebview.api.dismiss_creator_error(id, entry);
+        if (res && res.error) {
+            showToast(res.error, 'error');
+            cb.checked = false; cb.disabled = false;
+            return;
+        }
+    } catch (e) {
+        cb.checked = false; cb.disabled = false;
+        return;
+    }
+    if (currentCreatorId === id) renderErrorLinks();   // refresh count/button/panel
 }
 
 function resolvePendingLink(cb, encKey) {
@@ -512,6 +611,8 @@ function updateActionAvailability() {
     ['btnDownloadAll', 'btnFetchLatest', 'btnRedownload'].forEach(id =>
         document.getElementById(id).disabled = !hasLinks || isBusy);
     document.getElementById('btnVerify').disabled = !hasCf || isBusy;
+    const btnErr = document.getElementById('btnRedownloadErrors');
+    if (btnErr) btnErr.disabled = isBusy || currentErrorCount === 0;
 }
 
 // ── Years (redownload dropdown) ─────────────────────────────────
@@ -557,6 +658,21 @@ function startDownload(mode) {
 
 function redownloadYear() {
     startDownload('redownload_year');
+}
+
+function redownloadErrors() {
+    if (!requireCreator()) return;
+    if (currentErrorCount === 0) { showToast('No recorded errors for this creator', 'error'); return; }
+    setDownloadingState(true);
+    resetStats();
+    Logger.info('Redownloading errored files for this creator…');
+    pywebview.api.start_creator_download(currentCreatorId, currentScope, 'errors', null).then(res => {
+        if (res && res.error) {
+            setDownloadingState(false);
+            showToast(res.error, 'error');
+            Logger.error(res.error);
+        }
+    });
 }
 
 function verifyRepair() {
