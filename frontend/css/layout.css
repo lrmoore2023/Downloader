@@ -143,6 +143,9 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
+    /* Reserve the scrollbar gutter so it appearing/disappearing never shifts the
+       column width (a source of layout jitter during fast log streaming). */
+    scrollbar-gutter: stable;
     padding: 22px 24px;
     display: flex;
     flex-direction: column;
@@ -218,7 +221,12 @@
 /* ── Log Section (flex-grow to fill, with a floor) ─────────────── */
 
 .section.log-section {
-    flex: 1 1 auto;
+    /* basis 0 (not auto): the section's size comes from the flex free space, NOT
+       from the log's content. With 'auto' the base size tracked the streaming log
+       text, so every new line recomputed the column layout and jittered the panels
+       below (Links/Errors needing attention). basis 0 keeps the box height stable —
+       new lines just scroll inside .log-container. */
+    flex: 1 1 0;
     display: flex;
     flex-direction: column;
     min-height: 240px;

@@ -332,6 +332,10 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow-y: auto;
+    /* Stable scrollbar gutter + no scroll-anchoring: streaming lines scroll inside
+       here without nudging width or scroll position, so the box doesn't jitter. */
+    scrollbar-gutter: stable;
+    overflow-anchor: none;
     padding: 12px 14px;
     font-family: var(--font-mono);
     font-size: 12px;
@@ -598,6 +602,19 @@
     display: block;
 }
 
+/* Opt-out that governs the Download Everything / Download Year actions above it. */
+.download-modifier {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* Line the hint up under the checkbox label (15px box + 10px gap). */
+.download-modifier .field-hint {
+    margin-left: 25px;
+}
+
 /* ── Divider between action groups ────────────────────────────── */
 
 .actions-divider {
@@ -684,6 +701,28 @@
     background: var(--accent-soft);
     border-color: var(--accent-dim);
     color: var(--accent-bright);
+}
+
+/* Second-tier subcategory row: quieter and slightly smaller so the hierarchy
+   reads (major row above, this tucked under it). */
+.segmented.seg-sub {
+    margin-top: -2px;
+    padding: 3px;
+    background: transparent;
+    border-color: transparent;
+}
+
+.segmented.seg-sub .seg {
+    padding: 4px 11px;
+    font-size: 11px;
+}
+
+/* Read-only derived Type in the Configure modal (set by the destination folder). */
+.cfg-type {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--accent-bright);
+    padding: 4px 0;
 }
 
 /* ── Modal overlays ───────────────────────────────────────────── */
@@ -1264,6 +1303,7 @@
 .pending-head {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;   /* controls (sort / year / dismiss) wrap instead of clipping */
     gap: 8px;
     cursor: pointer;
     user-select: none;
@@ -1342,6 +1382,18 @@
     align-self: center;
     accent-color: var(--warn);
     cursor: pointer;
+}
+
+/* Bulk "Resolve all" / "Dismiss all" action in a panel header. */
+.pending-clear-all {
+    margin-left: 8px;
+    flex-shrink: 0;
+}
+
+/* A lone-link post: one compact row, no post-header block. */
+.pending-group.pending-single {
+    padding-top: 4px;
+    padding-bottom: 4px;
 }
 
 /* Editable link-filter patterns in Settings, shown as removable chips. */
@@ -1472,4 +1524,25 @@
 .btn-tiny:hover {
     border-color: var(--accent);
     color: var(--accent-bright);
+}
+
+/* Per-file retry (↻) in the errors panel: compact, square, monospace glyph. */
+.btn-tiny.err-retry {
+    padding: 2px 7px;
+    font-size: 12px;
+    line-height: 1;
+    font-family: var(--font-mono);
+}
+
+/* Per-year retry picker in the errors-panel header — sized to match btn-tiny so it
+   sits quietly beside "Dismiss all" rather than dominating the header. */
+.err-year {
+    flex-shrink: 0;
+    padding: 3px 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
 }

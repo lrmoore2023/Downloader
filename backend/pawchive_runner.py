@@ -184,9 +184,14 @@ _DIAG_PATH = os.path.join(
 
 
 class PawchiveRunner:
-    def __init__(self, workers=6, connect_timeout=30, read_timeout=300,
+    def __init__(self, workers=6, connect_timeout=30, read_timeout=60,
                  chunk_size=1 << 20, max_download_attempts=10, large_workers=1,
                  extract=True):
+        # read_timeout is the max IDLE gap between received bytes (not total
+        # transfer time), so 60s is ample for healthy streams (measured: sub-second
+        # gaps even on multi-GB videos). Keeping it tight means a stream that truly
+        # stalls (origin wedged mid-transfer) is detected in ~1 min and RESUMES from
+        # its .part, instead of tying up a worker for the old 300s per stall.
         # pawchive's file CDN bandwidth-caps EACH connection to ~1 MB/s, so aggregate
         # throughput scales almost linearly with parallel connections (measured: K=1
         # 1.2 MB/s, K=6 10 MB/s, K=10 14 MB/s). The catch: those connections must be
@@ -260,6 +265,13 @@ class PawchiveRunner:
         self._skip_ids = set()
         self._skip_lock = threading.Lock()
 
+        # Entries recorded as failures during THIS run (progress-gated give-up). The
+        # end-of-run supplemental error recovery skips these — a file that just
+        # 504'd returns the same content-addressed URL, so re-attempting it in the
+        # same run only re-stalls (30s each, sequentially). Prior-run failures are
+        # still retried there (a re-upload may have changed their URL).
+        self._failed_this_run = set()
+
         self._on_progress = None
         self._archive = None
         self._links = None
@@ -268,6 +280,7 @@ class PawchiveRunner:
         self._destination = None
         self._service = None
         self._mode = "full"
+        self._error_entries = None   # set per-run for a targeted 'errors' recheck
 
     # ── public contract ──────────────────────────────────────
     @property
@@ -302,6 +315,19 @@ class PawchiveRunner:
                                 # class client that honors retry-after:10 shouldn't
                                 # need the old 180s bot-penalty silences)
     _SUCC_TO_DECAY = 4          # clean responses that step the escalation back down
+
+    # Progress-gated give-up (see _run_download). A file that receives ZERO new
+    # bytes for this many consecutive attempts is unservable right now — a
+    # persistent 504 (origin gateway-times-out after ~30s), an HTML error page, or
+    # a dead connection — NOT merely large. At ~30s per 504 attempt that's ~2.5 min
+    # before we stop, record it as a (retryable) error, and free the worker so the
+    # pool can drain. A file that IS advancing (any bytes land) resets the counter
+    # and keeps retrying/resuming unbounded, so large downloads are never abandoned.
+    _MAX_NOPROGRESS_ATTEMPTS = 5
+    # Not-yet-imported posts (has_full=False): the full file isn't on the host, so
+    # its URL 404s/504s. Attempt ONCE (in case it's unexpectedly present) then record
+    # as 'not_imported' — don't burn ~30s/attempt x5 on a file that doesn't exist yet.
+    _PENDING_NOPROGRESS_ATTEMPTS = 1
 
     def _await_cooldown(self):
         """Block until any active global DDoS-Guard cooldown expires. Called by
@@ -345,11 +371,15 @@ class PawchiveRunner:
 
     def run(self, creator_url, destination, mode, archive_path, links_path,
             on_progress, on_complete, on_error, cookies_path=None, year=None,
-            errors_path=None):
+            errors_path=None, error_entries=None):
         self.downloaded_count = self.skipped_count = self.error_count = 0
+        # Targeted 'errors' run: only re-attempt these recorded failures (a specific
+        # post / file / year the user asked to recheck). None = every recorded error.
+        self._error_entries = set(error_entries) if error_entries else None
         self._cancel_event.clear()
         with self._skip_lock:
             self._skip_ids.clear()
+        self._failed_this_run.clear()
         self._claimed.clear()
         self._ext_results = {}
         self._use_mirror = False
@@ -405,8 +435,9 @@ class PawchiveRunner:
 
             # "Redownload Errors": re-attempt only this creator's recorded failures
             # (fresh post fetch → fresh URL), instead of crawling the whole listing.
+            # self._error_entries (when set) narrows it to a specific post/file/year.
             if mode == "errors":
-                self._recover_errors(year)
+                self._recover_errors(year, entries=self._error_entries)
                 self._finish(on_complete)
                 return
 
@@ -425,6 +456,13 @@ class PawchiveRunner:
             if not self._cancelled():
                 self._reconcile(media_jobs)
             self._finalize_manifest(posts)
+
+            # Download Everything / Download Year also retry recorded errors: the
+            # crawl above already re-fetched anything still listed, so this
+            # supplemental pass only hits leftovers whose content-addressed URL
+            # changed on a re-upload (a fresh per-post fetch resolves those).
+            if mode in ("full", "redownload_year") and not self._cancelled():
+                self._recover_errors(year, crawl_fallback=False)
 
             self._finish(on_complete)
         except Exception as e:
@@ -530,6 +568,9 @@ class PawchiveRunner:
                     "ord_width": ord_width,
                     "include_time": False,   # set below once all posts are known
                     "post_title": post.get("title", ""),   # used for archive names
+                    # has_full=False → post not imported yet; the runner attempts once
+                    # then records 'not_imported' instead of the patient 5x retry.
+                    "has_full": post.get("has_full", True),
                 })
             ei = 0
             for l in post["external_links"]:
@@ -822,6 +863,17 @@ class PawchiveRunner:
                 self._bump("skip")
                 self._record(entry, job, natural, job["media_kind"])
                 return
+        # Certain-not-on-site fast path: pawchive says this post's full file isn't
+        # imported yet (has_full=False → the file URL 404s/504s). We know this from
+        # the crawl metadata, so DON'T spend a 30-90s server timeout probing it —
+        # record it as 'not_imported' (grouped in the errors panel with its post page
+        # + file) and move on. It auto-retries on a future run once pawchive imports
+        # the post (has_full flips true). Verified: every has_full=False file probed
+        # returned 404/504, never content, so nothing downloadable is skipped.
+        if not job.get("has_full", True):
+            self._record_failure(entry, job, natural, job["media_kind"], job["url"],
+                                 {"reason": "not_imported", "status": None})
+            return
         dest_path, filename = self._assign_path(
             job["dt"], job["media_kind"], job["name"],
             ordinal=job.get("ordinal"), ord_width=job.get("ord_width", 2),
@@ -989,6 +1041,9 @@ class PawchiveRunner:
         don't double-track them here."""
         if not self._errors or job.get("jobkind") == "ext":
             return
+        # Remember it failed this run so end-of-run recovery doesn't re-stall on it
+        # (same content-addressed URL → same 504 within the run).
+        self._failed_this_run.add(entry)
         pid = job.get("post_id")
         page = post_url(self._service, self._user_id, pid) if pid else None
         try:
@@ -1024,6 +1079,22 @@ class PawchiveRunner:
         backoff = 2
         cap = self.max_download_attempts
         job.pop("_dl_fail", None)   # clear any stale reason from a prior attempt
+        # Progress tracking for the no-progress give-up (see _MAX_NOPROGRESS_ATTEMPTS).
+        # prev_progress = largest .part size seen so far; noprogress = consecutive
+        # attempts that added no bytes; last_block_status = the most recent block code
+        # (recorded on give-up so the failure carries e.g. 504).
+        prev_progress = os.path.getsize(part) if os.path.exists(part) else 0
+        noprogress = 0
+        last_block_status = None
+        # Import status (pawchive is import-based; the listing carries has_full).
+        # A NOT-imported post (has_full=False, preview_state 'pending') has no full
+        # file on the host yet — its URL 404s or 504s — so attempt it only ONCE and
+        # record it as 'not_imported' (needs attention), never the patient 5x retry
+        # meant for a genuinely-present file that's merely slow/overloaded. Default
+        # True (imported) so older API responses / unknown posts keep the patient path.
+        imported = bool(job.get("has_full", True))
+        noprogress_cap = (self._MAX_NOPROGRESS_ATTEMPTS if imported
+                          else self._PENDING_NOPROGRESS_ATTEMPTS)
 
         while not self._cancelled():
             attempt += 1
@@ -1034,6 +1105,25 @@ class PawchiveRunner:
                 return self._fail(job, "bounded_cap", attempt=attempt)
             try:
                 resume_pos = os.path.getsize(part) if os.path.exists(part) else 0
+                # Give up on a file that can't advance a single byte: after the first
+                # attempt, if the .part hasn't grown since the previous attempt, count
+                # it as no-progress; once that reaches the cap the file is unservable
+                # right now (persistent 504 / HTML error / dead stream), so stop and
+                # let _download_stream record it as a retryable error. Any real bytes
+                # (a downloading file of any size) reset the counter → never capped.
+                if resume_pos > prev_progress:
+                    prev_progress = resume_pos
+                    noprogress = 0
+                elif attempt > 1:
+                    noprogress += 1
+                    if noprogress >= noprogress_cap:
+                        # Not-imported posts get 'not_imported' (pawchive hasn't
+                        # scraped the full file yet — retried automatically on future
+                        # runs once it lands); imported-but-unservable get the generic
+                        # 'server_unavailable'. Both are recorded as retryable errors.
+                        reason = "not_imported" if not imported else "server_unavailable"
+                        return self._fail(job, reason, status=last_block_status,
+                                          attempt=attempt)
                 headers = {}
                 open_mode = "wb"
                 if resume_pos:
@@ -1061,7 +1151,10 @@ class PawchiveRunner:
                         # 5xx overload) — NEVER a permanent 'gone'. Back THIS worker off
                         # briefly and retry (with resume); the other workers keep
                         # flowing. Independent per-worker sessions make blocks rare, so
-                        # a per-connection backoff beats freezing the whole pool.
+                        # a per-connection backoff beats freezing the whole pool. If the
+                        # block persists with no bytes ever landing, the no-progress cap
+                        # (top of loop) eventually stops it so the pool can't hang.
+                        last_block_status = r.status_code
                         wait_s = min(self._retry_after(r, backoff), 30)
                         self._diag.log("file_block", file=filename, kind=job.get("media_kind"),
                                        host=urlsplit(target).netloc, code=r.status_code,
@@ -1073,10 +1166,15 @@ class PawchiveRunner:
                         continue
 
                     if r.status_code in (401, 403, 404, 410):
-                        # A genuine forbidden/missing file (e.g. a removed catbox link);
-                        # DDoS-Guard 403/503 blocks were already handled above.
-                        self._error(f"file gone (HTTP {r.status_code}): {url}")
-                        return self._fail(job, "http_gone", status=r.status_code,
+                        # A missing/forbidden file (e.g. a removed catbox link);
+                        # DDoS-Guard 403/503 blocks were already handled above. On a
+                        # not-yet-imported post this just means the full file hasn't
+                        # been scraped — label it 'not_imported' (needs attention,
+                        # auto-retried later) rather than a permanent 'gone'.
+                        reason = "not_imported" if not imported else "http_gone"
+                        self._error(f"file {'not imported yet' if not imported else 'gone'} "
+                                    f"(HTTP {r.status_code}): {url}")
+                        return self._fail(job, reason, status=r.status_code,
                                           attempt=attempt)
 
                     if r.status_code == 416:
@@ -1303,16 +1401,31 @@ class PawchiveRunner:
             slept += 0.5
 
     # ── redownload-errors recovery ───────────────────────────
-    def _recover_errors(self, year):
-        """Re-attempt this creator's recorded on-site failures with a FRESH post
-        fetch (a pawchive re-upload changes the content-addressed URL, so an old 404
-        can resolve to a new path). Files still 404 after a refetch — or removed
-        from their post — are flipped to 'gone' with their post page, kept only for a
-        manual grab. If nothing was recorded (a creator downloaded before failure
-        tracking existed), fall back to a full crawl + reconcile, which re-attempts
-        every missing item and records fresh failures."""
-        failures = self._errors.list_failures(state="failed") if self._errors else []
+    def _recover_errors(self, year, crawl_fallback=True, entries=None):
+        """Re-attempt this creator's recorded on-site failures (state 'failed' or
+        'gone') with a FRESH post fetch (a pawchive re-upload changes the
+        content-addressed URL, so an old 404 can resolve to a new path). Files still
+        404 after a refetch — or removed from their post — are flipped to 'gone' with
+        their post page, kept only for a manual grab.
+
+        `entries` (a set) narrows the retry to specific recorded failures — the panel's
+        per-file / per-post / per-year recheck. Entries not in this store simply don't
+        match (a creator's stores are per-link), and a targeted run never falls back to
+        a full crawl.
+
+        With `crawl_fallback` (the standalone 'Redownload Errors' mode): if nothing was
+        recorded (a creator downloaded before failure tracking existed), fall back to a
+        full crawl + reconcile. When called as a supplement after a full/year crawl,
+        pass `crawl_fallback=False` — the crawl already covered everything, so with no
+        remaining failures there's nothing to do."""
+        targeted = entries is not None
+        failures = [f for f in (self._errors.list_failures(state=("failed", "gone"))
+                                if self._errors else [])
+                    if f.get("entry") not in self._failed_this_run
+                    and (not targeted or f.get("entry") in entries)]
         if not failures:
+            if targeted or not crawl_fallback:
+                return
             self._info("No recorded errors for this creator — running a full "
                        "crawl + reconcile to find and retry any missing files.")
             media_jobs, ext_jobs, posts = self._crawl(year)
@@ -1352,6 +1465,11 @@ class PawchiveRunner:
             self._info(f"Could not refetch post {pid} (network) — will retry later.")
             return False, False           # transient: keep as 'failed'
         post = parse_post(full)
+        if not post.get("has_full", True):
+            # Still not imported on pawchive — its files would 404/504. Don't probe
+            # (30-90s each); keep it flagged 'not_imported' and retry a later run.
+            self._info(f"Still not imported (will retry later): {f.get('filename') or entry}")
+            return False, False
         media = self._match_media(post, entry, f.get("url"))
         if media is None:
             # the file is no longer part of the post → genuinely gone upstream
@@ -1364,6 +1482,9 @@ class PawchiveRunner:
             "jobkind": "media", "post_id": pid, "entry": entry,
             "media_kind": media["kind"], "url": media["url"], "name": media["name"],
             "dt": post["dt"], "post_title": post.get("title", ""),
+            # Reached only when the post is imported (the not-imported case returned
+            # above) — has_full is True here, so the normal patient retry applies.
+            "has_full": post.get("has_full", True),
         }
         dest_path, filename = self._assign_path(
             post["dt"], media["kind"], media["name"], post_title=post_title)

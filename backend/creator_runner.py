@@ -166,6 +166,7 @@ class CreatorRunner:
         self._derpibooru_filter_id = None
         self._discord_token = None
         self._discord_token_type = "user"
+        self._refresh_links = True
 
     @property
     def is_running(self):
@@ -193,7 +194,17 @@ class CreatorRunner:
     def run(self, creator, scope, mode, year, archive_dir,
             cookies_path, cookies_browser, on_progress, on_complete, on_error,
             derpibooru_api_key=None, derpibooru_filter_id=None,
-            discord_token=None, discord_token_type=None):
+            discord_token=None, discord_token_type=None, refresh_links=True,
+            error_entries=None):
+        # A targeted 'errors' recheck (specific pawchive failures the user picked in
+        # the panel — a file/post/year). Only pawchive uses the per-entry failure
+        # store, so a targeted run skips other platforms (which treat 'errors' as a
+        # full re-run — not what "recheck this post" should trigger).
+        self._error_entries = error_entries
+        # Whether a whole-library re-download also re-scans posts for external links
+        # and rebuilds the pawchive/discord "Links needing attention" manifest. See
+        # _run_pawchive / _run_discord for how it gates links_path.
+        self._refresh_links = refresh_links
         self._derpibooru_api_key = derpibooru_api_key or None
         self._derpibooru_filter_id = derpibooru_filter_id or None
         self._discord_token = discord_token or None
@@ -219,6 +230,9 @@ class CreatorRunner:
             for link in links:
                 if self._cancel.is_set():
                     break
+                # Targeted error recheck → pawchive only (see run() docstring).
+                if error_entries is not None and link.get("platform") != "pawchive":
+                    continue
                 on_progress({"type": "info", "message": f"──── {link_label(link)} ────"})
                 try:
                     if link.get("platform") == "coomerfans":
@@ -319,12 +333,13 @@ class CreatorRunner:
             destination=destination,
             mode=mode,
             archive_path=archive_path,
-            links_path=links_path,
+            links_path=self._manifest_path(links_path, mode),
             on_progress=prog,
             on_complete=lambda d: stats.update(d),
             on_error=err,
             year=year,
             errors_path=errors_path,
+            error_entries=self._error_entries,
         )
         self._accumulate(stats)
 
@@ -402,7 +417,7 @@ class CreatorRunner:
             token_type=self._discord_token_type,
             year=year,
             errors_path=errors_path,
-            links_path=links_path,
+            links_path=self._manifest_path(links_path, mode),
             # Per-link filename tag: name files "<date> - Patreon - …" etc. so a
             # channel that mirrors a Patreon/Fanbox blends with the creator's files.
             site_label=link.get("tag"),
@@ -481,6 +496,18 @@ class CreatorRunner:
         self._accumulate(stats)
 
     # ── helpers ──────────────────────────────────────────────────
+    def _manifest_path(self, links_path, mode):
+        """The external-links manifest path to hand a runner, or None to leave the
+        manifest (and its "Links needing attention" panel) untouched. The user's
+        "refresh external links" opt-out only applies to the two whole-library
+        modes — 'latest' must still record links for the new posts it fetches, and
+        'errors' doesn't re-scan post bodies. With None the runner still auto-grabs
+        direct external files (recorded in the archive), it just never rewrites the
+        manifest, so already-handled links aren't re-surfaced."""
+        if self._refresh_links or mode not in ("full", "redownload_year"):
+            return links_path
+        return None
+
     def _prefix(self, link, cb):
         """Wrap a callback so each message is tagged with the link label."""
         label = link_label(link)

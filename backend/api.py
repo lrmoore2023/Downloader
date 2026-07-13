@@ -587,19 +587,38 @@ class Api:
                 s[svc] = s.get(svc, 0) + 1
         return s
 
-    # Parent library folder → display category. Anything else falls back to the
-    # folder's own (title-cased) name, so new roots categorize themselves.
+    # The three major library categories, keyed by their P:\ top-level folder.
+    _CATEGORY_MAJORS = {"furry", "hentai", "real"}
+    # Legacy single-level fallback for non-standard roots (parent folder → label).
     _CATEGORY_MAP = {"creators": "Real", "furry": "Furry"}
 
-    def _derive_category(self, destination):
+    def _derive_category_pair(self, destination):
+        """(major, subcategory) from the folder layout ``P:\\{Major}\\{Sub}\\{Creator}``.
+        The folder literally named ``Creators`` displays as the ``Real`` subcategory;
+        ``2D``/``3D``/``Furry`` keep their casing via ``.title()``. Falls back to the
+        legacy single-level derivation (flat major, no sub) for shallow paths or roots
+        outside the Furry/Hentai/Real hierarchy, so non-P:\\ creators still categorize."""
         d = self._fwd(destination)
-        if "/" not in d:
-            return ""
-        parent = d.rsplit("/", 1)[0].rsplit("/", 1)[-1]   # basename of dirname
-        return self._CATEGORY_MAP.get(parent.lower(), parent.title())
+        parts = [p for p in d.split("/") if p]
+        if len(parts) >= 3:
+            major_folder, sub_folder = parts[-3], parts[-2]
+            if major_folder.lower() in self._CATEGORY_MAJORS:
+                sub = "Real" if sub_folder.lower() == "creators" else sub_folder.title()
+                return major_folder.title(), sub
+        if "/" in d:
+            parent = d.rsplit("/", 1)[0].rsplit("/", 1)[-1]   # basename of dirname
+            return self._CATEGORY_MAP.get(parent.lower(), parent.title()), ""
+        return "", ""
 
     def _category_of(self, c):
-        return c.get("category") or self._derive_category(c.get("destination", ""))
+        # Folders are the source of truth: derive the major from the destination
+        # first, only falling back to any stored (possibly stale/flat) category.
+        major, _ = self._derive_category_pair(c.get("destination", ""))
+        return major or c.get("category") or ""
+
+    def _subcategory_of(self, c):
+        _, sub = self._derive_category_pair(c.get("destination", ""))
+        return sub
 
     def list_creators(self):
         """Recently used creators, most-recent first, with a platform summary."""
@@ -611,6 +630,7 @@ class Api:
                 "name": c.get("name") or self._basename(c.get("destination", "")),
                 "destination": c.get("destination", ""),
                 "category": self._category_of(c),
+                "subcategory": self._subcategory_of(c),
                 "summary": self._summary(c.get("links", [])),
                 "link_count": len(c.get("links", [])),
                 "last_used": c.get("last_used", ""),
@@ -627,6 +647,7 @@ class Api:
             "name": c.get("name") or self._basename(c.get("destination", "")),
             "destination": c.get("destination", ""),
             "category": self._category_of(c),
+            "subcategory": self._subcategory_of(c),
             "avatar": c.get("avatar", ""),
             "has_videos": bool(c.get("has_videos")),
             "links": c.get("links", []),
@@ -881,6 +902,7 @@ class Api:
                     items.append({
                         "entry": f.get("entry"),
                         "platform": f.get("platform"),
+                        "post_id": f.get("post_id"),   # group a post's files together
                         "filename": f.get("filename"),
                         "prefix": self._name_prefix(f.get("filename")),
                         "url": f.get("url"),
@@ -937,6 +959,193 @@ class Api:
             if dismissed:
                 break
         return {"ok": True, "dismissed": dismissed}
+
+    def dismiss_creator_errors(self, creator_id, entries):
+        """Dismiss a specific set of error entries at once — the post-level 'check
+        all' checkbox in the errors panel (one post's files). Returns the entries
+        actually dismissed so the UI can offer an undo via restore_creator_errors."""
+        c = self.load_state().get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        archive_dir = (self.load_state().get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        wanted = set(entries or [])
+        done = []
+        for link in c.get("links", []):
+            if not wanted:
+                break
+            apath = self._archive_path_for_link(link, archive_dir, dest)
+            if not apath:
+                continue
+            store = open_errors_store(errors_db_path(apath))
+            if store is None:
+                continue
+            try:
+                for entry in list(wanted):
+                    if store.dismiss(entry):
+                        done.append(entry)
+                        wanted.discard(entry)
+            except Exception:
+                pass
+            finally:
+                store.close()
+        return {"ok": True, "dismissed": len(done), "entries": done}
+
+    def dismiss_all_creator_errors(self, creator_id):
+        """Dismiss every visible (failed/gone) error for a creator in one go — the
+        panel's 'Dismiss all'. Returns the dismissed entries so the UI can offer an
+        undo via restore_creator_errors."""
+        c = self.load_state().get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        archive_dir = (self.load_state().get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        entries = []
+        for link in c.get("links", []):
+            apath = self._archive_path_for_link(link, archive_dir, dest)
+            if not apath:
+                continue
+            store = open_errors_store(errors_db_path(apath))
+            if store is None:
+                continue
+            try:
+                for f in store.list_failures(state=("failed", "gone")):
+                    entry = f.get("entry")
+                    if entry and store.dismiss(entry):
+                        entries.append(entry)
+            except Exception:
+                pass
+            finally:
+                store.close()
+        return {"ok": True, "dismissed": len(entries), "entries": entries}
+
+    def restore_creator_errors(self, creator_id, entries):
+        """Un-dismiss entries back to 'failed' — the undo for Dismiss all. Searches
+        the creator's per-link stores for each entry."""
+        c = self.load_state().get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        archive_dir = (self.load_state().get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        wanted = set(entries or [])
+        restored = 0
+        for link in c.get("links", []):
+            if not wanted:
+                break
+            apath = self._archive_path_for_link(link, archive_dir, dest)
+            if not apath:
+                continue
+            store = open_errors_store(errors_db_path(apath))
+            if store is None:
+                continue
+            try:
+                for entry in list(wanted):
+                    if store.restore(entry):
+                        restored += 1
+                        wanted.discard(entry)
+            except Exception:
+                pass
+            finally:
+                store.close()
+        return {"ok": True, "restored": restored}
+
+    def resolve_errors_from_disk(self, creator_id, entries=None):
+        """Adopt files the user downloaded elsewhere and dropped into the year folder.
+
+        For each recorded pawchive error (optionally restricted to `entries` — the
+        panel's shown/filtered set), look in the media's year folder for a file named
+        with the media's ORIGINAL name (the '?f=' name in the failure URL — i.e. what
+        the off-site copy is named). If found, rename it to the archive name
+        ('YYYY.MM.DD - SITE - …'), record it as downloaded, and clear the error. A file
+        already correctly named is simply adopted (error cleared). Nothing is deleted,
+        and a name collision (target already present under a different source) is left
+        untouched. Returns {renamed, already_present, not_found}."""
+        from urllib.parse import urlsplit, unquote
+        c = self.load_state().get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        archive_dir = (self.load_state().get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        want = set(entries) if entries else None
+        renamed = already = not_found = 0
+        for link in c.get("links", []):
+            if link.get("platform") != "pawchive":
+                continue
+            apath = self._archive_path_for_link(link, archive_dir, dest)
+            if not apath:
+                continue
+            store = open_errors_store(errors_db_path(apath))
+            if store is None:
+                continue
+            archive = None
+            try:
+                archive = CfArchive(apath)
+                for f in store.list_failures(state=("failed", "gone")):
+                    entry = f.get("entry")
+                    if want is not None and entry not in want:
+                        continue
+                    fn = f.get("filename")
+                    if not fn:
+                        continue
+                    kind = f.get("media_kind") or "image"
+                    year = fn[:4] if fn[:4].isdigit() else "unknown"
+                    # Mirror target_path's layout: images → Images/<year>/, else <year>/.
+                    folder = (os.path.join(dest, "Images", year) if kind == "image"
+                              else os.path.join(dest, year))
+                    target = os.path.join(folder, fn)
+                    if os.path.isfile(target):
+                        self._adopt_error_file(archive, store, entry, f, fn, kind, year)
+                        already += 1
+                        continue
+                    # Bare names the dropped file might carry: the original media name
+                    # from the URL '?f=' first (what the off-site copy is named), then
+                    # the archive name minus its 'date - SITE - ' prefix.
+                    cands = []
+                    if f.get("url"):
+                        for part in urlsplit(f["url"]).query.split("&"):
+                            if part.startswith("f="):
+                                cands.append(unquote(part[2:]))
+                    m = self._PREFIX_RE.match(fn)
+                    if m:
+                        cands.append(fn[len(m.group(1)):])
+                    moved = False
+                    for name in cands:
+                        if not name:
+                            continue
+                        src = os.path.join(folder, name)
+                        if os.path.isfile(src) and os.path.abspath(src) != os.path.abspath(target):
+                            try:
+                                os.rename(src, target)
+                                moved = True
+                                break
+                            except OSError:
+                                pass
+                    if moved:
+                        self._adopt_error_file(archive, store, entry, f, fn, kind, year)
+                        renamed += 1
+                    else:
+                        not_found += 1
+            except Exception:
+                pass
+            finally:
+                if archive is not None:
+                    archive.close()
+                store.close()
+        return {"ok": True, "renamed": renamed, "already_present": already,
+                "not_found": not_found}
+
+    @staticmethod
+    def _adopt_error_file(archive, store, entry, f, filename, kind, year):
+        """Record a now-present file in the archive (so future runs see it) and clear
+        its error row."""
+        try:
+            archive.record(entry, f.get("post_id"), filename, kind, year, None, None)
+        except Exception:
+            pass
+        try:
+            store.clear_failure(entry)
+        except Exception:
+            pass
 
     # ── Link filters (user-editable "junk link" list) ───────────────
     def _link_filters(self, state=None):
@@ -1037,7 +1246,9 @@ class Api:
             links.append(built)
 
         name = (creator.get("name") or "").strip() or self._basename(destination)
-        category = (creator.get("category") or "").strip() or self._derive_category(destination)
+        # Category follows the destination folder — derive both fields from it.
+        major, subcategory = self._derive_category_pair(destination)
+        category = major or (creator.get("category") or "").strip()
         new_id = self._norm_dest(destination)
 
         try:
@@ -1060,6 +1271,7 @@ class Api:
             "name": name,
             "destination": destination,
             "category": category,
+            "subcategory": subcategory,
             "avatar": avatar,
             "has_videos": bool(creator.get("has_videos")),
             "links": links,
@@ -1260,7 +1472,8 @@ class Api:
 
     # ── Download orchestration ──────────────────────────────────────
 
-    def start_creator_download(self, creator_id, scope="everything", mode="full", year=None):
+    def start_creator_download(self, creator_id, scope="everything", mode="full",
+                               year=None, refresh_links=True, error_entries=None):
         """Run a download across a scope of the creator's links.
 
         scope ∈ {everything, twitter, coomerfans, onlyfans, fansly, pawchive,
@@ -1270,6 +1483,15 @@ class Api:
                  (pawchive refetches a fresh URL; coomerfans/twitter re-run and
                  retry anything missing), flipping anything still gone to a
                  manual-grab entry surfaced by list_creator_errors.
+        refresh_links — for the two whole-library modes ('full'/'redownload_year'),
+                 whether to also re-scan pawchive/discord posts for external links
+                 and rebuild the "Links needing attention" manifest. False leaves
+                 that manifest untouched (redownload media only); ignored by the
+                 other modes and by platforms without a links manifest.
+        error_entries — (mode 'errors' only) a list of specific failure entry keys to
+                 recheck — the panel's per-file / per-post / per-year retry. Restricts
+                 the run to pawchive links and to just those recorded failures. None
+                 (the default) rechecks every recorded error, as before.
         """
         if self._creator_runner and self._creator_runner.is_running:
             return {"error": "A download is already in progress"}
@@ -1298,25 +1520,34 @@ class Api:
             pawchive_workers = 6
         pawchive_extract = state.get("pawchive_extract", True) is not False
 
+        # Only a list of non-empty entry strings; anything else means "recheck all".
+        entries = None
+        if mode == "errors" and isinstance(error_entries, (list, tuple)):
+            entries = [str(e) for e in error_entries if e]
+            entries = entries or None
+
         self._touch_creator(creator_id)
         self._creator_runner = CreatorRunner(workers=workers,
                                              pawchive_workers=pawchive_workers,
                                              pawchive_extract=pawchive_extract)
         self._creator_thread = threading.Thread(
             target=self._run_creator_download,
-            args=(c, scope, mode, year),
+            args=(c, scope, mode, year, bool(refresh_links), entries),
             daemon=True,
         )
         self._creator_thread.start()
         return {"status": "started", "mode": mode, "scope": scope}
 
-    def _run_creator_download(self, creator, scope, mode, year):
+    def _run_creator_download(self, creator, scope, mode, year, refresh_links=True,
+                              error_entries=None):
         state = self.load_state()
         self._creator_runner.run(
             creator=creator,
             scope=scope,
             mode=mode,
             year=year,
+            refresh_links=refresh_links,
+            error_entries=error_entries,
             archive_dir=(state.get("archive_dir") or "").strip(),
             cookies_path=state.get("cookies_path") or "",
             cookies_browser=state.get("cookies_browser") or "",
