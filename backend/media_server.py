@@ -63,6 +63,7 @@ class MediaServer:
         self._thumbs_dir = None
         self._lock = threading.Lock()
         self._ff_sem = threading.Semaphore(4)
+        self._ffmpeg = None       # cached ffmpeg path (None=unresolved, ''=absent)
 
     # ── lifecycle ────────────────────────────────────────────────
     def start(self):
@@ -107,8 +108,22 @@ class MediaServer:
             return None
         return os.path.join(td, hashlib.sha1(self._norm(path).encode("utf-8")).hexdigest() + ".jpg")
 
+    def _ffmpeg_exe(self):
+        """Path to an ffmpeg binary: a system one if on PATH, else the copy
+        bundled by imageio-ffmpeg. Cached; returns None if neither is available."""
+        if self._ffmpeg is None:
+            exe = shutil.which("ffmpeg")
+            if not exe:
+                try:
+                    import imageio_ffmpeg
+                    exe = imageio_ffmpeg.get_ffmpeg_exe()
+                except Exception:
+                    exe = ""
+            self._ffmpeg = exe or ""
+        return self._ffmpeg or None
+
     def generate_thumb(self, src, thumb):
-        exe = shutil.which("ffmpeg")
+        exe = self._ffmpeg_exe()
         if not exe:
             return False
         is_video = _ext(src) in VIDEO_EXTS

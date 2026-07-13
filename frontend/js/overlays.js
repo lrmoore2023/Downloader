@@ -299,8 +299,8 @@ function openConfigure() {
     cfgLinksData = currentCreator.links.map(l => ({ ...l }));
     document.getElementById('configureTitle').textContent = 'Configure Creator';
     document.getElementById('cfgName').value = currentCreator.name || '';
-    document.getElementById('cfgCategory').value = currentCreator.category || '';
     document.getElementById('cfgDest').value = currentCreator.destination || '';
+    setCfgType(currentCreator.category, currentCreator.subcategory);
     document.getElementById('cfgDeleteBtn').style.display = '';
     openConfigureCommon();
 }
@@ -310,14 +310,22 @@ function openNewCreator() {
     cfgLinksData = [];
     document.getElementById('configureTitle').textContent = 'New Creator';
     document.getElementById('cfgName').value = '';
-    document.getElementById('cfgCategory').value = '';
     document.getElementById('cfgDest').value = '';
+    setCfgType('', '');
     document.getElementById('cfgDeleteBtn').style.display = 'none';
     openConfigureCommon();
 }
 
+// Render the read-only Type chip ("Major · Sub") — the type is dictated by the
+// destination folder, so it's shown, not entered.
+function setCfgType(major, sub) {
+    const el = document.getElementById('cfgCategoryDerived');
+    if (!el) return;
+    const parts = [major, sub].filter(Boolean);
+    el.textContent = parts.length ? parts.join(' · ') : '—';
+}
+
 function openConfigureCommon() {
-    if (typeof refreshCategoryDatalist === 'function') refreshCategoryDatalist();
     document.getElementById('cfgNewLink').value = '';
     document.getElementById('cfgLinkPreview').textContent = '';
     renderCfgLinks();
@@ -332,6 +340,9 @@ async function cfgBrowseDest() {
     const path = await pywebview.api.select_folder();
     if (!path) return;
     document.getElementById('cfgDest').value = path;
+    const [major, sub] = (typeof deriveCategoryPair === 'function')
+        ? deriveCategoryPair(path) : ['', ''];
+    setCfgType(major, sub);
     const nameEl = document.getElementById('cfgName');
     if (!nameEl.value.trim()) {
         nameEl.value = path.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop();
@@ -491,7 +502,7 @@ async function cfgSave() {
     const creator = {
         id: cfgEditingId || undefined,
         name: document.getElementById('cfgName').value.trim(),
-        category: document.getElementById('cfgCategory').value.trim(),
+        // Type is derived from the destination folder by the backend — not sent.
         destination,
         links: cfgLinksData.map(l => ({ url: l.url, tag: l.tag || '' })),
     };

@@ -146,14 +146,34 @@ class FailureStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def restore(self, entry):
+        """Un-dismiss an entry back to 'failed' (the undo of dismiss). Only acts on a
+        dismissed row so it can't override a 'gone' verdict."""
+        if not entry:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE failures SET state = ?, last_attempt = ? "
+                "WHERE entry = ? AND state = ?",
+                (FAILED, _now(), entry, DISMISSED))
+            self._conn.commit()
+            return cur.rowcount > 0
+
     # ── reads ────────────────────────────────────────────────
     def list_failures(self, state=None):
+        """Rows in one `state`, or several if `state` is an iterable of states, or
+        all rows when None."""
         with self._lock:
-            if state:
+            if state is None:
+                cur = self._conn.execute("SELECT * FROM failures")
+            elif isinstance(state, (list, tuple, set)):
+                states = list(state)
+                marks = ",".join("?" * len(states))
+                cur = self._conn.execute(
+                    f"SELECT * FROM failures WHERE state IN ({marks})", states)
+            else:
                 cur = self._conn.execute(
                     "SELECT * FROM failures WHERE state = ?", (state,))
-            else:
-                cur = self._conn.execute("SELECT * FROM failures")
             cols = [c[0] for c in cur.description]
             return [dict(zip(cols, r)) for r in cur.fetchall()]
 

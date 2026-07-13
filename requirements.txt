@@ -6,3 +6,6 @@ beautifulsoup4>=4.12
 # DDoS-Guard stops rate-limiting us as a bot. Optional at runtime: pawchive_scraper
 # falls back to requests if it's unavailable (just without impersonation).
 curl_cffi>=0.7
+# Bundles a static ffmpeg binary so the in-app media browser can generate
+# thumbnails without a manual system ffmpeg install.
+imageio-ffmpeg>=0.5

@@ -49,6 +49,10 @@
                         <div class="segmented" id="categoryFilter"></div>
                     </div>
                     <div class="form-row">
+                        <span class="form-label"></span>
+                        <div class="segmented seg-sub" id="categorySubFilter" style="display: none;"></div>
+                    </div>
+                    <div class="form-row">
                         <span class="form-label">Creator</span>
                         <select class="select-field" id="creatorSelect" style="flex: 1;" onchange="onCreatorChange()">
                             <option value="">Select a creator…</option>
@@ -124,6 +128,14 @@
                         </button>
                     </div>
 
+                    <div class="download-modifier" id="refreshLinksRow" style="display: none;">
+                        <label class="checkbox-option">
+                            <input type="checkbox" id="refreshLinks" class="pending-check" checked>
+                            <span class="checkbox-label">Also refresh external links on a full re-download</span>
+                        </label>
+                        <span class="field-hint">Download Everything and Download Year rebuild the “Links needing attention” list from every post. Uncheck to redownload media only and leave that list exactly as it is.</span>
+                    </div>
+
                     <div class="actions-row actions-divider">
                         <select class="select-field" id="redownloadYear" style="min-width: 100px;">
                             <option value="">Year…</option>
@@ -182,6 +194,7 @@
             <div class="tab-content" id="galleryView" style="display: none;">
                 <div class="gallery-toolbar">
                     <div class="segmented" id="galleryCategoryFilter"></div>
+                    <div class="segmented seg-sub" id="galleryCategorySubFilter" style="display: none;"></div>
                     <input type="text" class="input-field" id="gallerySearch" placeholder="Search creators…"
                            oninput="renderGallery()" style="max-width: 280px;">
                     <span class="field-hint" id="galleryCount" style="margin-left: auto;"></span>
@@ -238,8 +251,7 @@
                 </div>
                 <div class="form-row">
                     <span class="form-label">Type</span>
-                    <input type="text" class="input-field" id="cfgCategory" list="cfgCategoryList" placeholder="Real / Furry (auto-detected from folder)">
-                    <datalist id="cfgCategoryList"></datalist>
+                    <span class="cfg-type" id="cfgCategoryDerived" title="Set by the destination folder (P:\Major\Sub)">—</span>
                 </div>
                 <div class="form-row">
                     <span class="form-label">Folder</span>

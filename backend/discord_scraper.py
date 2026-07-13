@@ -54,6 +54,9 @@ _DISCORD_MEDIA_HOSTS = (
 )
 
 _URL_RE = re.compile(r"https?://[^\s<>\"'()]+", re.I)
+# Markdown masked link: [display text](https://real-url). Bots/webhooks post
+# these in embed descriptions/fields, e.g. a "Mega" word linking to mega.nz.
+_MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
 _ILLEGAL_FS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WS = re.compile(r"\s+")
 

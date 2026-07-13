@@ -20,7 +20,7 @@ function renderGallery() {
 
     const q = (document.getElementById('gallerySearch').value || '').trim().toLowerCase();
     const list = applySort(creatorsCache.filter(c =>
-        (currentCategory === 'All' || c.category === currentCategory) &&
+        matchesCategory(c) &&
         (!q || (c.name || '').toLowerCase().includes(q))));
 
     const count = document.getElementById('galleryCount');
