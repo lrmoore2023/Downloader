@@ -297,6 +297,11 @@ class PawchiveRunner:
         # first time — an already-tracked (shown) one isn't duplicated and a checked-off
         # (dismissed) one is never re-added (the user already grabbed it elsewhere).
         self._known_failure_entries = set()
+        # Post ids the crawl actually VISITED this run (not skipped as already-seen).
+        # The end-of-run recovery pass uses this so it only re-fetches a deferred entry
+        # for a post the crawl SKIPPED (a seen post's newly-imported file) — the crawl
+        # already handles every post it visited, so recovery needn't re-fetch those.
+        self._crawled_post_ids = set()
 
         self._on_progress = None
         self._archive = None
@@ -417,6 +422,7 @@ class PawchiveRunner:
         self._failed_this_run.clear()
         self._dismissed_ids = set()
         self._known_failure_entries = set()
+        self._crawled_post_ids = set()
         self._claimed.clear()
         self._ext_results = {}
         self._use_mirror = False
@@ -575,6 +581,9 @@ class PawchiveRunner:
         posts_since_flush = 0
         pending_skipped = 0   # posts pawchive hasn't imported yet (no files to fetch)
         pending_logged = 0    # of those, how many are NEWLY logged as errors this run
+        deferred_posts = 0    # posts with a path-less/'deferred' attachment (bytes not
+                              # imported yet) — otherwise 'scraped', so easy to miss
+        deferred_logged = 0   # of those, how many deferred files were NEWLY logged
 
         for raw in iter_posts(self._session, self._service, self._user_id,
                               on_page=on_page, should_cancel=self._cancelled,
@@ -602,27 +611,37 @@ class PawchiveRunner:
                 full = self._read_post(post["post_id"])
                 if full is not None:
                     post = parse_post(full)
-            # 'latest' skips whole posts already downloaded (a top-up over a prior run).
+            # A post pawchive hasn't imported yet (preview_state 'pending') has NO
+            # servable on-site files — every file URL 404s. Separately, an otherwise
+            # 'scraped' post can still carry individual path-less ('deferred')
+            # attachments whose bytes pawchive hasn't fetched yet (parse_post surfaces
+            # these as deferred_media). Both are "nothing to download yet, but must be
+            # tracked": we log them (metadata only, no file probe) so they're visible
+            # and re-checked cheaply from the listing each run, and picked up the moment
+            # pawchive imports them. NB: has_full=False is NOT the signal — a 'scraped'
+            # post serves its imported files even with has_full False.
+            is_pending = post.get("preview_state") == "pending"
+            has_deferred = bool(post.get("deferred_media"))
+            # 'latest' skips whole posts already downloaded (a top-up over a prior run)
+            # — UNLESS the post still has un-imported files to watch (pending, or a
+            # deferred attachment). Without this guard a partially-downloaded post is
+            # marked 'seen' and skipped forever, so its deferred file would never be
+            # logged or picked up once it lands.
             if (self._mode == "latest" and self._archive
-                    and self._archive.post_seen(post["post_id"])):
+                    and self._archive.post_seen(post["post_id"])
+                    and not is_pending and not has_deferred):
                 continue
+            self._crawled_post_ids.add(post["post_id"])
 
             posts[post["post_id"]] = post
-            # A post pawchive hasn't imported yet (preview_state 'pending') has NO
-            # servable on-site files — every file URL 404s — so build no media jobs for
-            # it in ANY mode (that would just probe 404s and litter empty year folders).
-            # Instead we LOG it in the errors panel (metadata only, no file probe) so
-            # the user can see it / check it off, and re-check its state cheaply from the
-            # listing on each run: once pawchive imports it (state → 'scraped') it drops
-            # out of this branch and downloads normally below. We STILL scan its body for
-            # external links below (those live on catbox/mega etc., independent of
-            # pawchive's import). NB: has_full=False is NOT this signal — a 'scraped'
-            # post serves its files even with has_full False (e.g. extra .zip
-            # attachments still pending), so those are downloaded normally below.
-            is_pending = post.get("preview_state") == "pending"
             if is_pending:
                 pending_skipped += 1
                 pending_logged += self._note_pending(post)
+            # Log any deferred attachments (independent of pending — a scraped post can
+            # have both fully-imported files that download below AND deferred ones).
+            if has_deferred:
+                deferred_posts += 1
+                deferred_logged += self._note_deferred(post)
             # Images get a page-order ordinal ('01 - ') only when a post has >1 of
             # them; videos always use standard naming (they carry real names and
             # live in a separate folder). image_no counts images as we go so the
@@ -700,6 +719,11 @@ class PawchiveRunner:
                      if pending_logged else "already tracked / checked off")
             self._info(f"{pending_skipped} post(s) not imported by pawchive yet "
                        f"({newly}; no files fetched) — auto-downloads once pawchive imports them.")
+        if deferred_posts:
+            newly = (f"{deferred_logged} newly logged in errors"
+                     if deferred_logged else "already tracked / checked off")
+            self._info(f"{deferred_posts} post(s) with file(s) pawchive hasn't imported "
+                       f"yet ({newly}; no bytes to fetch) — auto-downloads once they land.")
 
         # One NAS write for the whole crawl (autosave is off during the loop).
         self._save_links()
@@ -1205,6 +1229,40 @@ class PawchiveRunner:
             logged += 1
         return logged
 
+    def _note_deferred(self, post):
+        """Log a post's path-less/'deferred' attachments in the errors panel (metadata
+        only — there's no URL to probe yet). Same contract as _note_pending: one entry
+        per deferred file, logged ONLY the first time (an already-tracked or checked-off
+        entry is left alone), and auto-cleared once the file downloads.
+
+        Entry-key alignment is what makes the auto-clear work: deferred attachments sit
+        AFTER the post's imported files in source order (verified: pawchive never
+        interleaves a pathed attachment after a deferred one), so a deferred file gets
+        the media index it WILL occupy once imported — len(media)+j. When pawchive
+        fills in its path it becomes media[len(media)+j-1], the crawl builds a normal
+        job under the SAME entry key, downloads it, and _clear_failure drops this row."""
+        if not self._errors:
+            return 0
+        base = len(post["media"])   # deferred slots trail the imported ones
+        logged = 0
+        for j, m in enumerate(post.get("deferred_media") or [], 1):
+            entry = entry_key(post["post_id"], base + j)
+            if entry in self._known_failure_entries:
+                continue   # already shown, or checked off — don't touch it
+            title = post.get("title") if m["kind"] == "archive" else None
+            filename = self._natural_name(post["dt"], m["kind"], m["name"],
+                                          post_title=title)
+            job = {"jobkind": "media", "post_id": post["post_id"],
+                   "dt": post["dt"], "media_kind": m["kind"]}
+            # No URL yet (the file has no path) — recovery matches it by index once
+            # pawchive imports it. reason 'deferred' distinguishes it from a pending
+            # whole-post so the recovery pass can treat the two differently.
+            self._record_failure(entry, job, filename, m["kind"], None,
+                                 {"reason": "deferred", "status": None})
+            self._known_failure_entries.add(entry)
+            logged += 1
+        return logged
+
     def _run_download(self, url, dest_path, entry, job, filename, is_video,
                       bounded=False):
         """Stream to <dest>.part with HTTP Range resume + size/ffprobe verify,
@@ -1571,18 +1629,33 @@ class PawchiveRunner:
         pass `crawl_fallback=False` — the crawl already covered everything, so with no
         remaining failures there's nothing to do."""
         targeted = entries is not None
-        # In the AUTOMATIC post-crawl pass, skip 'not_imported' entries: their
-        # availability is already judged from the crawl's listing metadata
-        # (preview_state) and downloaded there the moment they flip to 'scraped', so
-        # re-fetching their posts here would just be redundant work on files that are
-        # still absent. A TARGETED run (the panel's Retry) still includes them — the
-        # user explicitly asked to re-check, and _recover_one gates on preview_state so
-        # it only downloads if now available (never blindly probes a 404).
+
+        def _auto_include(f):
+            """Whether the AUTOMATIC post-crawl pass should re-attempt this failure.
+            (A TARGETED panel Retry always includes the asked-for entries — the user
+            explicitly re-checked, and _recover_one gates on availability so it only
+            downloads if now servable, never blindly probes a 404.)"""
+            reason = f.get("reason")
+            # 'not_imported' (whole pending post): availability is judged from the
+            # crawl's listing metadata and downloaded there the moment it flips to
+            # 'scraped', so re-fetching here is redundant work on still-absent files.
+            if reason == "not_imported":
+                return False
+            # 'deferred' (a path-less file on an otherwise-scraped post): the crawl
+            # handles every post it VISITED (it logs still-deferred ones and downloads
+            # freshly-imported ones under the same entry key). Only re-attempt deferred
+            # entries whose post the crawl SKIPPED this run (a 'seen' post in 'latest'
+            # mode whose file has since landed) — otherwise the newly-imported file
+            # would have no other path to get grabbed.
+            if reason == "deferred":
+                return f.get("post_id") not in self._crawled_post_ids
+            return True
+
         failures = [f for f in (self._errors.list_failures(state=("failed", "gone"))
                                 if self._errors else [])
                     if f.get("entry") not in self._failed_this_run
                     and (not targeted or f.get("entry") in entries)
-                    and (targeted or f.get("reason") != "not_imported")]
+                    and (targeted or _auto_include(f))]
         if not failures:
             if targeted or not crawl_fallback:
                 return
@@ -1632,6 +1705,14 @@ class PawchiveRunner:
             return False, False
         media = self._match_media(post, entry, f.get("url"))
         if media is None:
+            # Still un-imported? A 'deferred' file whose bytes pawchive hasn't fetched
+            # yet won't be in the post's imported media, but the post still lists it as
+            # deferred — that's "not landed yet", NOT "gone". Keep it flagged and retry
+            # on a later run (it drops into deferred_media until pawchive imports it).
+            if f.get("reason") == "deferred" and post.get("deferred_media"):
+                self._info(f"Still not imported (deferred; will retry later): "
+                           f"{f.get('filename') or entry}")
+                return False, False
             # the file is no longer part of the post → genuinely gone upstream
             self._errors.mark_gone(entry, page_url=page)
             self._info(f"Gone (removed from post): {f.get('filename') or entry}")

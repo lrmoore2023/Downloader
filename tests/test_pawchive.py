@@ -413,6 +413,153 @@ def t_preview_state():
     r2._errors.close()
 
 
+def t_deferred_attachment():
+    """A 'scraped' post can carry path-less ('deferred') attachments pawchive hasn't
+    imported the bytes for yet (the SlipperyT case). parse_post surfaces them in
+    deferred_media (NOT media); the crawl logs each as a 'deferred' error under the
+    media index it WILL occupy once imported; 'latest' does not skip a seen post that
+    still has one; and once the file lands it downloads under the SAME entry key."""
+    from backend import pawchive_runner as pr
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_archive import Archive, entry_key
+    from backend.download_errors import FailureStore
+
+    # parse_post: a path-less attachment goes to deferred_media, never media.
+    raw = {"id": "d1", "user": "1", "service": "patreon",
+           "published": "2026-01-01T00:00:00", "file": {},
+           "attachments": [{"name": "A.jpg", "path": "/aa/bb/x.jpg"},
+                           {"name": "GIGACOLLAGE.jpg", "deferred": True}],
+           "detail_fetched": True, "has_full": False, "preview_state": "scraped"}
+    p = ps.parse_post(raw)
+    check("deferred attachment kept OUT of media",
+          [m["name"] for m in p["media"]] == ["A.jpg"])
+    check("deferred attachment surfaced in deferred_media",
+          [m["name"] for m in p["deferred_media"]] == ["GIGACOLLAGE.jpg"])
+
+    dest = tempfile.mkdtemp(prefix="pawdef_")
+    r = PawchiveRunner(workers=1, extract=False)
+    r._service = "patreon"; r._user_id = "1"; r._mode = "full"
+    r._archive = Archive(os.path.join(dest, "d.db")); r._links = None; r._session = None
+    r._destination = dest; r._write_root = dest
+    r._errors = FailureStore(os.path.join(dest, "e.db"))
+    orig = pr.iter_posts
+    pr.iter_posts = lambda *a, **k: iter([raw])
+    try:
+        media_jobs, _ext, _posts = r._crawl(None)
+    finally:
+        pr.iter_posts = orig
+    job_entries = {j["entry"] for j in media_jobs}
+    check("imported file yields a media job", entry_key("d1", 1) in job_entries)
+    check("deferred file yields NO media job (nothing to fetch yet)",
+          entry_key("d1", 2) not in job_entries)
+    fails = {f["entry"]: f for f in r._errors.list_failures(state="failed")}
+    check("deferred file LOGGED as error at trailing index len(media)+1",
+          entry_key("d1", 2) in fails)
+    check("deferred error carries reason 'deferred'",
+          fails.get(entry_key("d1", 2), {}).get("reason") == "deferred")
+
+    # 'latest' must NOT skip a partially-downloaded (seen) post that still has a
+    # deferred attachment — else its file would never be picked up once it lands.
+    r._mode = "latest"
+    r._archive.record(entry_key("d1", 1), "d1", "A.jpg", "image", "2026")  # post now 'seen'
+    r._known_failure_entries = {entry_key("d1", 2)}   # as run() would load from the store
+    pr.iter_posts = lambda *a, **k: iter([raw])
+    try:
+        _mj2, _e2, posts2 = r._crawl(None)
+    finally:
+        pr.iter_posts = orig
+    check("latest does NOT skip a seen post with a deferred file", "d1" in posts2)
+
+    imported = {**raw, "attachments": [{"name": "A.jpg", "path": "/aa/bb/x.jpg"},
+                                       {"name": "GIGACOLLAGE.jpg", "path": "/cc/dd/g.jpg"}]}
+    # (a) Entry-key alignment: once a path appears, the crawl assigns the imported file
+    #     the SAME entry key the deferred error was logged under (so the download clears
+    #     it). Shown here via a 'full' re-crawl (no seen-post skip in the way).
+    r._mode = "full"
+    pr.iter_posts = lambda *a, **k: iter([imported])
+    try:
+        mj3, _e3, _p3 = r._crawl(None)
+    finally:
+        pr.iter_posts = orig
+    check("imported deferred file gets the SAME entry key it was logged under",
+          entry_key("d1", 2) in {j["entry"] for j in mj3})
+
+    # (b) The 'latest' seen-post route: on the import run the crawl skips the (now
+    #     fully-imported, seen) post, so the end-of-run recovery pass grabs it —
+    #     _recover_one matches it by index and downloads it, NOT marking it 'gone'.
+    r._read_post = lambda pid: imported
+    calls = []
+    r._download_stream = lambda *a, **k: (calls.append(a) or True)
+    ok, gone = r._recover_one(fails[entry_key("d1", 2)])
+    check("recovery downloads the now-imported deferred file (not marked gone)",
+          ok and not gone and len(calls) == 1)
+    r._errors.close(); r._archive.close()
+
+
+def t_deferred_dismissed():
+    """Checking off (dismissing) a deferred error is sticky, mirroring pending/normal
+    errors: while the file is still missing the crawl won't re-log it, and if pawchive
+    later re-imports it the runner won't re-download it — the user said 'I got it
+    elsewhere, stop tracking it.'"""
+    from backend import pawchive_runner as pr
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_archive import Archive, entry_key
+    from backend.download_errors import FailureStore
+
+    dest = tempfile.mkdtemp(prefix="pawdd_")
+    defkey = entry_key("x1", 1)
+
+    def fresh():
+        r = PawchiveRunner(workers=1, extract=False)
+        r._service = "patreon"; r._user_id = "1"; r._mode = "latest"
+        r._archive = Archive(os.path.join(dest, "a.db")); r._links = None; r._session = None
+        r._destination = dest; r._write_root = dest
+        r._errors = FailureStore(os.path.join(dest, "e.db"))
+        # as run() loads from the store: known (any state) + the dismissed subset.
+        r._known_failure_entries = {defkey}
+        r._dismissed_ids = {defkey}
+        return r
+
+    # Seed a deferred error the user has checked off.
+    seed = FailureStore(os.path.join(dest, "e.db"))
+    seed.record_failure(defkey, reason="deferred", post_id="x1")
+    seed.dismiss(defkey)
+    seed.close()
+
+    # (a) File STILL deferred → crawl must not re-log / un-dismiss it.
+    still = {"id": "x1", "user": "1", "service": "patreon",
+             "published": "2026-01-01T00:00:00", "file": {},
+             "attachments": [{"name": "g.jpg", "deferred": True}],
+             "detail_fetched": True, "has_full": False, "preview_state": "scraped"}
+    r = fresh()
+    orig = pr.iter_posts
+    pr.iter_posts = lambda *a, **k: iter([still])
+    try:
+        r._crawl(None)
+    finally:
+        pr.iter_posts = orig
+    states = {f["entry"]: f["state"] for f in r._errors.list_failures()}
+    check("dismissed deferred error stays dismissed (not re-logged)",
+          states.get(defkey) == "dismissed")
+    r._errors.close(); r._archive.close()
+
+    # (b) File since IMPORTED → crawl builds a job, but _process_media skips it.
+    imported = {**still, "file": {"name": "g.jpg", "path": "/a/b/g.jpg"},
+                "attachments": [], "has_full": True}
+    r = fresh()
+    calls = []
+    r._download_stream = lambda *a, **k: (calls.append(a) or True)
+    pr.iter_posts = lambda *a, **k: iter([imported])
+    try:
+        media_jobs, _e, _p = r._crawl(None)
+    finally:
+        pr.iter_posts = orig
+    for j in media_jobs:
+        r._process_media(j)
+    check("dismissed deferred file NOT re-downloaded after re-import", len(calls) == 0)
+    r._errors.close(); r._archive.close()
+
+
 def t_zip_encoding():
     """Legacy Japanese zips (CP932 names, UTF-8 flag unset) must extract to correct
     Japanese, not the CP437 mojibake zipfile produces by default; the repair helper
@@ -459,7 +606,8 @@ def main():
     print("Running pawchive offline tests...")
     for t in (t_urls, t_parse_media, t_links_classify, t_filenames, t_manifest_merge,
               t_extract, t_resolved_and_skip, t_preview_state, t_zip_encoding,
-              t_resolved_ext_skipped, t_dismissed_not_refetched):
+              t_resolved_ext_skipped, t_dismissed_not_refetched,
+              t_deferred_attachment, t_deferred_dismissed):
         try:
             t()
         except Exception as e:

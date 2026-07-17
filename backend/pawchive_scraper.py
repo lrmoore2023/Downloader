@@ -467,28 +467,55 @@ def parse_post(raw):
     dt = parse_dt(raw.get("published")) or parse_dt(raw.get("added"))
 
     media = []
+    deferred_media = []
     seen = set()
-    entries = []
+    seen_deferred = set()
+    # Walk file + attachments in source order (a deferred attachment keeps its slot
+    # when pawchive later fills in its path, so trailing deferred slots map cleanly
+    # onto the media indices they'll occupy once imported — see runner _note_deferred).
+    raw_entries = []
     f = raw.get("file")
-    if isinstance(f, dict) and f.get("path"):
-        entries.append(f)
+    if isinstance(f, dict):
+        raw_entries.append(f)
     for a in (raw.get("attachments") or []):
-        if isinstance(a, dict) and a.get("path"):
-            entries.append(a)
-    for e in entries:
-        path = e["path"]
-        if path in seen:
-            continue
-        seen.add(path)
-        name = e.get("name") or os.path.basename(path)
-        kind, ext = _kind_and_ext(name if "." in name else path)
-        media.append({
-            "name": name,
-            "path": path,
-            "url": media_url(path, name),
-            "kind": kind,
-            "ext": ext,
-        })
+        if isinstance(a, dict):
+            raw_entries.append(a)
+    for e in raw_entries:
+        path = e.get("path")
+        if path:
+            if path in seen:
+                continue
+            seen.add(path)
+            name = e.get("name") or os.path.basename(path)
+            kind, ext = _kind_and_ext(name if "." in name else path)
+            media.append({
+                "name": name,
+                "path": path,
+                "url": media_url(path, name),
+                "kind": kind,
+                "ext": ext,
+            })
+        else:
+            # No path yet: a 'deferred' attachment (pawchive has catalogued the file
+            # but not fetched its bytes, so it serves no URL) or an empty file
+            # placeholder. A 'scraped' post can still carry these — has_full is False
+            # while individual files finish importing. We keep it (named) so the runner
+            # can surface it as an error and auto-grab it once pawchive imports it,
+            # instead of silently dropping it as the old path-only filter did.
+            name = e.get("name")
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen_deferred:
+                continue
+            seen_deferred.add(key)
+            kind, ext = _kind_and_ext(name)
+            deferred_media.append({
+                "name": name,
+                "kind": kind,
+                "ext": ext,
+                "deferred": bool(e.get("deferred")),
+            })
 
     content_html = raw.get("content") or ""
     embed = raw.get("embed") if isinstance(raw.get("embed"), dict) else {}
@@ -502,6 +529,10 @@ def parse_post(raw):
         "dt": dt,
         "url": post_url(service, user_id, post_id),
         "media": media,
+        # Named files pawchive knows about but hasn't imported the bytes for yet
+        # ({name, kind, ext, deferred}). Empty for a fully-imported post. The runner
+        # logs these so they're visible and grabbed once they land — see _note_deferred.
+        "deferred_media": deferred_media,
         "content_html": content_html,
         "embed": embed,
         "external_links": external_links,
