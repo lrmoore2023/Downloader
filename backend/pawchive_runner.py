@@ -16,10 +16,18 @@ same way. Differences from coomerfans:
     gofile, reference pages) plus any direct file that fails is written to the
     per-creator manifest (PawchiveLinks) for manual download — nothing is dropped.
 
-Curation rule (see memory curation-deletion-workflow): 'latest' skips whole
-posts already in the archive (never resurrects deletions); 'full' re-downloads
+Curation rule (see memory curation-deletion-workflow): 'latest' skips whole posts
+already in the archive (never resurrects deletions). Posts pawchive hasn't imported
+yet (preview_state 'pending') serve no files, so the crawl builds no media jobs for
+them in ANY mode — they're re-checked cheaply from the listing each run and download
+once pawchive imports them (state → 'scraped'). 'latest' also runs the error-recovery
+pass afterward so a file that errored on a mostly-downloaded post is picked up once
+pawchive imports it — that pass touches only failure-store entries, never archived
+files. 'full' re-downloads
 missing files by design; 'redownload_year' ("Download Year") downloads a single
 year, skipping anything already present (it never re-downloads or overwrites).
+In 'latest' mode new files (including recovered stragglers) are staged into
+<dest>/_latest/ for review rather than written straight into the year folders.
 """
 
 import json
@@ -68,6 +76,12 @@ _LARGE_KINDS = ("video", "archive")
 # Flush the external-links manifest to disk every N crawled posts so the UI panel
 # fills in during the crawl rather than only when it finishes.
 _MANIFEST_FLUSH_EVERY = 20
+# "Fetch Latest" stages its new downloads into this sibling of the year folders
+# (<artist>/_latest/<year>/ + <artist>/_latest/Images/<year>/) instead of writing
+# straight into the library, so the user can review/sort new material and drag it
+# into place. Named with a leading underscore so it sorts to the top and reads as
+# temporary; file_scanner ignores it (it only reads top-level \d{4} and Images/\d{4}).
+LATEST_DIRNAME = "_latest"
 
 
 class _AdaptiveThrottle:
@@ -272,12 +286,27 @@ class PawchiveRunner:
         # still retried there (a re-upload may have changed their URL).
         self._failed_this_run = set()
 
+        # Entries the user checked off ("dismissed") in the errors panel — loaded once
+        # per run from the FailureStore. A dismissed error means "I've dealt with this,
+        # don't chase it again": we skip re-fetching it entirely (the crawl would
+        # otherwise re-probe it every run), so it never wastes attempts or re-surfaces.
+        # Reversible from the panel (restore/undo un-dismisses it).
+        self._dismissed_ids = set()
+        # Every entry already in the FailureStore (any state), loaded once per run.
+        # The crawl uses this so it only LOGS a not-imported post as a new error the
+        # first time — an already-tracked (shown) one isn't duplicated and a checked-off
+        # (dismissed) one is never re-added (the user already grabbed it elsewhere).
+        self._known_failure_entries = set()
+
         self._on_progress = None
         self._archive = None
         self._links = None
         self._errors = None       # FailureStore (persistent per-link failure record)
         self._session = None
         self._destination = None
+        self._write_root = None   # where NEW files are written (== _destination, or
+                                  # <dest>/_latest in 'latest' mode); existence/skip
+                                  # checks still consult _destination (the real library)
         self._service = None
         self._mode = "full"
         self._error_entries = None   # set per-run for a targeted 'errors' recheck
@@ -306,6 +335,11 @@ class PawchiveRunner:
         with self._skip_lock:
             return entry in self._skip_ids
 
+    def _is_dismissed(self, entry):
+        """True if the user checked this entry off in the errors panel (loaded once
+        per run). Such entries are neither re-fetched nor re-surfaced."""
+        return entry in self._dismissed_ids
+
     # ── DDoS-Guard cooldown gate ─────────────────────────────
     # Strikes within this window escalate the quiet period; a single cooldown
     # never exceeds the cap. Escalation matters because DDoS-Guard ignores its own
@@ -324,9 +358,10 @@ class PawchiveRunner:
     # pool can drain. A file that IS advancing (any bytes land) resets the counter
     # and keeps retrying/resuming unbounded, so large downloads are never abandoned.
     _MAX_NOPROGRESS_ATTEMPTS = 5
-    # Not-yet-imported posts (has_full=False): the full file isn't on the host, so
-    # its URL 404s/504s. Attempt ONCE (in case it's unexpectedly present) then record
-    # as 'not_imported' — don't burn ~30s/attempt x5 on a file that doesn't exist yet.
+    # Fallback cap for a job still marked preview_state 'pending' that somehow reaches
+    # the network (the crawl normally drops pending posts; only an error-recovery job
+    # for a post that regressed to pending could). Such a file 404s, so give up after a
+    # single no-progress attempt (re-flag 'not_imported') instead of the patient 5x.
     _PENDING_NOPROGRESS_ATTEMPTS = 1
 
     def _await_cooldown(self):
@@ -380,6 +415,8 @@ class PawchiveRunner:
         with self._skip_lock:
             self._skip_ids.clear()
         self._failed_this_run.clear()
+        self._dismissed_ids = set()
+        self._known_failure_entries = set()
         self._claimed.clear()
         self._ext_results = {}
         self._use_mirror = False
@@ -396,6 +433,15 @@ class PawchiveRunner:
         self._on_progress = on_progress
         self._destination = destination
         self._mode = mode
+        # 'latest' stages new files into <dest>/_latest so they can be reviewed and
+        # sorted before landing in the real year folders. Existence/skip checks below
+        # still look at _destination, so items already filed in the library aren't
+        # re-staged; the archive marks staged posts 'seen' so they aren't re-fetched.
+        self._write_root = (os.path.join(destination, LATEST_DIRNAME)
+                            if mode == "latest" else destination)
+        if self._write_root != self._destination:
+            self._info(f"Fetch Latest: new files staged in {LATEST_DIRNAME}\\ — "
+                       "move them into your year folders when ready.")
         if self._diag.enabled:
             self._info(f"diagnostics → {_DIAG_PATH}")
 
@@ -413,6 +459,17 @@ class PawchiveRunner:
             self._check_primary_or_failover()
             self._archive = Archive(archive_path) if archive_path else None
             self._errors = FailureStore(errors_path) if errors_path else None
+            if self._errors:
+                # One pass: remember every recorded entry (so pending posts aren't
+                # re-logged) and which are checked off (so they're never re-fetched).
+                try:
+                    allf = self._errors.list_failures(state=None)
+                    self._known_failure_entries = {f["entry"] for f in allf if f.get("entry")}
+                    self._dismissed_ids = {f["entry"] for f in allf
+                                           if f.get("entry") and f.get("state") == "dismissed"}
+                except Exception:
+                    self._known_failure_entries = set()
+                    self._dismissed_ids = set()
             self._links = PawchiveLinks(links_path) if links_path else None
             if self._links:
                 # Batch manifest writes: mutate in memory during the crawl and
@@ -457,11 +514,17 @@ class PawchiveRunner:
                 self._reconcile(media_jobs)
             self._finalize_manifest(posts)
 
-            # Download Everything / Download Year also retry recorded errors: the
-            # crawl above already re-fetched anything still listed, so this
-            # supplemental pass only hits leftovers whose content-addressed URL
-            # changed on a re-upload (a fresh per-post fetch resolves those).
-            if mode in ("full", "redownload_year") and not self._cancelled():
+            # Every crawl mode also retries recorded errors afterward:
+            #  * full / redownload_year: the crawl already re-fetched anything still
+            #    listed, so this only hits leftovers whose content-addressed URL
+            #    changed on a re-upload (a fresh per-post fetch resolves those).
+            #  * latest: the crawl skips whole posts already in the archive, so a
+            #    post that downloaded most files but errored on one is NOT re-crawled.
+            #    This pass re-attempts that straggler (and any not-yet-imported file)
+            #    from the failure store WITHOUT re-downloading the rest of the post —
+            #    picking up files pawchive has imported since. It touches only failure-
+            #    store entries (never archived files), so deletions are never resurrected.
+            if mode in ("full", "redownload_year", "latest") and not self._cancelled():
                 self._recover_errors(year, crawl_fallback=False)
 
             self._finish(on_complete)
@@ -510,6 +573,8 @@ class PawchiveRunner:
         media_jobs, ext_jobs, posts = [], [], {}
         yr = int(year) if year else None
         posts_since_flush = 0
+        pending_skipped = 0   # posts pawchive hasn't imported yet (no files to fetch)
+        pending_logged = 0    # of those, how many are NEWLY logged as errors this run
 
         for raw in iter_posts(self._session, self._service, self._user_id,
                               on_page=on_page, should_cancel=self._cancelled,
@@ -537,11 +602,27 @@ class PawchiveRunner:
                 full = self._read_post(post["post_id"])
                 if full is not None:
                     post = parse_post(full)
+            # 'latest' skips whole posts already downloaded (a top-up over a prior run).
             if (self._mode == "latest" and self._archive
                     and self._archive.post_seen(post["post_id"])):
                 continue
 
             posts[post["post_id"]] = post
+            # A post pawchive hasn't imported yet (preview_state 'pending') has NO
+            # servable on-site files — every file URL 404s — so build no media jobs for
+            # it in ANY mode (that would just probe 404s and litter empty year folders).
+            # Instead we LOG it in the errors panel (metadata only, no file probe) so
+            # the user can see it / check it off, and re-check its state cheaply from the
+            # listing on each run: once pawchive imports it (state → 'scraped') it drops
+            # out of this branch and downloads normally below. We STILL scan its body for
+            # external links below (those live on catbox/mega etc., independent of
+            # pawchive's import). NB: has_full=False is NOT this signal — a 'scraped'
+            # post serves its files even with has_full False (e.g. extra .zip
+            # attachments still pending), so those are downloaded normally below.
+            is_pending = post.get("preview_state") == "pending"
+            if is_pending:
+                pending_skipped += 1
+                pending_logged += self._note_pending(post)
             # Images get a page-order ordinal ('01 - ') only when a post has >1 of
             # them; videos always use standard naming (they carry real names and
             # live in a separate folder). image_no counts images as we go so the
@@ -549,7 +630,7 @@ class PawchiveRunner:
             image_count = sum(1 for m in post["media"] if m["kind"] == "image")
             ord_width = max(2, len(str(image_count)))
             image_no = 0
-            for idx, m in enumerate(post["media"], 1):
+            for idx, m in enumerate(post["media"], 1) if not is_pending else ():
                 ordinal = None
                 if m["kind"] == "image":
                     image_no += 1
@@ -568,14 +649,19 @@ class PawchiveRunner:
                     "ord_width": ord_width,
                     "include_time": False,   # set below once all posts are known
                     "post_title": post.get("title", ""),   # used for archive names
-                    # has_full=False → post not imported yet; the runner attempts once
-                    # then records 'not_imported' instead of the patient 5x retry.
-                    "has_full": post.get("has_full", True),
+                    # Availability signal for the download retry policy (see
+                    # _run_download): 'scraped'/unknown → patient retry; only an
+                    # explicit 'pending' fast-fails. Pending posts don't reach here.
+                    "preview_state": post.get("preview_state", ""),
                 })
             ei = 0
             for l in post["external_links"]:
                 if l["kind"] == "direct":
-                    ei += 1
+                    ei += 1   # advance for every direct link so entry keys stay stable
+                    # Skip a link the user checked off in the URL tab — never re-grab it
+                    # (same rule as a dismissed error). Unchecked links stay up for grabs.
+                    if self._links and self._links.is_resolved(post["post_id"], l["url"]):
+                        continue
                     ext_jobs.append({
                         "jobkind": "ext",
                         "post_id": post["post_id"],
@@ -608,6 +694,12 @@ class PawchiveRunner:
             if (job["media_kind"] == "image" and job["dt"]
                     and img_posts_per_day[job["dt"].date()] > 1):
                 job["include_time"] = True
+
+        if pending_skipped:
+            newly = (f"{pending_logged} newly logged in errors"
+                     if pending_logged else "already tracked / checked off")
+            self._info(f"{pending_skipped} post(s) not imported by pawchive yet "
+                       f"({newly}; no files fetched) — auto-downloads once pawchive imports them.")
 
         # One NAS write for the whole crawl (autosave is off during the loop).
         self._save_links()
@@ -820,11 +912,32 @@ class PawchiveRunner:
             self._bump("error")
             self._error(f"job failed ({job.get('url')}): {e}")
 
+    def _find_on_disk(self, kind, dt, filename):
+        """Path of an already-downloaded file, or None. Checks the staging root AND
+        the real library (they're the same path outside 'latest' mode): a file we
+        just staged into _latest, one the user has since moved into the library, or
+        one from a prior non-staged run all count as present — so it is neither
+        re-downloaded nor duplicated."""
+        seen = set()
+        for root in (self._write_root, self._destination):
+            if not root or root in seen:
+                continue
+            seen.add(root)
+            p = target_path(root, kind, dt, filename)
+            if os.path.isfile(p):
+                return p
+        return None
+
     def _process_media(self, job):
         entry = job["entry"]
         is_archive = job["media_kind"] == "archive"
         # A file the user skipped on a prior run — never re-download it.
         if self._archive and self._archive.is_skipped(entry):
+            self._bump("skip")
+            return
+        # A file whose error the user checked off — don't re-fetch it (and don't
+        # re-surface it). Same intent as a skip, but driven by the errors panel.
+        if self._is_dismissed(entry):
             self._bump("skip")
             return
         # An archive we already unpacked (its .zip/.rar was deleted on success) —
@@ -834,15 +947,17 @@ class PawchiveRunner:
             return
         recorded = self._archive.get_filename(entry) if self._archive else None
         if recorded:
-            prev = target_path(self._destination, job["media_kind"], job["dt"], recorded)
-            if os.path.isfile(prev):
+            found = self._find_on_disk(job["media_kind"], job["dt"], recorded)
+            if found:
                 # Archive on disk but not yet extracted (feature enabled after a prior
                 # download, or a previous extraction failed) → extract it now.
                 if is_archive and self._extract_enabled:
-                    self._enqueue_extraction(prev, job, entry)
+                    self._enqueue_extraction(found, job, entry)
                 self._bump("skip")   # already downloaded — never re-fetch
                 return
-            # In the archive but gone from disk -> re-fetch to the same name.
+            # In the archive but gone from disk -> re-fetch to the same name, into
+            # the staging root (== library outside 'latest' mode).
+            prev = target_path(self._write_root, job["media_kind"], job["dt"], recorded)
             self._download_stream(job["url"], prev, entry, job, recorded,
                                   job["media_kind"] == "video")
             return
@@ -856,24 +971,23 @@ class PawchiveRunner:
             job["dt"], job["media_kind"], job["name"],
             ordinal=job.get("ordinal"), ord_width=job.get("ord_width", 2),
             include_time=job.get("include_time", False), post_title=post_title)
-        natural_path = target_path(self._destination, job["media_kind"], job["dt"], natural)
+        natural_write = target_path(self._write_root, job["media_kind"], job["dt"], natural)
         with self._fname_lock:
-            if natural_path not in self._claimed and os.path.isfile(natural_path):
-                self._claimed.add(natural_path)
+            # Adopt only a file NOT claimed by this run (a same-run claim is a real
+            # collision that must get a '_n' suffix, not be adopted). Claim the staging
+            # path so a later same-named item this run still collides correctly.
+            if natural_write not in self._claimed and self._find_on_disk(
+                    job["media_kind"], job["dt"], natural):
+                self._claimed.add(natural_write)
                 self._bump("skip")
                 self._record(entry, job, natural, job["media_kind"])
                 return
-        # Certain-not-on-site fast path: pawchive says this post's full file isn't
-        # imported yet (has_full=False → the file URL 404s/504s). We know this from
-        # the crawl metadata, so DON'T spend a 30-90s server timeout probing it —
-        # record it as 'not_imported' (grouped in the errors panel with its post page
-        # + file) and move on. It auto-retries on a future run once pawchive imports
-        # the post (has_full flips true). Verified: every has_full=False file probed
-        # returned 404/504, never content, so nothing downloadable is skipped.
-        if not job.get("has_full", True):
-            self._record_failure(entry, job, natural, job["media_kind"], job["url"],
-                                 {"reason": "not_imported", "status": None})
-            return
+        # Every media job that reaches here is from a 'scraped'/available post — the
+        # crawl already drops 'pending' posts (whose files 404), so we just download.
+        # (Availability is per-POST via preview_state, verified against real posts:
+        # 'scraped' serves its files even when has_full is False, e.g. a post whose
+        # extra .zip attachments are still pending but whose videos are imported;
+        # 'pending' serves nothing. has_full is unreliable and no longer consulted.)
         dest_path, filename = self._assign_path(
             job["dt"], job["media_kind"], job["name"],
             ordinal=job.get("ordinal"), ord_width=job.get("ord_width", 2),
@@ -893,8 +1007,7 @@ class PawchiveRunner:
 
         recorded = self._archive.get_filename(entry) if self._archive else None
         if recorded:
-            prev = target_path(self._destination, kind, job["dt"], recorded)
-            if os.path.isfile(prev):
+            if self._find_on_disk(kind, job["dt"], recorded):
                 self._bump("skip")
                 self._set_ext_state(job, "grabbed", filename=recorded)
                 return
@@ -924,8 +1037,10 @@ class PawchiveRunner:
         recognise an already-downloaded file on disk."""
         max_len = None
         if post_title:
+            # Measure against _write_root — the file lands there, so that's the path
+            # length the Windows limit actually applies to.
             folder = os.path.dirname(
-                target_path(self._destination, media_kind, dt, "_"))
+                target_path(self._write_root, media_kind, dt, "_"))
             max_len = max(40, _WIN_PATH_LIMIT - len(folder) - 1 - _NAME_RESERVE)
         return build_filename(dt, self._service, original_name, ordinal=ordinal,
                               width=ord_width, include_time=include_time,
@@ -942,14 +1057,14 @@ class PawchiveRunner:
                                   ord_width=ord_width, include_time=include_time,
                                   post_title=post_title)
         with self._fname_lock:
-            path = target_path(self._destination, media_kind, dt, base)
+            path = target_path(self._write_root, media_kind, dt, base)
             if path not in self._claimed and not os.path.isfile(path):
                 self._claimed.add(path)
                 return path, base
             n = 1
             while True:
                 cand = add_index_suffix(base, n)
-                cand_path = target_path(self._destination, media_kind, dt, cand)
+                cand_path = target_path(self._write_root, media_kind, dt, cand)
                 if cand_path not in self._claimed and not os.path.isfile(cand_path):
                     self._claimed.add(cand_path)
                     return cand_path, cand
@@ -1063,6 +1178,33 @@ class PawchiveRunner:
         except Exception:
             pass
 
+    def _note_pending(self, post):
+        """Log a not-yet-imported post in the errors panel (metadata only — NO file
+        probe), so the user can see it and either check it off or leave it to be picked
+        up automatically. Records one entry per media item, but ONLY the FIRST time we
+        see it: an already-tracked entry isn't duplicated and a checked-off (dismissed)
+        one is never re-added (the user grabbed it elsewhere). Availability is judged
+        from the listing's preview_state on each crawl — when the post flips to
+        'scraped' it downloads via the normal path and _clear_failure removes this
+        record — so we never re-attempt the file while it's absent."""
+        if not self._errors:
+            return 0
+        logged = 0
+        for idx, m in enumerate(post["media"], 1):
+            entry = entry_key(post["post_id"], idx)
+            if entry in self._known_failure_entries:
+                continue   # already shown, or checked off — don't touch it
+            title = post.get("title") if m["kind"] == "archive" else None
+            filename = self._natural_name(post["dt"], m["kind"], m["name"],
+                                          post_title=title)
+            job = {"jobkind": "media", "post_id": post["post_id"],
+                   "dt": post["dt"], "media_kind": m["kind"]}
+            self._record_failure(entry, job, filename, m["kind"], m["url"],
+                                 {"reason": "not_imported", "status": None})
+            self._known_failure_entries.add(entry)
+            logged += 1
+        return logged
+
     def _run_download(self, url, dest_path, entry, job, filename, is_video,
                       bounded=False):
         """Stream to <dest>.part with HTTP Range resume + size/ffprobe verify,
@@ -1070,7 +1212,9 @@ class PawchiveRunner:
         `bounded` caps attempts (used for external files, which shouldn't hang a
         run) whereas on-site media retries up to max_download_attempts. Returns
         True on success, False on give-up/cancel."""
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        # NB: the destination folder is created lazily, right before the first byte is
+        # written (see below), NOT here — so a file that turns out to be 404/unservable
+        # never leaves an empty year folder behind (e.g. in _latest).
         part = dest_path + ".part"
         attempt = 0
         # Short initial backoff: the CDN's connection blips (curl 18/28/35) clear
@@ -1086,13 +1230,16 @@ class PawchiveRunner:
         prev_progress = os.path.getsize(part) if os.path.exists(part) else 0
         noprogress = 0
         last_block_status = None
-        # Import status (pawchive is import-based; the listing carries has_full).
-        # A NOT-imported post (has_full=False, preview_state 'pending') has no full
-        # file on the host yet — its URL 404s or 504s — so attempt it only ONCE and
-        # record it as 'not_imported' (needs attention), never the patient 5x retry
-        # meant for a genuinely-present file that's merely slow/overloaded. Default
-        # True (imported) so older API responses / unknown posts keep the patient path.
-        imported = bool(job.get("has_full", True))
+        # Availability tunes the no-progress give-up. The reliable signal is the
+        # post's preview_state ('scraped' → pawchive has the files; 'pending' → it
+        # doesn't, URLs 404). The crawl already drops 'pending' posts, so a crawl job
+        # is 'scraped'/unknown → patient (a present-but-slow/5xx file resumes up to
+        # _MAX_NOPROGRESS_ATTEMPTS). Only a job still marked 'pending' (e.g. one built
+        # by error-recovery for a post that regressed to pending) fast-fails after one
+        # no-progress attempt. Unknown/empty state defaults to patient. NB: has_full is
+        # deliberately NOT used here — a 'scraped' post serves its files even with
+        # has_full False, so keying on has_full would wrongly fast-fail them.
+        imported = job.get("preview_state", "") != "pending"
         noprogress_cap = (self._MAX_NOPROGRESS_ATTEMPTS if imported
                           else self._PENDING_NOPROGRESS_ATTEMPTS)
 
@@ -1203,6 +1350,9 @@ class PawchiveRunner:
                         continue
 
                     r.raise_for_status()
+                    # Create the destination folder only now that we have a real file
+                    # response in hand — so unservable files leave no empty folders.
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                     with open(part, open_mode) as f:
                         for chunk in r.iter_content(chunk_size=self.chunk_size):
                             if self._cancelled():
@@ -1320,8 +1470,10 @@ class PawchiveRunner:
         if self._cancelled() or not os.path.isfile(archive_path):
             return
         stem = os.path.splitext(os.path.basename(archive_path))[0]
-        tmp = os.path.join(self._destination, ".pawchive_extract_tmp", uuid.uuid4().hex)
-        leftover_root = target_path(self._destination, "archive", job["dt"], stem)
+        # Unpack alongside the archive (which itself was written under _write_root in
+        # 'latest' mode), so extracted media stage together with everything else.
+        tmp = os.path.join(self._write_root, ".pawchive_extract_tmp", uuid.uuid4().hex)
+        leftover_root = target_path(self._write_root, "archive", job["dt"], stem)
         media_n = other_n = 0
         try:
             os.makedirs(tmp, exist_ok=True)
@@ -1419,10 +1571,18 @@ class PawchiveRunner:
         pass `crawl_fallback=False` — the crawl already covered everything, so with no
         remaining failures there's nothing to do."""
         targeted = entries is not None
+        # In the AUTOMATIC post-crawl pass, skip 'not_imported' entries: their
+        # availability is already judged from the crawl's listing metadata
+        # (preview_state) and downloaded there the moment they flip to 'scraped', so
+        # re-fetching their posts here would just be redundant work on files that are
+        # still absent. A TARGETED run (the panel's Retry) still includes them — the
+        # user explicitly asked to re-check, and _recover_one gates on preview_state so
+        # it only downloads if now available (never blindly probes a 404).
         failures = [f for f in (self._errors.list_failures(state=("failed", "gone"))
                                 if self._errors else [])
                     if f.get("entry") not in self._failed_this_run
-                    and (not targeted or f.get("entry") in entries)]
+                    and (not targeted or f.get("entry") in entries)
+                    and (targeted or f.get("reason") != "not_imported")]
         if not failures:
             if targeted or not crawl_fallback:
                 return
@@ -1465,9 +1625,9 @@ class PawchiveRunner:
             self._info(f"Could not refetch post {pid} (network) — will retry later.")
             return False, False           # transient: keep as 'failed'
         post = parse_post(full)
-        if not post.get("has_full", True):
-            # Still not imported on pawchive — its files would 404/504. Don't probe
-            # (30-90s each); keep it flagged 'not_imported' and retry a later run.
+        if post.get("preview_state") == "pending":
+            # pawchive still hasn't imported this post — its files 404. Don't probe;
+            # keep it flagged and retry on a later run (state flips to 'scraped').
             self._info(f"Still not imported (will retry later): {f.get('filename') or entry}")
             return False, False
         media = self._match_media(post, entry, f.get("url"))
@@ -1482,9 +1642,9 @@ class PawchiveRunner:
             "jobkind": "media", "post_id": pid, "entry": entry,
             "media_kind": media["kind"], "url": media["url"], "name": media["name"],
             "dt": post["dt"], "post_title": post.get("title", ""),
-            # Reached only when the post is imported (the not-imported case returned
-            # above) — has_full is True here, so the normal patient retry applies.
-            "has_full": post.get("has_full", True),
+            # Reached only for a 'scraped'/available post (the pending case returned
+            # above), so the download uses the patient retry policy.
+            "preview_state": post.get("preview_state", ""),
         }
         dest_path, filename = self._assign_path(
             post["dt"], media["kind"], media["name"], post_title=post_title)
@@ -1542,9 +1702,11 @@ class PawchiveRunner:
         self._info(f"Verified {present}/{total} media item(s) present on disk.")
 
     def _job_present(self, job):
-        # A skipped or extracted entry counts as present (its file may be gone), so
-        # reconcile never re-downloads it.
+        # A skipped, dismissed, or extracted entry counts as present (its file may be
+        # gone), so reconcile never re-downloads it.
         if self._archive and self._archive.is_skipped(job["entry"]):
+            return True
+        if self._is_dismissed(job["entry"]):
             return True
         if (job.get("media_kind") == "archive" and self._archive
                 and self._archive.is_extracted(job["entry"])):
@@ -1552,8 +1714,7 @@ class PawchiveRunner:
         fn = self._archive.get_filename(job["entry"]) if self._archive else None
         if not fn:
             return False
-        return os.path.isfile(target_path(self._destination, job["media_kind"],
-                                          job["dt"], fn))
+        return self._find_on_disk(job["media_kind"], job["dt"], fn) is not None
 
     # ── manifest finalize ────────────────────────────────────
     def _save_links(self):

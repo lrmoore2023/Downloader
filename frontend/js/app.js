@@ -121,11 +121,14 @@ function updateLiveProgress(filename) {
 
 // ── Active downloads panel (live, per-file, skippable) ──────────
 
+let _activeHideTimer = null;
+
 function addActiveDownload(id, filename) {
     if (!id) return;
     const list = document.getElementById('activeDownloads');
     const section = document.getElementById('activeSection');
     if (!list) return;
+    if (_activeHideTimer) { clearTimeout(_activeHideTimer); _activeHideTimer = null; }
     if (document.getElementById('active-' + cssId(id))) return;   // dedupe
     const row = document.createElement('div');
     row.className = 'active-row';
@@ -150,10 +153,20 @@ function removeActiveDownload(id) {
     if (row) row.remove();
     const list = document.getElementById('activeDownloads');
     const section = document.getElementById('activeSection');
-    if (section && list && !list.children.length) section.style.display = 'none';
+    // Debounce the hide: on a fast run the list empties for a split second between
+    // one file finishing and the next starting. Collapsing the whole section then
+    // would jitter the entire column, so only hide after a genuine idle beat.
+    if (section && list && !list.children.length) {
+        if (_activeHideTimer) clearTimeout(_activeHideTimer);
+        _activeHideTimer = setTimeout(() => {
+            _activeHideTimer = null;
+            if (!list.children.length) section.style.display = 'none';
+        }, 800);
+    }
 }
 
 function clearActiveDownloads() {
+    if (_activeHideTimer) { clearTimeout(_activeHideTimer); _activeHideTimer = null; }
     const list = document.getElementById('activeDownloads');
     const section = document.getElementById('activeSection');
     if (list) list.innerHTML = '';

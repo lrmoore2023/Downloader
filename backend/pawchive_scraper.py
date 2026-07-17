@@ -328,13 +328,19 @@ def _classify_link(url):
     host = _host_of(url)
     if host in _DIRECT_HOSTS:
         return "direct"
-    path = urlsplit(url).path.lower()
-    if "." in path and path.rsplit(".", 1)[-1] in _DIRECT_EXTS:
-        return "direct"
-    # a manual host, unless the specific path is a direct file (handled above)
+    # Known manual hosts (dropbox/mega/gdrive/gofile/…) serve a SHARE/LANDING page,
+    # not the raw file — even when the URL path ends in '.mp4'/'.zip' (e.g.
+    # dropbox.com/scl/fi/<id>/Anim.mp4?rlkey=…). So classify by HOST before looking at
+    # the extension: auto-grabbing these just downloads HTML and fails every run, so
+    # they must be listed for manual download instead. (Checked live: those dropbox
+    # links return text/html, with and without ?dl=1.)
     for h in _MANUAL_HOSTS:
         if host == h or host.endswith("." + h):
             return "manual"
+    # An UNKNOWN host whose path is itself a direct file (…/name.mp4) — auto-grab it.
+    path = urlsplit(url).path.lower()
+    if "." in path and path.rsplit(".", 1)[-1] in _DIRECT_EXTS:
+        return "direct"
     return "reference"
 
 
@@ -501,6 +507,14 @@ def parse_post(raw):
         "external_links": external_links,
         "detail_fetched": bool(raw.get("detail_fetched", True)),
         "has_full": bool(raw.get("has_full", True)),
+        # preview_state is the RELIABLE availability signal (has_full is not): pawchive
+        # serves a post's files iff it has imported them. "scraped" → files present
+        # (serve 200/206 even when has_full is False, e.g. a post whose extra .zip
+        # attachments aren't imported yet but whose videos are). "pending" → pawchive
+        # holds only kemono metadata, no files, so every URL 404s. Default "" (unknown
+        # → treat as available/attempt) for older responses that omit it.
+        "preview_state": (raw.get("preview_state") or "").lower(),
+        "origin": (raw.get("origin") or "").lower(),
     }
 
 

@@ -383,7 +383,7 @@ async function renderErrorLinks() {
         return;
     }
     let res;
-    try { res = await pywebview.api.list_creator_errors(id); }
+    try { res = await pywebview.api.list_creator_errors(id, currentScope); }
     catch (e) { return; }
     if (currentCreatorId !== id) return;    // selection changed mid-fetch
     const allItems = (res && res.items) || [];
@@ -534,7 +534,7 @@ function errorRow(i) {
 // "Dismiss all" — hide every listed error at once (undoable via Ctrl+Z).
 async function dismissAllErrors() {
     const id = currentCreatorId;
-    const res = await pywebview.api.dismiss_all_creator_errors(id);
+    const res = await pywebview.api.dismiss_all_creator_errors(id, currentScope);
     if (res && res.error) { showToast(res.error, 'error'); return; }
     const entries = (res && res.entries) || [];
     if (entries.length) {
@@ -650,7 +650,17 @@ function resolvePendingLink(cb, encKey) {
         if (group && !group.querySelector('.pending-row')) group.remove();
         const panel = document.getElementById('pendingLinks');
         if (panel && !panel.querySelector('.pending-row')) renderPendingLinks();
+        else updatePendingCount();
     });
+}
+
+// Recompute the "Links needing attention" header count from the rows still shown, so
+// it ticks down as links are checked off (not just when the panel fully empties).
+function updatePendingCount() {
+    const panel = document.getElementById('pendingLinks');
+    if (!panel) return;
+    const c = panel.querySelector('.pending-count');
+    if (c) c.textContent = panel.querySelectorAll('.pending-row').length;
 }
 
 // Post-level checkbox: resolve every link in one post in a single batch.
@@ -666,6 +676,7 @@ function resolvePostLinks(cb, encKeys) {
         if (group) group.remove();
         const panel = document.getElementById('pendingLinks');
         if (panel && !panel.querySelector('.pending-row')) renderPendingLinks();
+        else updatePendingCount();
     });
 }
 
@@ -893,6 +904,8 @@ function setScope(scope) {
     document.getElementById('linkScope').value = '';   // group scope overrides single-link
     document.querySelectorAll('#scopeControl .seg').forEach(b =>
         b.classList.toggle('active', b.dataset.scope === scope));
+    // The errors panel mirrors the scope — show only the selected site's errors.
+    if (typeof renderErrorLinks === 'function') renderErrorLinks();
 }
 
 function onLinkScopeChange() {
@@ -901,6 +914,7 @@ function onLinkScopeChange() {
         currentScope = 'link:' + url;
         // a single link overrides the group buttons — clear their highlight
         document.querySelectorAll('#scopeControl .seg').forEach(b => b.classList.remove('active'));
+        if (typeof renderErrorLinks === 'function') renderErrorLinks();
     } else {
         setScope('everything');
     }

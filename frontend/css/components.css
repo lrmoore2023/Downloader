@@ -1268,8 +1268,16 @@
 }
 .pending-url.host-alt { color: var(--warn); }
 
-/* Active-downloads panel: one row per in-flight file, each with a Skip button. */
-.active-list { display: flex; flex-direction: column; gap: 4px; }
+/* Active-downloads panel: one row per in-flight file, each with a Skip button.
+   Fixed height + internal scroll so files churning in/out during a fast run never
+   change the section's outer height (which would jitter the whole column). The
+   stable scrollbar gutter keeps the width from shifting when the scrollbar appears. */
+.active-list {
+    display: flex; flex-direction: column; gap: 4px;
+    height: 150px;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
 .active-row {
     display: flex; align-items: center; gap: 10px;
     padding: 4px 8px; border-radius: 6px;

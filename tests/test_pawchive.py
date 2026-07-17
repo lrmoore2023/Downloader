@@ -85,6 +85,13 @@ def t_links_classify():
     check("x.com -> reference", by.get("x.com") == "reference")
     check("internal pawchive links skipped",
           not any("pawchive" in l["host"] for l in p["external_links"]))
+    # A manual host with a media-file path is MANUAL (share/landing page, not the raw
+    # file) — must NOT be auto-grabbed as 'direct'. Host check beats the extension.
+    check("dropbox .mp4 -> manual", ps._classify_link(
+        "https://www.dropbox.com/scl/fi/x/Anim.mp4?rlkey=y&dl=0") == "manual")
+    check("mega .zip -> manual", ps._classify_link("https://mega.nz/file/abc#k.zip") == "manual")
+    check("catbox .mp4 -> direct", ps._classify_link("https://files.catbox.moe/x.mp4") == "direct")
+    check("unknown host .mp4 -> direct", ps._classify_link("https://example.com/p/clip.mp4") == "direct")
 
 
 def t_filenames():
@@ -171,6 +178,7 @@ def t_extract():
 
     r = PawchiveRunner(workers=2, extract=True)
     r._destination = dest
+    r._write_root = dest   # run() sets this; a 'full' run stages into the library itself
     r._service = "patreon"
     r._archive = Archive(os.path.join(dest, "arc.db"))
     entry = entry_key("p1", 1)
@@ -254,6 +262,7 @@ def t_resolved_and_skip():
     r = PawchiveRunner(workers=2)
     r._archive = Archive(os.path.join(dest, "sk.db"))
     r._destination = dest
+    r._write_root = dest
     entry = entry_key("p9", 3)
     job = {"dt": datetime(2026, 1, 2), "media_kind": "video", "post_id": "p9",
            "name": "big.mp4", "entry": entry, "url": "http://x/big.mp4"}
@@ -269,10 +278,188 @@ def t_resolved_and_skip():
     r._archive.close()
 
 
+def t_resolved_ext_skipped():
+    """A direct external link the user checked off in the URL tab must NOT be re-grabbed
+    (same rule as a dismissed error); unchecked ones stay up for grabs, and skipping one
+    doesn't shift the others' entry keys."""
+    from backend import pawchive_runner as pr
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_links import PawchiveLinks, make_key
+
+    d = tempfile.mkdtemp(prefix="pawext_")
+    r = PawchiveRunner(workers=1, extract=False)
+    r._service = "patreon"; r._user_id = "1"; r._mode = "full"
+    r._archive = None; r._errors = None; r._session = None
+    r._links = PawchiveLinks(os.path.join(d, "_pawchive_links.json"))
+    r._links.autosave = False
+    post = {"user": "1", "service": "patreon", "id": "pe", "title": "E",
+            "published": "2026-01-01T00:00:00", "file": {}, "attachments": [],
+            "detail_fetched": True, "has_full": True, "preview_state": "scraped",
+            "content": ('<a href="https://files.catbox.moe/aaa.mp4">A</a>'
+                        '<a href="https://files.catbox.moe/bbb.mp4">B</a>')}
+    orig = pr.iter_posts
+    pr.iter_posts = lambda *a, **k: iter([post])
+    try:
+        r._crawl(None)   # populate manifest
+        r._links.mark_resolved(make_key("pe", "https://files.catbox.moe/aaa.mp4"))
+        _mj, ext_jobs, _p = r._crawl(None)
+    finally:
+        pr.iter_posts = orig
+    urls = {j["url"] for j in ext_jobs}
+    check("resolved direct link skipped", "https://files.catbox.moe/aaa.mp4" not in urls)
+    check("unchecked direct link kept", "https://files.catbox.moe/bbb.mp4" in urls)
+    b = [j for j in ext_jobs if j["url"].endswith("bbb.mp4")]
+    check("skipping a resolved link keeps others' entry keys stable",
+          bool(b) and b[0]["entry"].endswith("_ext_2"))
+
+
+def t_dismissed_not_refetched():
+    """A checked-off (dismissed) error must NOT be re-fetched by a crawl, and must
+    count as 'present' so reconcile leaves it alone — the user is done with it."""
+    from datetime import datetime
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_archive import Archive, entry_key
+
+    dest = tempfile.mkdtemp(prefix="pawdis_")
+    r = PawchiveRunner(workers=2, extract=False)
+    r._archive = Archive(os.path.join(dest, "d.db"))
+    r._destination = dest
+    r._write_root = dest
+    r._service = "patreon"
+    entry = entry_key("pd", 1)
+    r._dismissed_ids = {entry}     # as run() would load from the FailureStore
+
+    calls = []
+    r._download_stream = lambda *a, **k: (calls.append(a) or True)
+    job = {"jobkind": "media", "dt": datetime(2026, 1, 2), "media_kind": "video",
+           "post_id": "pd", "name": "vid.mp4", "entry": entry,
+           "url": "http://x/vid.mp4", "has_full": True}
+    r._process_media(job)
+    check("dismissed error not re-downloaded", len(calls) == 0)
+    check("dismissed counted as skip", r.skipped_count == 1)
+    check("dismissed job counts as present (no reconcile churn)", r._job_present(job))
+    r._archive.close()
+
+
+def t_preview_state():
+    """preview_state (not has_full) is the availability signal. parse_post surfaces it;
+    a 'scraped' post's files download even with has_full False; the crawl builds NO
+    media jobs for a 'pending' post (its files 404) but still records the post."""
+    from datetime import datetime
+    from backend import pawchive_runner as pr
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_archive import Archive, entry_key
+    from backend.download_errors import FailureStore
+
+    # parse_post surfaces preview_state / origin (default "" when absent).
+    p = ps.parse_post({**POST_VIDEO, "preview_state": "Scraped", "origin": "import"})
+    check("parse preview_state lowercased", p["preview_state"] == "scraped")
+    check("parse origin lowercased", p["origin"] == "import")
+    check("parse preview_state default empty", ps.parse_post(POST_VIDEO)["preview_state"] == "")
+
+    # A 'scraped' post with has_full False still gets downloaded (Buckethead case).
+    dest = tempfile.mkdtemp(prefix="pawps_")
+    r = PawchiveRunner(workers=2, extract=False)
+    r._archive = Archive(os.path.join(dest, "ps.db"))
+    r._errors = FailureStore(os.path.join(dest, "ps_err.db"))
+    r._destination = dest; r._write_root = dest
+    r._service = "patreon"; r._user_id = "1"
+    calls = []
+    r._download_stream = lambda *a, **k: (calls.append(a) or True)
+    job = {"jobkind": "media", "dt": datetime(2026, 1, 2), "media_kind": "video",
+           "post_id": "pf", "name": "vid.mp4", "entry": entry_key("pf", 1),
+           "url": "http://x/vid.mp4?f=vid.mp4", "preview_state": "scraped"}
+    r._process_media(job)
+    check("scraped(has_full False) file is downloaded", len(calls) == 1)
+    check("scraped file not pre-recorded as failure", r._errors.count() == 0)
+    r._errors.close(); r._archive.close()
+
+    # The crawl builds NO media jobs for 'pending' posts but LOGS each as a not_imported
+    # error — except entries already known (shown) or checked off (dismissed).
+    dest2 = tempfile.mkdtemp(prefix="pawcrawl_")
+    r2 = PawchiveRunner(workers=1, extract=False)
+    r2._service = "patreon"; r2._user_id = "1"; r2._mode = "full"
+    r2._archive = None; r2._links = None; r2._session = None
+    r2._destination = dest2; r2._write_root = dest2
+    r2._errors = FailureStore(os.path.join(dest2, "e.db"))
+    # p2's entry is already checked off — the crawl must NOT re-log it.
+    r2._errors.record_failure("pawchive_p2_1", reason="not_imported")
+    r2._errors.dismiss("pawchive_p2_1")
+    r2._known_failure_entries = {"pawchive_p2_1"}
+    r2._dismissed_ids = {"pawchive_p2_1"}
+    base = {"user": "1", "service": "patreon", "published": "2026-01-01T00:00:00",
+            "attachments": [], "detail_fetched": True, "has_full": False}
+    scraped = {**base, "id": "s1", "title": "S", "file": {"name": "a.jpg", "path": "/aa/bb/x.jpg"},
+               "preview_state": "scraped"}
+    pending = {**base, "id": "p1", "title": "P", "file": {"name": "b.jpg", "path": "/cc/dd/y.jpg"},
+               "preview_state": "pending"}
+    pending2 = {**base, "id": "p2", "title": "P2", "file": {"name": "c.jpg", "path": "/ee/ff/z.jpg"},
+                "preview_state": "pending"}
+    orig = pr.iter_posts
+    pr.iter_posts = lambda *a, **k: iter([scraped, pending, pending2])
+    try:
+        media_jobs, _ext, posts = r2._crawl(None)
+    finally:
+        pr.iter_posts = orig
+    pids = {j["post_id"] for j in media_jobs}
+    check("scraped post yields a media job", "s1" in pids)
+    check("pending post yields NO media job", "p1" not in pids and "p2" not in pids)
+    check("all posts recorded in posts", set(posts) == {"s1", "p1", "p2"})
+    open_fails = r2._errors.list_failures(state="failed")
+    entries = {f["entry"] for f in open_fails}
+    check("new pending post logged as not_imported error", "pawchive_p1_1" in entries)
+    check("checked-off pending post NOT re-logged (stays dismissed)",
+          "pawchive_p2_1" not in entries)
+    r2._errors.close()
+
+
+def t_zip_encoding():
+    """Legacy Japanese zips (CP932 names, UTF-8 flag unset) must extract to correct
+    Japanese, not the CP437 mojibake zipfile produces by default; the repair helper
+    reverses on-disk mojibake and leaves everything else alone."""
+    import zipfile
+    from backend import pawchive_extract as px
+
+    real = "秋菜ちゃん【本編】"
+    moji = real.encode("cp932").decode("cp437")   # simulate zipfile's CP437 decode
+    check("repair reverses CP932->CP437 mojibake", px.repair_mojibake_name(moji) == real,
+          px.repair_mojibake_name(moji))
+    check("repair leaves ASCII alone", px.repair_mojibake_name("readme.txt") is None)
+    check("repair leaves proper Japanese alone", px.repair_mojibake_name(real) is None)
+    check("repair leaves Latin accents alone", px.repair_mojibake_name("café.txt") is None)
+    check("repair idempotent (already-fixed name)",
+          px.repair_mojibake_name(px.repair_mojibake_name(moji)) is None)
+
+    # End-to-end: build a zip whose member is CP932 bytes with the UTF-8 flag CLEARED
+    # (exactly the real-world condition), plus an ASCII member and a proper-UTF-8 one.
+    class CP932Info(zipfile.ZipInfo):
+        def _encodeFilenameFlags(self):
+            return self.filename.encode("cp932"), self.flag_bits & ~0x800
+
+    d = tempfile.mkdtemp(prefix="pawzenc_")
+    zpath = os.path.join(d, "pack.zip")
+    jp_name = "秋菜ちゃん【本編】_20260306.mp4"
+    with zipfile.ZipFile(zpath, "w") as z:
+        z.writestr(CP932Info(jp_name), b"vid")
+        z.writestr("readme_ascii.txt", b"hi")
+        z.writestr(zipfile.ZipInfo("ゆかりん.txt"), b"u")   # proper UTF-8 (flag set)
+    with zipfile.ZipFile(zpath) as z:
+        check("zipfile alone mis-decodes the name (the bug)", jp_name not in z.namelist())
+
+    out = os.path.join(d, "out")
+    os.makedirs(out)
+    px._extract_zip(zpath, out)
+    landed = {f for _r, _dirs, fs in os.walk(out) for f in fs}
+    check("extract recovers Japanese member name", jp_name in landed, sorted(landed))
+    check("extract leaves ASCII member intact", "readme_ascii.txt" in landed)
+    check("extract leaves proper-UTF-8 member intact", "ゆかりん.txt" in landed)
+
+
 def main():
     print("Running pawchive offline tests...")
     for t in (t_urls, t_parse_media, t_links_classify, t_filenames, t_manifest_merge,
-              t_extract, t_resolved_and_skip):
+              t_extract, t_resolved_and_skip, t_preview_state, t_zip_encoding,
+              t_resolved_ext_skipped, t_dismissed_not_refetched):
         try:
             t()
         except Exception as e:

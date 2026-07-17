@@ -225,6 +225,14 @@ class PawchiveLinks:
         return n
 
     # ── queries ──────────────────────────────────────────────────
+    def is_resolved(self, post_id, url):
+        """True if the user checked this link off (so the runner must not re-grab it —
+        same rule as a dismissed error). Unknown links are NOT resolved (up for grabs)."""
+        with self._lock:
+            link = (self.data.get("posts", {}).get(post_id, {})
+                    .get("links", {}).get(url))
+            return bool(link and link.get("resolved"))
+
     @staticmethod
     def _is_outstanding(link):
         if link.get("resolved"):

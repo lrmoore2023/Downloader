@@ -5,7 +5,9 @@ __pycache__/
 
 # Local app state — personal (NAS paths, creator/download history)
 app_state.json
+app_state.backups/
 *.corrupt
+*.corrupt-*
 *.tmp
 *.bak
 *.tsv

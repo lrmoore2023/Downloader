@@ -43,6 +43,10 @@ from backend.media_server import MediaServer
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_FILE = os.path.join(APP_DIR, "app_state.json")
+# Rolling, timestamped snapshots of the state so no single file is a point of
+# failure. Written whenever the creator index changes; pruned to the last N.
+STATE_BACKUP_DIR = os.path.join(APP_DIR, "app_state.backups")
+STATE_BACKUP_KEEP = 40
 AVATAR_DIR = os.path.join(APP_DIR, ".avatars")
 
 
@@ -105,6 +109,7 @@ class Api:
             self._media.start()
         except Exception:
             pass
+        self._ensure_backup_seed()
 
     # ── path helpers ───────────────────────────────────────────────
 
@@ -149,28 +154,119 @@ class Api:
             "window": {},
         }
 
-    def load_state(self):
-        if not os.path.exists(STATE_FILE):
-            return self._default_state()
+    @staticmethod
+    def _backup_stamp():
+        return datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+
+    @staticmethod
+    def _parse_state_file(path):
+        """Parse a state file → dict, or None if missing/unreadable/unparseable.
+        Tolerates a partially-written file by salvaging the leading JSON object."""
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            # Tolerate a corrupt/partially-written file: salvage the leading
-            # valid JSON object (ignoring any trailing garbage), else back the
-            # file up and fall back to defaults so the app always launches.
+            with open(path, "r", encoding="utf-8") as f:
+                txt = f.read()
+        except OSError:
+            return None
+        if not txt.strip():
+            return None
+        try:
+            obj = json.loads(txt)
+        except json.JSONDecodeError:
             try:
-                with open(STATE_FILE, "r", encoding="utf-8") as f:
-                    obj, _ = json.JSONDecoder().raw_decode(f.read().lstrip())
-                if isinstance(obj, dict):
-                    return obj
+                obj, _ = json.JSONDecoder().raw_decode(txt.lstrip())
             except Exception:
-                pass
-            try:
-                os.replace(STATE_FILE, STATE_FILE + ".corrupt")
-            except OSError:
-                pass
-            return self._default_state()
+                return None
+        return obj if isinstance(obj, dict) else None
+
+    def _newest_backup_state(self):
+        """Newest rolling backup that has a non-empty creator index, or None."""
+        try:
+            names = sorted(
+                (n for n in os.listdir(STATE_BACKUP_DIR)
+                 if n.startswith("app_state-") and n.endswith(".json")),
+                reverse=True)
+        except OSError:
+            return None
+        for name in names:
+            obj = self._parse_state_file(os.path.join(STATE_BACKUP_DIR, name))
+            if isinstance(obj, dict) and obj.get("creators"):
+                return obj
+        return None
+
+    def _read_state_unlocked(self):
+        """Load the live state, hardened against transient read failures.
+
+        Crucially it NEVER discards the live file just because a single read
+        failed: a concurrent atomic replace (or AV/indexer lock) can make one
+        read come back empty/partial, and the old code treated that as
+        corruption — renaming the (perfectly good) file to .corrupt and
+        returning an empty state, which then got persisted and wiped the whole
+        creator index. Instead we retry, and only if the file is *genuinely*
+        unparsable do we quarantine it (under a unique name, never clobbering a
+        prior copy) and self-heal from the newest good backup rather than
+        returning blank. Callers that mutate state already hold _state_lock."""
+        if not os.path.exists(STATE_FILE):
+            restored = self._newest_backup_state()
+            return restored if restored is not None else self._default_state()
+
+        for attempt in range(5):
+            obj = self._parse_state_file(STATE_FILE)
+            if isinstance(obj, dict):
+                return obj
+            if attempt < 4:
+                time.sleep(0.1)   # let a concurrent replace settle, then retry
+
+        # Genuinely damaged after retries. Preserve it for inspection without
+        # overwriting any earlier copy, then recover — never return empty when
+        # a backup exists.
+        try:
+            os.replace(STATE_FILE, STATE_FILE + ".corrupt-" + self._backup_stamp())
+        except OSError:
+            pass
+        restored = self._newest_backup_state()
+        return restored if restored is not None else self._default_state()
+
+    def load_state(self):
+        with self._state_lock:
+            return self._read_state_unlocked()
+
+    def _backup_state(self, state):
+        """Snapshot state to a rolling, timestamped backup so the live file is
+        never a single point of failure. Never snapshots an empty creator index
+        (that is the failure state we must not propagate) and prunes to the last
+        STATE_BACKUP_KEEP. Any failure here is swallowed — a backup problem must
+        never break a save."""
+        if not (state.get("creators") or {}):
+            return
+        try:
+            os.makedirs(STATE_BACKUP_DIR, exist_ok=True)
+            path = os.path.join(STATE_BACKUP_DIR, f"app_state-{self._backup_stamp()}.json")
+            fd, tmp = tempfile.mkstemp(dir=STATE_BACKUP_DIR, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            _replace_with_retry(tmp, path)
+            names = sorted(n for n in os.listdir(STATE_BACKUP_DIR)
+                           if n.startswith("app_state-") and n.endswith(".json"))
+            for stale in names[:-STATE_BACKUP_KEEP]:
+                try:
+                    os.remove(os.path.join(STATE_BACKUP_DIR, stale))
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+    def _ensure_backup_seed(self):
+        """At startup, guarantee at least one recovery point exists for the
+        current (healthy) state, so even a session that never edits anything
+        still has a snapshot to fall back on."""
+        try:
+            has_any = os.path.isdir(STATE_BACKUP_DIR) and any(
+                n.startswith("app_state-") and n.endswith(".json")
+                for n in os.listdir(STATE_BACKUP_DIR))
+        except OSError:
+            has_any = False
+        if not has_any:
+            self._backup_state(self.load_state())
 
     def save_state(self, state):
         # Merge into existing state so partial updates from the UI (which omit
@@ -178,7 +274,8 @@ class Api:
         # Locked + atomic (write temp, then os.replace) so concurrent saves from
         # the UI / download / window-geometry threads can't corrupt the file.
         with self._state_lock:
-            merged = self.load_state()
+            merged = self._read_state_unlocked()
+            prev_creators = json.dumps(merged.get("creators", {}), sort_keys=True)
             merged.update(state or {})
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE_FILE), suffix=".tmp")
             try:
@@ -191,6 +288,10 @@ class Api:
                 except OSError:
                     pass
                 raise
+            # Roll a backup only when the creator index actually changed, so
+            # frequent window-geometry saves don't churn the backup set.
+            if json.dumps(merged.get("creators", {}), sort_keys=True) != prev_creators:
+                self._backup_state(merged)
 
     # ── Migration: legacy artist_map/cf_artist_map → creators ───────
 
@@ -282,38 +383,60 @@ class Api:
 
         return added
 
+    def _backup_sources(self):
+        """Every place a prior state could hide, newest first: rolling snapshots,
+        quarantined corrupt copies, then the legacy pre-migrate backup."""
+        paths = []
+        try:
+            for name in sorted(os.listdir(STATE_BACKUP_DIR), reverse=True):
+                if name.startswith("app_state-") and name.endswith(".json"):
+                    paths.append(os.path.join(STATE_BACKUP_DIR, name))
+        except OSError:
+            pass
+        d, base = os.path.dirname(STATE_FILE), os.path.basename(STATE_FILE)
+        try:
+            for name in sorted(os.listdir(d), reverse=True):
+                if name.startswith(base + ".corrupt"):
+                    paths.append(os.path.join(d, name))
+        except OSError:
+            pass
+        paths.append(STATE_FILE + ".pre-migrate.bak")
+        return paths
+
     def recover_from_backup(self):
-        """Fold legacy maps from app_state.json.corrupt / .pre-migrate.bak back
-        into the current creators model. Recovers folder↔URL mappings that were
-        lost when the live state file was truncated. Additive and non-destructive."""
+        """Restore creators lost from the live state, pulling from every backup:
+        rolling snapshots (app_state.backups/), quarantined corrupt copies, and
+        legacy pre-migrate maps. Restores whole modern creator records as well as
+        folding old flat artist maps. Additive and non-destructive — a creator
+        already present in the live state is never overwritten."""
         state = self.load_state()
         creators = state.get("creators", {})
         before = len(creators)
-        added, used = 0, []
+        added_links, used = 0, []
 
-        for path in (STATE_FILE + ".corrupt", STATE_FILE + ".pre-migrate.bak"):
+        for path in self._backup_sources():
             if not os.path.isfile(path):
                 continue
-            data = None
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data, _ = json.JSONDecoder().raw_decode(f.read().lstrip())
-                except Exception:
-                    data = None
+            data = self._parse_state_file(path)
             if not isinstance(data, dict):
                 continue
-            added += self._merge_legacy_maps(
+            touched = 0
+            # Modern: restore whole creator records missing from the live index.
+            for cid, rec in (data.get("creators") or {}).items():
+                if cid not in creators and isinstance(rec, dict) and rec.get("links"):
+                    creators[cid] = rec
+                    touched += 1
+            # Legacy: fold old flat artist maps for anything still missing.
+            links = self._merge_legacy_maps(
                 creators, data.get("artist_map"), data.get("cf_artist_map"))
-            used.append(os.path.basename(path))
+            added_links += links
+            if touched or links:
+                used.append(os.path.basename(path))
 
         state["creators"] = creators
         self.save_state(state)
         return {
-            "links_added": added,
+            "links_added": added_links,
             "creators_added": len(creators) - before,
             "creators_total": len(creators),
             "sources": used,
@@ -869,11 +992,13 @@ class Api:
         except Exception as e:
             return {"reachable": False, "items": [], "counts": {}, "error": str(e)}
 
-    def list_creator_errors(self, creator_id):
-        """Persisted per-file download failures for a creator, aggregated across all
-        its links' failure stores. Drives the 'Redownload Errors' button + panel:
-        `count` files that failed (retryable) and `gone` files confirmed missing
-        upstream (manual grab only — the direct URL + post page are provided)."""
+    def list_creator_errors(self, creator_id, scope="everything"):
+        """Persisted per-file download failures for a creator, across its links'
+        failure stores. Drives the 'Redownload Errors' button + panel: `count` files
+        that failed (retryable) and `gone` files confirmed missing upstream (manual
+        grab only — the direct URL + post page are provided). `scope` narrows it to
+        one platform/site/link (mirrors the fetch scope) so the panel shows only the
+        errors for what's selected."""
         c = self.load_state().get("creators", {}).get(creator_id)
         if not c:
             return {"count": 0, "failed": 0, "gone": 0, "items": [],
@@ -882,7 +1007,7 @@ class Api:
         archive_dir = (state.get("archive_dir") or "").strip()
         dest = c.get("destination", "")
         items, failed, gone = [], 0, 0
-        for link in c.get("links", []):
+        for link in filter_links(c.get("links", []), scope):
             apath = self._archive_path_for_link(link, archive_dir, dest)
             if not apath:
                 continue
@@ -991,17 +1116,17 @@ class Api:
                 store.close()
         return {"ok": True, "dismissed": len(done), "entries": done}
 
-    def dismiss_all_creator_errors(self, creator_id):
-        """Dismiss every visible (failed/gone) error for a creator in one go — the
-        panel's 'Dismiss all'. Returns the dismissed entries so the UI can offer an
-        undo via restore_creator_errors."""
+    def dismiss_all_creator_errors(self, creator_id, scope="everything"):
+        """Dismiss every visible (failed/gone) error in one go — the panel's 'Dismiss
+        all'. Honors `scope` so it only clears what the panel is currently showing.
+        Returns the dismissed entries so the UI can offer an undo."""
         c = self.load_state().get("creators", {}).get(creator_id)
         if not c:
             return {"error": "Creator not found"}
         archive_dir = (self.load_state().get("archive_dir") or "").strip()
         dest = c.get("destination", "")
         entries = []
-        for link in c.get("links", []):
+        for link in filter_links(c.get("links", []), scope):
             apath = self._archive_path_for_link(link, archive_dir, dest)
             if not apath:
                 continue
@@ -1291,7 +1416,13 @@ class Api:
         c = creators.get(creator_id)
         if c is None:
             return {"ok": False}
-        deleted = self._delete_creator_archives(c, state) if delete_archives else []
+        if delete_archives:
+            deleted = self._delete_creator_archives(c, state)   # archives + errors + manifest
+        else:
+            # Keep the archive (a re-add resumes), but still forget "errors needing
+            # attention" — deleting a creator should reset its errors to none.
+            self._delete_creator_error_dbs(c, state)
+            deleted = []
         creators.pop(creator_id, None)
         state["creators"] = creators
         self.save_state(state)
@@ -1346,18 +1477,30 @@ class Api:
         return None
 
     @staticmethod
-    def _delete_archive_db(path):
-        """Delete an archive DB and its sqlite side files. Returns True if the
-        main .db file was actually removed."""
-        main_deleted = False
-        for p in (path, path + "-wal", path + "-shm", path + "-journal"):
+    def _delete_db_and_sidecars(base):
+        """Delete a sqlite DB and its -wal/-shm/-journal side files. Returns True if
+        the main file was removed."""
+        removed = False
+        for p in (base, base + "-wal", base + "-shm", base + "-journal"):
             try:
                 if p and os.path.isfile(p):
                     os.remove(p)
-                    if p == path:
-                        main_deleted = True
+                    if p == base:
+                        removed = True
             except OSError:
                 pass
+        return removed
+
+    @classmethod
+    def _delete_archive_db(cls, path):
+        """Delete an archive DB, its per-link error store (the sibling .errors.db —
+        so 'errors needing attention' resets), and all their sqlite side files.
+        Returns True if the main archive .db was actually removed."""
+        main_deleted = cls._delete_db_and_sidecars(path)
+        try:
+            cls._delete_db_and_sidecars(errors_db_path(path))
+        except Exception:
+            pass
         return main_deleted
 
     def _delete_creator_archives(self, creator, state):
@@ -1386,6 +1529,16 @@ class Api:
                 except OSError:
                     pass
         return removed
+
+    def _delete_creator_error_dbs(self, creator, state):
+        """Delete each of a creator's per-link error stores (+ side files) so its
+        'errors needing attention' resets to none. Archives and media are untouched."""
+        archive_dir = (state.get("archive_dir") or "").strip()
+        dest = creator.get("destination", "")
+        for link in creator.get("links", []):
+            path = self._archive_path_for_link(link, archive_dir, dest)
+            if path:
+                self._delete_db_and_sidecars(errors_db_path(path))
 
     def _touch_creator(self, creator_id):
         try:
