@@ -297,7 +297,7 @@
                 <div class="dupes-results" id="dupeResults"></div>
             </div>
 
-            <!-- Albums view: ad-hoc album downloader (bunkr / cyberdrop / filester) -->
+            <!-- Albums view: ad-hoc album downloader (bunkr / cyberdrop / filester / gofile) -->
             <div class="tab-content" id="albumsView" style="display: none;">
                 <div class="section">
                     <div class="section-title">Album downloader</div>
@@ -306,8 +306,8 @@
                         <button class="seg" data-amode="creator" onclick="setAlbumMode('creator')">Saved creators</button>
                     </div>
                     <div class="field-hint" style="margin-bottom: 10px;">
-                        Whole-album downloads from <strong>bunkr</strong>, <strong>cyberdrop</strong> and <strong>filester</strong> — each into its own subfolder.
-                        Locked filester folder? append the password: <code>https://filester…/f/ID | password</code>
+                        Whole-album downloads from <strong>bunkr</strong>, <strong>cyberdrop</strong>, <strong>filester</strong> and <strong>gofile</strong> — each into its own subfolder.
+                        Locked filester/gofile folder? append the password: <code>https://gofile.io/d/ID | password</code>
                     </div>
 
                     <!-- Quick (ad-hoc) mode -->
@@ -320,7 +320,7 @@
                         <div class="form-row" style="align-items: stretch;">
                             <span class="form-label">Links</span>
                             <textarea id="albumLinks" class="input-field album-links" rows="5"
-                                      placeholder="https://cyberdrop.cr/a/…&#10;https://bunkr.cr/a/…&#10;https://filester.gg/f/…  (| password if locked)"></textarea>
+                                      placeholder="https://cyberdrop.cr/a/…&#10;https://bunkr.cr/a/…&#10;https://filester.gg/f/…  (| password if locked)&#10;https://gofile.io/d/…  (| password if locked)"></textarea>
                         </div>
                         <div class="form-row">
                             <span class="form-label"></span>
@@ -347,10 +347,10 @@
                         <div class="form-row" id="albumAddRow" style="display: none;">
                             <span class="form-label">Add link</span>
                             <input id="albumNewLink" class="input-field" style="flex: 1;"
-                                   placeholder="bunkr / cyberdrop / filester URL"
+                                   placeholder="bunkr / cyberdrop / filester / gofile URL"
                                    onkeydown="if(event.key==='Enter')addAlbumLink()">
                             <input id="albumNewPassword" class="input-field" style="width: 170px;"
-                                   placeholder="password (filester, optional)"
+                                   placeholder="password (filester/gofile, optional)"
                                    onkeydown="if(event.key==='Enter')addAlbumLink()">
                             <button class="btn btn-ghost btn-sm" onclick="addAlbumLink()">Add</button>
                         </div>

@@ -103,7 +103,7 @@ function renderAlbumLinks() {
     const links = (albumCurrentCreator && albumCurrentCreator.links) || [];
     if (!albumCurrentCreator) { list.innerHTML = ''; actions.style.display = 'none'; return; }
     if (!links.length) {
-        list.innerHTML = '<div class="links-empty">No links yet — add a bunkr/cyberdrop/filester album above.</div>';
+        list.innerHTML = '<div class="links-empty">No links yet — add a bunkr/cyberdrop/filester/gofile album above.</div>';
         actions.style.display = 'none';
         return;
     }

@@ -1,12 +1,15 @@
 """Registry of file-host album sites supported by the Albums tab.
 
 The Albums tab downloads whole albums from a few file-hosts (bunkr, cyberdrop,
-filester) into an ad-hoc directory. Each site is downloaded by whichever engine
-handles it best:
+filester, gofile) into an ad-hoc directory. Each site is downloaded by whichever
+engine handles it best:
 
   * bunkr, cyberdrop -> cyberdrop-dl (primary), gallery-dl (fallback). cyberdrop-dl
     is the most hardened tool for bunkr's flaky, domain-rotating CDN.
-  * filester        -> gallery-dl (cyberdrop-dl doesn't support filester).
+  * filester        -> native FilesterRunner (gallery-dl's extractor resolves to
+    dead CDN hosts).
+  * gofile          -> native GofileRunner (guest token + concurrent CDN downloads;
+    gallery-dl/cyberdrop-dl support gofile but download sequentially).
 
 `detect_site(url)` maps a pasted link to its site entry (and therefore engine).
 Adding a new site later is a single `SITES` entry.
@@ -55,6 +58,16 @@ SITES = [
         # cache*.filester.me hosts; we use filester's v2 API + c-fs.cdn.cr instead.
         "engine": "filester",
         "extractor": "filester",
+        "title_field": "folder_name",
+    },
+    {
+        "key": "gofile",
+        "host_re": r"^(?:www\.)?gofile\.",
+        # Native downloader (GofileRunner): free guest token + local website token,
+        # concurrent CDN downloads. gallery-dl/cyberdrop-dl also support gofile but
+        # download sequentially — too slow for folders with thousands of files.
+        "engine": "gofile",
+        "extractor": "gofile",
         "title_field": "folder_name",
     },
 ]

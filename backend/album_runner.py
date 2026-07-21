@@ -6,7 +6,8 @@ routed to its best engine (see `album_sites`):
 
   * bunkr / cyberdrop -> CyberdropDlRunner, with GalleryDlRunner as a fallback if
     cyberdrop-dl produces nothing.
-  * filester          -> GalleryDlRunner.
+  * filester          -> FilesterRunner (native).
+  * gofile            -> GofileRunner (native, concurrent).
 
 Mirrors CreatorRunner: links run sequentially so the unified log stays readable,
 the active sub-runner is held in `self._current` so `cancel()` reaches its
@@ -28,6 +29,7 @@ from backend.cyberdrop_dl_runner import CyberdropDlRunner
 from backend.download_errors import FailureStore
 from backend.filester_downloader import FilesterRunner
 from backend.gallery_dl_runner import GalleryDlRunner
+from backend.gofile_downloader import GofileRunner
 
 
 def album_state_dir(app_root, destination):
@@ -151,6 +153,11 @@ class AlbumRunner:
                                        prog, on_error, password)
             self._merge(agg, stats)
             subfolder_hint = stats.get("subfolder")
+        elif site["engine"] == "gofile":
+            stats = self._run_gofile(url, destination, errors_path,
+                                     prog, on_error, password, force)
+            self._merge(agg, stats)
+            subfolder_hint = stats.get("subfolder")
         elif site["engine"] == "cyberdrop-dl":
             stats = self._run_cyberdrop(url, destination, state_dir, errors_path,
                                         prog, on_error, password, force,
@@ -194,6 +201,22 @@ class AlbumRunner:
             on_error=on_error,
             password=password,
             errors_path=errors_path,
+        )
+        self._accumulate(stats)
+        return stats
+
+    def _run_gofile(self, url, destination, errors_path,
+                    on_progress, on_error, password, force):
+        runner = GofileRunner(platform="album")
+        self._current = runner
+        stats = {}
+        runner.run(
+            url, destination, on_progress,
+            on_complete=lambda s: stats.update(s),
+            on_error=on_error,
+            password=password,
+            errors_path=errors_path,
+            force=force,          # "Redownload whole" re-fetches present files
         )
         self._accumulate(stats)
         return stats
