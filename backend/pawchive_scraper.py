@@ -139,17 +139,60 @@ def _load_cookies(session, cookies_path):
         pass
 
 
+def _impersonate_for_ua(user_agent):
+    """Pick the curl_cffi impersonate target whose Chrome version best matches a
+    real browser's User-Agent.
+
+    Cloudflare binds a `cf_clearance` cookie to the exact UA (and TLS fingerprint)
+    that solved the challenge. When we replay that cookie we want curl_cffi to send
+    BOTH the same UA and a JA3 from the same Chrome generation, or Cloudflare simply
+    re-challenges. This maps the UA's `Chrome/<major>` to the nearest available
+    curl_cffi profile (the set differs by curl_cffi version, so we read it live);
+    falls back to the generic "chrome" (latest) when we can't tell."""
+    if not user_agent:
+        return _IMPERSONATE
+    m = re.search(r"Chrome/(\d+)", user_agent)
+    if not m:
+        return _IMPERSONATE
+    major = int(m.group(1))
+    try:
+        from curl_cffi.requests.impersonate import BrowserTypeLiteral
+        import typing
+        avail = []
+        for v in typing.get_args(BrowserTypeLiteral):
+            mm = re.fullmatch(r"chrome(\d+)[a-z]?", v)
+            if mm:
+                avail.append((int(mm.group(1)), v))
+        if not avail:
+            return _IMPERSONATE
+        avail.sort()
+        # Highest profile that is <= the browser's major (so we never claim a newer
+        # Chrome than the client actually is); else the lowest available.
+        pick = None
+        for ver, name in avail:
+            if ver <= major:
+                pick = name
+        return pick or avail[0][1]
+    except Exception:
+        return _IMPERSONATE
+
+
 def make_session(user_agent=None, cookies_path=None, proxies=None):
-    """HTTP Session that gets past DDoS-Guard's bot rate-limiting.
+    """HTTP Session that gets past DDoS-Guard's bot rate-limiting (and replays a
+    Cloudflare `cf_clearance` cookie when one is supplied).
 
     When curl_cffi is available it impersonates a real Chrome (matching TLS/JA3 +
     HTTP2 fingerprint AND the corresponding browser headers, incl. User-Agent) — so
-    we do NOT set our own User-Agent in that mode (a UA that doesn't match the JA3 is
-    itself a bot tell). Without curl_cffi it falls back to a plain requests Session
-    with a browser UA. Either way the Session auto-carries the DDoS-Guard cookie set
-    on the first hit."""
+    normally we do NOT set our own User-Agent (a UA that doesn't match the JA3 is
+    itself a bot tell). The exception is when a caller passes `user_agent` (the UA the
+    embedded browser used to earn a `cf_clearance` cookie): we then pin that exact UA
+    AND align the impersonate profile to its Chrome major, so the replayed cookie
+    validates. Without curl_cffi it falls back to a plain requests Session with a
+    browser UA. Either way the Session auto-carries the DDoS-Guard cookie set on the
+    first hit, and loads any `cookies_path` (Netscape) so `cf_clearance` rides along."""
     if USING_IMPERSONATION:
-        s = _net.Session(impersonate=_IMPERSONATE, http_version=_HTTP_VERSION)
+        impersonate = _impersonate_for_ua(user_agent) if user_agent else _IMPERSONATE
+        s = _net.Session(impersonate=impersonate, http_version=_HTTP_VERSION)
         # impersonate already installs a matching UA + header order; only add the
         # request-context headers a browser XHR would send.
         s.headers.update({
@@ -157,6 +200,10 @@ def make_session(user_agent=None, cookies_path=None, proxies=None):
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
         })
+        # Pin the browser's exact UA so a replayed cf_clearance cookie validates
+        # (curl_cffi lets an explicit header override the impersonate default).
+        if user_agent:
+            s.headers["User-Agent"] = user_agent
     else:
         s = _net.Session()
         s.headers.update({
@@ -398,6 +445,42 @@ def parse_dt(value):
 
 
 # ── API fetching ────────────────────────────────────────────────────
+
+def is_cloudflare_challenge(resp):
+    """True if `resp` is a Cloudflare bot-challenge interstitial ("Just a moment…"),
+    NOT a genuine permission error.
+
+    pawchive.pw moved its API behind Cloudflare's managed JS challenge, which returns
+    403 (sometimes 503/429) with `server: cloudflare` and a challenge HTML body. This
+    is only cleared by a real browser solving it (yielding a `cf_clearance` cookie) —
+    so callers must treat it as "needs a Cloudflare reconnect", never as a permanent
+    'gone' or a plain non-retriable error."""
+    if resp is None:
+        return False
+    try:
+        server = (resp.headers.get("server") or "").lower()
+        if server != "cloudflare":
+            return False
+        if resp.status_code not in (403, 503, 429):
+            return False
+        # Confirm it's the challenge page, not a normal Cloudflare-fronted API reply.
+        if resp.headers.get("cf-mitigated", "").lower() == "challenge":
+            return True
+        ctype = (resp.headers.get("content-type") or "").lower()
+        if "text/html" not in ctype:
+            return False
+        body = ""
+        try:
+            body = (resp.text or "")[:4000].lower()
+        except Exception:
+            body = ""
+        return ("just a moment" in body
+                or "challenge-platform" in body
+                or "cf_chl" in body
+                or "_cf_chl_opt" in body)
+    except Exception:
+        return False
+
 
 def fetch_json(session, url, timeout=(15, 60)):
     r = session.get(url, timeout=timeout)

@@ -8,7 +8,10 @@ from backend.download_errors import FailureStore
 
 
 class GalleryDlRunner:
-    def __init__(self):
+    def __init__(self, platform="twitter"):
+        # `platform` tags failures recorded to the FailureStore. Defaults to
+        # "twitter" (the original caller); the Albums tab passes "album".
+        self._platform = platform
         self._process = None
         self._cancel_event = threading.Event()
         self.downloaded_count = 0
@@ -38,7 +41,7 @@ class GalleryDlRunner:
         self._errors = FailureStore(errors_path) if errors_path else None
         if self._errors and reset_errors:
             try:
-                self._errors.clear_all(platform="twitter")
+                self._errors.clear_all(platform=self._platform)
             except Exception:
                 pass
         current_url = None   # the media URL from the most recent "# <url>" line
@@ -119,7 +122,7 @@ class GalleryDlRunner:
             return
         try:
             self._errors.record_failure(
-                f"twitter_{media_url}", platform="twitter", url=media_url,
+                f"{self._platform}_{media_url}", platform=self._platform, url=media_url,
                 page_url=source_url, filename=os.path.basename(
                     media_url.split("?", 1)[0]) or None,
                 reason=(reason or "gallery-dl error")[:300])

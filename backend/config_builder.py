@@ -77,6 +77,57 @@ def build_redownload_config(destination, year, cookies_path=None, cookies_browse
     return _write_temp_config(config)
 
 
+def build_album_config(destination, cookies_path=None, cookies_browser=None,
+                       filester_cookies=None):
+    """Build a gallery-dl config for album downloads (Albums tab).
+
+    Used as the sole engine for filester and as the fallback engine for
+    bunkr/cyberdrop. gallery-dl auto-detects the extractor from the URL, so we
+    only set: a base directory, a per-extractor `directory` template that drops
+    each album into its own titled subfolder under `destination`, and a
+    generous retry budget to soak up bunkr's flaky files. Original filenames are
+    kept (no `filename` override).
+
+    The per-site `directory` keys mirror each extractor's own metadata (verified
+    via `gallery-dl -j`): bunkr/cyberdrop expose `album_name`; filester exposes
+    `folder_name` (+ `folder_id`, appended since folder_name can be empty).
+
+    `filester_cookies` is a per-link Netscape cookies.txt from unlocking a
+    password-protected filester folder (see backend/filester_unlock). filester is
+    pinned to `domain: "auto"` so gallery-dl talks to the link's own host — the
+    host the unlock cookie is scoped to (e.g. filester.gg, not the default .me).
+    Returns a temp config file path.
+    """
+    def _cookies(block):
+        if cookies_path:
+            block["cookies"] = cookies_path.replace("\\", "/")
+        elif cookies_browser:
+            block["cookies-from-browser"] = cookies_browser
+        return block
+
+    filester = _cookies({
+        "directory": ["{folder_name} ({folder_id})"],
+        "domain": "auto",
+    })
+    if filester_cookies:
+        filester["cookies"] = filester_cookies.replace("\\", "/")
+
+    config = {
+        "extractor": {
+            "base-directory": destination.replace("\\", "/"),
+            "bunkr": _cookies({"directory": ["{album_name}"]}),
+            "cyberdrop": _cookies({"directory": ["{album_name}"]}),
+            "filester": filester,
+        },
+        "downloader": {
+            "retries": 15,
+            "timeout": 60.0,
+            "rate": None,
+        },
+    }
+    return _write_temp_config(config)
+
+
 def _write_temp_config(config):
     """Write config dict to a temp JSON file and return its path."""
     temp_dir = tempfile.gettempdir()

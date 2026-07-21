@@ -104,6 +104,22 @@ class FailureStore:
             self._conn.execute("DELETE FROM failures WHERE entry = ?", (entry,))
             self._conn.commit()
 
+    def clear_by_page_url(self, page_url):
+        """Drop non-dismissed failures for one source page (e.g. an album URL).
+
+        Album engines re-record failures every run but can't map a later success
+        back to a specific entry, so a re-run of an album clears its prior
+        failures first and then records only what still fails — otherwise old,
+        already-resolved failures compound across runs. Dismissed entries are
+        left alone so a user's dismissal stays sticky."""
+        if not page_url:
+            return
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM failures WHERE page_url = ? AND state != 'dismissed'",
+                (page_url,))
+            self._conn.commit()
+
     def clear_all(self, platform=None):
         """Wipe the store (optionally for one platform). Used by platforms that
         can't map a success back to a specific entry (twitter/gallery-dl): the

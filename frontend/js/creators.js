@@ -177,6 +177,7 @@ async function onCreatorChange() {
     setCreatorAvatar(currentCreator);
     buildScopeControl();
     updateActionAvailability();
+    updateLatestRangeInfo();
     await refreshYears();
     pendingUndo = [];          // undo history is per-creator
     errorsUndo = [];
@@ -799,17 +800,20 @@ async function cycleCreatorAvatar() {
 // ── View switching (Creator | Gallery) ──────────────────────────
 
 function switchView(name) {
-    const views = { creator: 'creatorView', gallery: 'galleryView', media: 'mediaView' };
+    const views = { creator: 'creatorView', gallery: 'galleryView', media: 'mediaView',
+                    dupes: 'dupesView', albums: 'albumsView' };
     Object.entries(views).forEach(([n, id]) => {
         const el = document.getElementById(id);
         if (el) el.style.display = (n === name) ? 'flex' : 'none';
     });
-    // The header toggle only offers Creator/Gallery; the media browser is a
-    // sub-page of the gallery, so keep "Gallery" lit while viewing media.
+    // The header toggle only offers Creator/Gallery/Duplicates; the media browser is
+    // a sub-page of the gallery, so keep "Gallery" lit while viewing media.
     const lit = (name === 'media') ? 'gallery' : name;
     document.querySelectorAll('#viewToggle .seg')
         .forEach(b => b.classList.toggle('active', b.dataset.view === lit));
     if (name === 'gallery' && typeof renderGallery === 'function') renderGallery();
+    if (name === 'dupes' && typeof renderDupeHeader === 'function') renderDupeHeader();
+    if (name === 'albums' && typeof onAlbumViewShown === 'function') onAlbumViewShown();
 }
 
 function persistLastCreator(id) {
@@ -946,15 +950,51 @@ function updateActionAvailability() {
 
 async function refreshYears() {
     const sel = document.getElementById('redownloadYear');
+    const rs = document.getElementById('latestRangeStart');
+    const re = document.getElementById('latestRangeEnd');
     sel.innerHTML = '<option value="">Year…</option>';
+    if (rs) rs.innerHTML = '<option value="">From…</option>';
+    if (re) re.innerHTML = '<option value="">…to</option>';
     if (!currentCreatorId) return;
     const years = await pywebview.api.get_creator_years(currentCreatorId);
     years.forEach(y => {
-        const o = document.createElement('option');
-        o.value = y;
-        o.textContent = y;
-        sel.appendChild(o);
+        [sel, rs, re].forEach(el => {
+            if (!el) return;
+            const o = document.createElement('option');
+            o.value = y;
+            o.textContent = y;
+            el.appendChild(o);
+        });
     });
+}
+
+// Show the creator's saved Fetch Latest range (if any) so "set once & forget" is visible.
+function updateLatestRangeInfo() {
+    const el = document.getElementById('latestRangeInfo');
+    if (!el) return;
+    const r = currentCreator && currentCreator.latest_range;
+    if (!r || (r.start == null && r.end == null)) {
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+    }
+    let label;
+    if (r.start != null && r.end != null) label = (r.start === r.end) ? `${r.start}` : `${r.start}–${r.end}`;
+    else if (r.start != null) label = `${r.start} onward`;
+    else label = `up to ${r.end}`;
+    el.innerHTML = `🗓️ <b>Fetch Latest</b> is limited to <b>${label}</b> for this creator (change in Configure Links).`;
+    el.style.display = '';
+}
+
+// One-off Fetch Latest scoped to a year range (not persisted). Blank side = open-ended.
+function fetchLatestRange() {
+    const start = document.getElementById('latestRangeStart').value;
+    const end = document.getElementById('latestRangeEnd').value;
+    if (!start && !end) {
+        showToast('Pick a From and/or To year (or use plain Fetch Latest)', 'error');
+        return;
+    }
+    startDownload('latest', { start: start || null, end: end || null });
 }
 
 // ── Downloads ───────────────────────────────────────────────────
@@ -965,17 +1005,22 @@ function requireCreator() {
     return true;
 }
 
-function startDownload(mode) {
+function startDownload(mode, yearRange) {
     if (!requireCreator()) return;
     let year = null;
     if (mode === 'redownload_year') {
         year = document.getElementById('redownloadYear').value;
         if (!year) { showToast('Select a year to download', 'error'); return; }
     }
+    // yearRange (one-off) applies only to Fetch Latest; null falls back to the
+    // creator's saved range on the backend.
+    const range = (mode === 'latest' && yearRange) ? yearRange : null;
     const refreshLinks = document.getElementById('refreshLinks').checked;
     setDownloadingState(true);
     resetStats();
-    pywebview.api.start_creator_download(currentCreatorId, currentScope, mode, year, refreshLinks).then(res => {
+    pywebview.api.start_creator_download(
+        currentCreatorId, currentScope, mode, year, refreshLinks, null, range
+    ).then(res => {
         if (res && res.error) {
             setDownloadingState(false);
             showToast(res.error, 'error');
@@ -1093,10 +1138,13 @@ function dismissErrorYear() {
 
 function verifyRepair() {
     if (!requireCreator()) return;
+    const deep = !!(document.getElementById('deepVerify') || {}).checked;
     setDownloadingState(true);
     resetStats();
-    Logger.info('Verifying coomerfans files for this creator…');
-    pywebview.api.start_creator_verify(currentCreatorId).then(res => {
+    Logger.info(deep
+        ? 'Deep-verifying — decode-scanning videos (slower)…'
+        : 'Verifying coomerfans files for this creator…');
+    pywebview.api.start_creator_verify(currentCreatorId, deep).then(res => {
         if (res && res.error) {
             setDownloadingState(false);
             showToast(res.error, 'error');

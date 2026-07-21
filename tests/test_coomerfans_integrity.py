@@ -26,7 +26,8 @@ from backend.coomerfans_archive import Archive        # noqa: E402
 
 CONTENT = os.urandom(2_000_000)          # 2 MB pseudo-file
 FULL_SHA = hashlib.sha256(CONTENT).hexdigest()
-STATE = {"trunc_full_gets": 0}
+STATE = {"trunc_full_gets": 0, "misalign_full_gets": 0, "videobreak_full_gets": 0,
+         "chunkdrop_hits": {}}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -51,18 +52,22 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         n = len(CONTENT)
         if path == "/full":
-            start = self._range_start()
-            if start is not None:
+            rng = self.headers.get("Range")
+            if rng:
+                m = re.match(r"bytes=(\d+)-(\d*)", rng)
+                start = int(m.group(1))
+                end = int(m.group(2)) if m.group(2) else n - 1   # open-ended -> EOF
+                end = min(end, n - 1)
                 if start >= n:
                     self.send_response(416)
                     self.send_header("Content-Range", f"bytes */{n}")
                     self.end_headers()
                     return
                 self.send_response(206)
-                self.send_header("Content-Range", f"bytes {start}-{n-1}/{n}")
-                self.send_header("Content-Length", str(n - start))
+                self.send_header("Content-Range", f"bytes {start}-{end}/{n}")
+                self.send_header("Content-Length", str(end - start + 1))
                 self.end_headers()
-                self._safe_write(CONTENT[start:])
+                self._safe_write(CONTENT[start:end + 1])
                 return
             self.send_response(200)
             self.send_header("Content-Length", str(n))
@@ -91,6 +96,82 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(n))
             self.end_headers()
             self._safe_write(CONTENT)
+            return
+
+        if path == "/misalign":
+            start = self._range_start()
+            if start is None:
+                # First full GET: send half then drop -> a partial .part to resume.
+                if STATE["misalign_full_gets"] == 0:
+                    STATE["misalign_full_gets"] += 1
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(n))
+                    self.end_headers()
+                    self._safe_write(CONTENT[: n // 2])
+                    self.close_connection = True
+                    return
+                # Later full GET (after our misaligned resume is rejected): serve full.
+                self.send_response(200)
+                self.send_header("Content-Length", str(n))
+                self.end_headers()
+                self._safe_write(CONTENT)
+                return
+            # Resume request: MISALIGNED 206 — claims to resume from 0 and resends the
+            # first half, which would append into a right-length but corrupt file.
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes 0-{n // 2 - 1}/{n}")
+            self.send_header("Content-Length", str(n // 2))
+            self.end_headers()
+            self._safe_write(CONTENT[: n // 2])
+            return
+
+        if path == "/videobreak":
+            start = self._range_start()
+            if start is not None:
+                # A fixed runner must NEVER resume a video. If it does, we serve
+                # GARBAGE for the tail so the resulting file is corrupt and the test
+                # fails loudly (proving the no-resume guard works).
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{n-1}/{n}")
+                self.send_header("Content-Length", str(n - start))
+                self.end_headers()
+                self._safe_write(b"\x00" * (n - start))
+                return
+            # Full GET: drop mid-stream the first time (partial .part), then serve full.
+            if STATE["videobreak_full_gets"] == 0:
+                STATE["videobreak_full_gets"] += 1
+                self.send_response(200)
+                self.send_header("Content-Length", str(n))
+                self.end_headers()
+                self._safe_write(CONTENT[: n // 2])
+                self.close_connection = True
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(n))
+            self.end_headers()
+            self._safe_write(CONTENT)
+            return
+
+        if path == "/chunkdrop":
+            # Byte-accurate ranges (for segmented download), but the FIRST request
+            # for the chunk at offset 524288 drops mid-body -> segmented must retry it.
+            rng = self.headers.get("Range", "")
+            m = re.match(r"bytes=(\d+)-(\d+)", rng)
+            if not m:                       # no range -> serve full (unused path)
+                self.send_response(200)
+                self.send_header("Content-Length", str(n)); self.end_headers()
+                self._safe_write(CONTENT); return
+            start, end = int(m.group(1)), min(int(m.group(2)), n - 1)
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{n}")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.end_headers()
+            if start == 524288 and not STATE["chunkdrop_hits"].get(start):
+                STATE["chunkdrop_hits"][start] = True
+                self._safe_write(CONTENT[start:start + 100])   # partial then drop
+                self.close_connection = True
+                return
+            self._safe_write(CONTENT[start:end + 1])
             return
 
         if path == "/gone":
@@ -165,6 +246,57 @@ def t_resume_correctness():
     ok = mk_runner()._download_stream(mk_job(BASE + "/full"), final, "e", "resume.jpg")
     check("resume: byte-identical", ok and os.path.isfile(final) and sha(final) == FULL_SHA)
     check("resume: no leftover .part", not os.path.exists(final + ".part"))
+
+
+def t_misaligned_resume():
+    # A connection drops mid-download (partial .part), then the resume comes back
+    # from the WRONG offset (206 starting at 0). The old code appended blindly,
+    # producing a right-length but internally-corrupt file. Now it must detect the
+    # misalignment, discard, and restart clean -> byte-identical result.
+    STATE["misalign_full_gets"] = 0
+    final = fresh_path("misalign.mp4")
+    ok = mk_runner()._download_stream(
+        mk_job(BASE + "/misalign", kind="image"), final, "e", "misalign.mp4")
+    good = ok and os.path.isfile(final) and sha(final) == FULL_SHA
+    check("misaligned-resume: rejected + recovers byte-correct file", good,
+          f"sha match={os.path.isfile(final) and sha(final) == FULL_SHA}")
+    check("misaligned-resume: no leftover .part", not os.path.exists(final + ".part"))
+
+
+def t_video_segmented_ok():
+    # Videos download via verified byte-range chunks; multi-chunk assembly must be
+    # byte-identical to a plain download.
+    final = fresh_path("seg.mp4")
+    orig = cr.ffprobe_ok
+    cr.ffprobe_ok = lambda p: True          # CONTENT is random bytes, not a real video
+    try:
+        res = mk_runner()._download_segmented(
+            mk_job(BASE + "/full", kind="video", ext="mp4"), final, "e", "seg.mp4",
+            chunk=512 * 1024)               # 4 chunks over the 2 MB file
+    finally:
+        cr.ffprobe_ok = orig
+    good = res is True and os.path.isfile(final) and sha(final) == FULL_SHA
+    check("segmented: multi-chunk assembles byte-correct", good,
+          f"res={res} sha_ok={os.path.isfile(final) and sha(final) == FULL_SHA}")
+    check("segmented: no leftover .part", not os.path.exists(final + ".part"))
+
+
+def t_video_segmented_chunk_retry():
+    # A chunk whose connection drops mid-body must be retried and recovered — the
+    # whole file still assembles byte-correct (guarantees flaky files complete).
+    STATE["chunkdrop_hits"] = {}
+    final = fresh_path("segretry.mp4")
+    orig = cr.ffprobe_ok
+    cr.ffprobe_ok = lambda p: True
+    try:
+        res = mk_runner()._download_segmented(
+            mk_job(BASE + "/chunkdrop", kind="video", ext="mp4"), final, "e", "segretry.mp4",
+            chunk=512 * 1024)
+    finally:
+        cr.ffprobe_ok = orig
+    good = res is True and os.path.isfile(final) and sha(final) == FULL_SHA
+    check("segmented: dropped chunk retried -> byte-correct", good,
+          f"res={res} retried={STATE['chunkdrop_hits']}")
 
 
 def t_truncation_416():
@@ -296,7 +428,9 @@ def t_repair_present_and_deleted():
 
 def main():
     print("Running coomerfans integrity tests...")
-    for t in (t_resume_correctness, t_truncation_416, t_416_when_complete,
+    for t in (t_resume_correctness, t_misaligned_resume,
+              t_video_segmented_ok, t_video_segmented_chunk_retry,
+              t_truncation_416, t_416_when_complete,
               t_410_refresh_recovers, t_410_refresh_resistant, t_error_page_guard,
               t_expected_size_recorded, t_ffprobe_validation, t_repair_present_and_deleted):
         try:

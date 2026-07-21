@@ -11,10 +11,45 @@ are present-but-broken.
 
 import os
 import shutil
+import subprocess
 
 from backend.coomerfans_scraper import BASE, parse_post
 from backend.coomerfans_runner import ffprobe_ok, expected_total
 from backend.coomerfans_archive import Archive, entry_key
+
+
+def _ffmpeg_exe():
+    """A usable ffmpeg binary: system first, else the bundled imageio-ffmpeg one."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def video_decode_ok(path, tail_seconds=30, error_threshold=8):
+    """Decode-check a video (deep verify). True if it decodes cleanly.
+
+    Catches right-size-but-corrupt videos (e.g. the misaligned-resume damage) that
+    the size and ffprobe-duration checks miss — those files have an intact header
+    (so duration reads fine) but a scrambled bitstream. We decode only the last
+    `tail_seconds` because that corruption always extends to the file's end, so the
+    tail is a reliable, fast signal (reads a slice, not the whole file). Returns True
+    if ffmpeg is unavailable (never block on a missing tool)."""
+    exe = _ffmpeg_exe()
+    if not exe:
+        return True
+    try:
+        out = subprocess.run(
+            [exe, "-v", "error", "-sseof", f"-{tail_seconds}", "-i", path, "-f", "null", "-"],
+            capture_output=True, text=True, timeout=180)
+    except Exception:
+        return True
+    errs = len([l for l in out.stderr.splitlines() if l.strip()])
+    return errs < error_threshold
 
 
 def _path_for(destination, kind, year, filename):
@@ -52,7 +87,7 @@ def _network_size(session, post_url, index, cache):
 
 
 def find_broken(archive_path, destination, service, user_id, session,
-                on_progress=None, should_cancel=None):
+                on_progress=None, should_cancel=None, deep=False):
     """Return {checked, present, broken:[{...row, path, reason}]}.
 
     Detection priority per present file:
@@ -60,6 +95,10 @@ def find_broken(archive_path, destination, service, user_id, session,
       - video w/o stored size + ffprobe available     -> ffprobe invalid -> broken
       - video w/o stored size + no ffprobe            -> network size < disk -> broken
       - image w/o stored size                         -> skipped (low risk, no cheap check)
+
+    `deep`: additionally DECODE-scan every present video that passed the cheap
+    checks, catching right-size-but-corrupt videos (misaligned-resume damage) that
+    size/ffprobe miss. Slower (decodes each video's tail) but reads only a slice.
     """
     def log(m):
         if on_progress:
@@ -106,11 +145,20 @@ def find_broken(archive_path, destination, service, user_id, session,
                     pass
         # images without a stored size are not deep-checked (small/fast, rarely truncate)
 
+        # Deep scan: decode-check videos that passed the cheap checks — the only way
+        # to catch a right-size-but-corrupt video (scrambled bitstream, intact header).
+        if not reason and deep and kind == "video":
+            if present % 25 == 0:
+                log(f"Deep-scanning… ({present} files checked)")
+            if not video_decode_ok(path):
+                reason = "deep scan: video decodes with errors"
+
         if reason:
             broken.append({**row, "path": path, "reason": reason})
             log(f"BROKEN: {row['filename']}  ({reason})")
 
-    log(f"Verify done — checked {checked}, present {present}, broken {len(broken)}.")
+    log(f"Verify done — checked {checked}, present {present}, broken {len(broken)}"
+        + (" [deep]" if deep else "") + ".")
     return {"checked": checked, "present": present, "broken": broken}
 
 

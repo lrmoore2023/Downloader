@@ -47,6 +47,7 @@ from backend.pawchive_scraper import (
     make_session, parse_creator_url, iter_posts, fetch_json,
     parse_post, fetch_creator_name, build_filename, add_index_suffix,
     target_path, site_code, _kind_and_ext, to_mirror, post_url, API, MIRROR_BASE,
+    is_cloudflare_challenge,
     # HTTP-backend-agnostic exception classes (curl_cffi or requests) — the runner
     # MUST catch these, not requests.*, or every try/except silently stops catching.
     HTTPError, ConnectionError, Timeout, RequestException,
@@ -58,6 +59,7 @@ from backend.download_errors import FailureStore
 from backend.coomerfans_runner import (
     expected_total, ffprobe_ok, _TRANSIENT_READ_STATUSES,
 )
+from backend.coomerfans_scraper import norm_year_range, year_scan_decision
 
 
 def _url_basename(url):
@@ -228,6 +230,13 @@ class PawchiveRunner:
         self._dl_sessions = []            # every worker session, for cleanup
         self._dl_sessions_lock = threading.Lock()
         self._cookies_path = None
+        # UA the embedded browser used to earn a Cloudflare cf_clearance cookie; pinned
+        # on every session so the replayed cookie validates (see make_session).
+        self._user_agent = None
+        # Set True when a request hits Cloudflare's "Just a moment…" challenge — the
+        # signal for the UI to prompt a one-click "Reconnect pawchive" (a JS challenge
+        # can't be retried away). Reset per run.
+        self._needs_cf_auth = False
         # API pacer only: the crawl is ~1 request/page and rate-limits gently. File
         # downloads no longer use a global throttle/cooldown — each worker backs off
         # and RESUMES on its own (the CDN is flaky and breaks mid-transfer even in a
@@ -411,7 +420,8 @@ class PawchiveRunner:
 
     def run(self, creator_url, destination, mode, archive_path, links_path,
             on_progress, on_complete, on_error, cookies_path=None, year=None,
-            errors_path=None, error_entries=None):
+            errors_path=None, error_entries=None, user_agent=None,
+            year_range=None):
         self.downloaded_count = self.skipped_count = self.error_count = 0
         # Targeted 'errors' run: only re-attempt these recorded failures (a specific
         # post / file / year the user asked to recheck). None = every recorded error.
@@ -434,6 +444,12 @@ class PawchiveRunner:
         self._active = 0
         self._active_max = 0
         self._cookies_path = cookies_path
+        self._user_agent = user_agent or None
+        self._needs_cf_auth = False
+        # Inclusive (lo, hi) year bounds, or None for "all years". A single-year
+        # 'Download Year' run collapses to (y, y); 'Fetch Latest' with a saved/one-off
+        # range supplies real bounds; 'full' has none. See _crawl.
+        self._year_range = norm_year_range(year, year_range)
         self._diag = _Diag(_DIAG_PATH)
         self._running = True
         self._on_progress = on_progress
@@ -459,7 +475,8 @@ class PawchiveRunner:
                 return
             self._service = creator["service"]
             self._user_id = creator["user_id"]
-            self._session = make_session(cookies_path=cookies_path)
+            self._session = make_session(cookies_path=cookies_path,
+                                         user_agent=self._user_agent)
             # Pick a working host up front so a down/hung pawchive.st doesn't make
             # every request eat a timeout before failing over.
             self._check_primary_or_failover()
@@ -500,11 +517,11 @@ class PawchiveRunner:
             # (fresh post fetch → fresh URL), instead of crawling the whole listing.
             # self._error_entries (when set) narrows it to a specific post/file/year.
             if mode == "errors":
-                self._recover_errors(year, entries=self._error_entries)
+                self._recover_errors(entries=self._error_entries)
                 self._finish(on_complete)
                 return
 
-            media_jobs, ext_jobs, posts = self._crawl(year)
+            media_jobs, ext_jobs, posts = self._crawl(self._year_range)
             if self._cancelled():
                 self._info("Cancelled during crawl.")
                 self._finish(on_complete)
@@ -531,7 +548,7 @@ class PawchiveRunner:
             #    picking up files pawchive has imported since. It touches only failure-
             #    store entries (never archived files), so deletions are never resurrected.
             if mode in ("full", "redownload_year", "latest") and not self._cancelled():
-                self._recover_errors(year, crawl_fallback=False)
+                self._recover_errors(crawl_fallback=False)
 
             self._finish(on_complete)
         except Exception as e:
@@ -570,14 +587,14 @@ class PawchiveRunner:
             f"peak {summary['max_concurrency']} concurrent, {elapsed}s")
 
     # ── crawl + build jobs ───────────────────────────────────
-    def _crawl(self, year):
+    def _crawl(self, year_range=None):
         self._info("Crawling creator posts...")
 
         def on_page(page, n):
             self._info(f"Page {page}: {n} post(s)")
 
         media_jobs, ext_jobs, posts = [], [], {}
-        yr = int(year) if year else None
+        rng = year_range
         posts_since_flush = 0
         pending_skipped = 0   # posts pawchive hasn't imported yet (no files to fetch)
         pending_logged = 0    # of those, how many are NEWLY logged as errors this run
@@ -591,16 +608,20 @@ class PawchiveRunner:
             if self._cancelled():
                 break
             post = parse_post(raw)
-            # Year-scoped download ('Download Year'): the listing is strictly
-            # newest->oldest by published date, so once we drop below the target
-            # year we can STOP paginating — older pages can't contain it. Checked
-            # before any detail fetch so out-of-year posts cost nothing.
-            if yr is not None:
+            # Year-scoped download ('Download Year' single year, or 'Fetch Latest'
+            # over a saved/one-off year range): the listing is strictly newest->oldest
+            # by published date, so once we drop below the range's LOWER bound we can
+            # STOP paginating — older pages can't contain an in-range post. Posts newer
+            # than the range are skipped but we keep paging down toward it. Checked
+            # before any detail fetch so out-of-range posts cost nothing. (An undated
+            # post is skipped by year_in_range — it can't be placed in a bounded range.)
+            if rng is not None:
                 pdt = post["dt"]
-                if pdt and pdt.year < yr:
-                    break                       # past the year; no older pages needed
-                if not pdt or pdt.year != yr:
-                    continue                    # newer year (page toward target) / no date
+                decision = year_scan_decision(pdt.year if pdt else None, rng)
+                if decision == "stop":
+                    break                       # past the range; no older pages needed
+                if decision == "skip":
+                    continue
             # Un-imported listing entries (detail_fetched=False) usually still
             # carry their media inline, so only spend an extra per-post API request
             # when the listing gave us NO media for such a post. This cuts the crawl
@@ -818,6 +839,19 @@ class PawchiveRunner:
             except HTTPError as e:
                 resp = getattr(e, "response", None)
                 status = getattr(resp, "status_code", None)
+                # Cloudflare's "Just a moment…" JS challenge — pawchive's API is now
+                # behind it. A plain retry can't clear a JS challenge (only a browser
+                # solving it can), so flag it for a one-click "Reconnect pawchive" and
+                # stop this crawl instead of silently reporting "not retriable".
+                if is_cloudflare_challenge(resp):
+                    self._needs_cf_auth = True
+                    self._diag.log("cf_challenge", host=urlsplit(target).netloc,
+                                   what=what, attempt=attempt, status=status)
+                    self._error(
+                        f"{what}: HTTP {status} — pawchive is behind a Cloudflare "
+                        "check. Open Settings → Pawchive and click "
+                        "“Connect / Reconnect”, then run this again.")
+                    return None
                 # A DDoS-Guard block page (403/503) is transient — retry it like a
                 # rate limit rather than giving up as 'not retriable'.
                 dg_block = status in (403, 503) and self._is_ddos_guard(resp)
@@ -889,6 +923,7 @@ class PawchiveRunner:
         s = getattr(self._tls, "session", None)
         if s is None:
             s = make_session(cookies_path=self._cookies_path,
+                             user_agent=self._user_agent,
                              proxies=self._proxy_dict())
             self._tls.session = s
             with self._dl_sessions_lock:
@@ -1611,7 +1646,7 @@ class PawchiveRunner:
             slept += 0.5
 
     # ── redownload-errors recovery ───────────────────────────
-    def _recover_errors(self, year, crawl_fallback=True, entries=None):
+    def _recover_errors(self, crawl_fallback=True, entries=None):
         """Re-attempt this creator's recorded on-site failures (state 'failed' or
         'gone') with a FRESH post fetch (a pawchive re-upload changes the
         content-addressed URL, so an old 404 can resolve to a new path). Files still
@@ -1661,7 +1696,7 @@ class PawchiveRunner:
                 return
             self._info("No recorded errors for this creator — running a full "
                        "crawl + reconcile to find and retry any missing files.")
-            media_jobs, ext_jobs, posts = self._crawl(year)
+            media_jobs, ext_jobs, posts = self._crawl(self._year_range)
             if self._cancelled():
                 return
             self._info(f"{len(media_jobs)} media item(s) + {len(ext_jobs)} direct "
@@ -1854,7 +1889,8 @@ class PawchiveRunner:
 
     def _stats(self, cancelled):
         return {"downloaded": self.downloaded_count, "skipped": self.skipped_count,
-                "errors": self.error_count, "cancelled": cancelled}
+                "errors": self.error_count, "cancelled": cancelled,
+                "needs_cf_auth": self._needs_cf_auth}
 
     def _finish(self, on_complete):
         on_complete(self._stats(cancelled=self._cancelled()))

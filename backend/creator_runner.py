@@ -195,7 +195,8 @@ class CreatorRunner:
             cookies_path, cookies_browser, on_progress, on_complete, on_error,
             derpibooru_api_key=None, derpibooru_filter_id=None,
             discord_token=None, discord_token_type=None, refresh_links=True,
-            error_entries=None):
+            error_entries=None, pawchive_cookies_path=None,
+            pawchive_user_agent=None, year_range=None):
         # A targeted 'errors' recheck (specific pawchive failures the user picked in
         # the panel — a file/post/year). Only pawchive uses the per-entry failure
         # store, so a targeted run skips other platforms (which treat 'errors' as a
@@ -209,8 +210,17 @@ class CreatorRunner:
         self._derpibooru_filter_id = derpibooru_filter_id or None
         self._discord_token = discord_token or None
         self._discord_token_type = discord_token_type or "user"
+        # Pawchive Cloudflare clearance (cookies.txt + the UA that earned it), captured
+        # by Api.connect_pawchive. Fed to PawchiveRunner so its API crawl clears the
+        # "Just a moment…" challenge; empty when the user hasn't connected yet.
+        self._pawchive_cookies_path = pawchive_cookies_path or None
+        self._pawchive_user_agent = pawchive_user_agent or None
+        # Inclusive year-range for a 'Fetch Latest' run (pawchive/coomerfans only);
+        # None = all years. Resolved by the API layer (one-off vs saved default).
+        self._year_range = year_range
         self._running = True
         self._cancel.clear()
+        self._needs_cf_auth = False
         self.downloaded_count = self.skipped_count = self.error_count = 0
         try:
             links = filter_links(creator.get("links", []), scope)
@@ -301,6 +311,7 @@ class CreatorRunner:
             on_error=err,
             year=year,
             errors_path=errors_path,
+            year_range=self._year_range,
         )
         self._accumulate(stats)
 
@@ -340,6 +351,9 @@ class CreatorRunner:
             year=year,
             errors_path=errors_path,
             error_entries=self._error_entries,
+            cookies_path=self._pawchive_cookies_path,
+            user_agent=self._pawchive_user_agent,
+            year_range=self._year_range,
         )
         self._accumulate(stats)
 
@@ -522,6 +536,10 @@ class CreatorRunner:
         self.downloaded_count += stats.get("downloaded", 0) or 0
         self.skipped_count += stats.get("skipped", 0) or 0
         self.error_count += stats.get("errors", 0) or 0
+        # A pawchive sub-run hit Cloudflare's challenge → surface it on the aggregate
+        # so the UI can prompt a one-click "Reconnect pawchive".
+        if stats.get("needs_cf_auth"):
+            self._needs_cf_auth = True
 
     def _stats(self):
         return {
@@ -529,4 +547,5 @@ class CreatorRunner:
             "skipped": self.skipped_count,
             "errors": self.error_count,
             "cancelled": self._cancel.is_set(),
+            "needs_cf_auth": getattr(self, "_needs_cf_auth", False),
         }

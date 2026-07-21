@@ -9,3 +9,16 @@ curl_cffi>=0.7
 # Bundles a static ffmpeg binary so the in-app media browser can generate
 # thumbnails without a manual system ffmpeg install.
 imageio-ffmpeg>=0.5
+# Album downloader (Albums tab). cyberdrop-dl is the primary engine for bunkr &
+# cyberdrop albums — it's the most hardened tool for bunkr's flaky rotating CDN
+# (tracks down sub-servers, retries around them). gallery-dl (above) is the
+# fallback for those two and the sole engine for filester.
+cyberdrop-dl-patched>=10.2
+# Duplicate/similar-media detection (Duplicates panel). Pillow+imagehash reproduce
+# czkawka's default Mean@16 image hash; numpy+scipy run the similario-style 3D-DCT
+# video hash; pybktree is the BK-tree nearest-neighbour index over Hamming distance.
+Pillow>=10
+imagehash>=4.3
+numpy>=1.26
+scipy>=1.11
+pybktree>=1.1

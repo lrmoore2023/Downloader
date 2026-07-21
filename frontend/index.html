@@ -21,6 +21,8 @@
                 <div class="segmented header-toggle" id="viewToggle">
                     <button class="seg active" data-view="creator" onclick="switchView('creator')">Creator</button>
                     <button class="seg" data-view="gallery" onclick="switchView('gallery')">Gallery</button>
+                    <button class="seg" data-view="dupes" onclick="switchView('dupes')">Duplicates</button>
+                    <button class="seg" data-view="albums" onclick="switchView('albums')">Albums</button>
                 </div>
                 <div class="header-status">
                     <div class="running-indicator" id="runningIndicator">
@@ -113,6 +115,11 @@
                             </svg>
                             Verify &amp; Repair
                         </button>
+                        <label class="checkbox-option" id="deepVerifyOpt" style="margin-right: 8px;"
+                               title="Also decode-scan videos to catch files that are the right size but internally corrupt (from an interrupted download). Slower — reads each video's tail.">
+                            <input type="checkbox" id="deepVerify">
+                            <span class="checkbox-label">Deep scan</span>
+                        </label>
                         <button class="btn btn-warning" id="btnRedownloadErrors" onclick="redownloadErrors()" style="display: none;" title="Re-attempt files that failed to download. Anything still gone upstream is listed below with its direct URL + post page for a manual grab.">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M23 4v6h-6"/>
@@ -129,6 +136,7 @@
                     </div>
 
                     <span class="field-hint">Fetch Latest grabs only posts not downloaded before (including older posts imported later) and retries files that previously errored or weren't imported yet — without re-downloading the rest of a post — while never re-downloading anything you deleted. For pawchive, new files are staged in a <code>_latest\</code> folder mirroring the year structure — review them there, then drag what you want into the proper year folders.</span>
+                    <div class="field-hint" id="latestRangeInfo" style="display: none; margin-top: 4px;"></div>
 
                     <div class="download-modifier" id="refreshLinksRow" style="display: none;">
                         <label class="checkbox-option">
@@ -150,6 +158,24 @@
                             Download Year
                         </button>
                         <span class="field-hint">Downloads (or re-fetches) a single year for the links in the selected scope — pick a year even before a full download.</span>
+                    </div>
+
+                    <div class="actions-row">
+                        <select class="select-field" id="latestRangeStart" style="min-width: 90px;">
+                            <option value="">From…</option>
+                        </select>
+                        <span class="field-hint" style="flex: 0 0 auto;">–</span>
+                        <select class="select-field" id="latestRangeEnd" style="min-width: 90px;">
+                            <option value="">…to</option>
+                        </select>
+                        <button class="btn btn-ghost" id="btnFetchLatestRange" onclick="fetchLatestRange()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
+                            </svg>
+                            Fetch Latest (years)
+                        </button>
+                        <span class="field-hint">One-off Fetch Latest limited to these years (pawchive &amp; coomerfans only). Leave a side blank for open-ended. Does <b>not</b> change the creator's saved range.</span>
                     </div>
                 </div>
 
@@ -227,6 +253,147 @@
                 </div>
                 <div class="media-grid" id="mediaGrid"></div>
             </div>
+
+            <!-- Scrollable content: Duplicates / similar media -->
+            <div class="tab-content" id="dupesView" style="display: none;">
+                <div class="dupes-toolbar">
+                    <span class="media-title" id="dupeCreatorName">No creator selected</span>
+                    <div class="segmented" id="dupeMode">
+                        <button class="seg active" data-mode="within" onclick="setDupeMode('within')">Within creator</button>
+                        <button class="seg" data-mode="new" onclick="setDupeMode('new')">Process _new</button>
+                        <button class="seg" data-mode="ref_check" onclick="setDupeMode('ref_check')">Reference vs Check</button>
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="dupeScanBtn" onclick="startDupeScan()">Scan</button>
+                    <button class="btn btn-danger btn-sm" id="dupeCancelBtn" onclick="cancelDupe()" style="display: none;">Cancel</button>
+                    <button class="btn btn-ghost btn-sm" id="dupeUndoBtn" onclick="undoDupe()" style="display: none;" title="Undo the last Apply — restores files and archive">Undo last apply</button>
+                    <span class="field-hint" id="dupeStatus" style="margin-left: auto;"></span>
+                </div>
+
+                <div class="dupes-controls" id="dupeControls">
+                    <div class="dupe-slider">
+                        <span class="form-label">Similarity</span>
+                        <input type="range" id="dupeDistance" class="slider-field" min="0" max="40" step="1" value="10"
+                               oninput="dupeDistInput(this.value)">
+                        <span class="field-hint">Hamming ≤<span id="dupeDistVal">10</span> · <span id="dupeDistPreset">Krokiet default</span> — lower = stricter</span>
+                    </div>
+                    <label class="checkbox-option">
+                        <input type="checkbox" id="dupeOrient">
+                        <span class="checkbox-label">Also match rotated / mirrored copies</span>
+                    </label>
+                    <div class="dupes-refcheck" id="dupeRefCheck" style="display: none;">
+                        <button class="btn btn-ghost btn-sm" onclick="pickDupeFolder('ref')">Reference folder…</button>
+                        <span class="field-hint dupe-path" id="dupeRefPath">— reference (the “correct” names)</span>
+                        <button class="btn btn-ghost btn-sm" onclick="pickDupeFolder('check')">Check folder…</button>
+                        <span class="field-hint dupe-path" id="dupeCheckPath">— check (files acted on)</span>
+                    </div>
+                    <span class="field-hint" id="dupeModeHint"></span>
+                </div>
+
+                <div class="dupes-applybar" id="dupeApplyBar" style="display: none;">
+                    <button class="btn btn-primary btn-sm" onclick="applyDupe()">Apply selected</button>
+                    <span class="field-hint" id="dupeApplyHint"></span>
+                </div>
+
+                <div class="dupes-results" id="dupeResults"></div>
+            </div>
+
+            <!-- Albums view: ad-hoc album downloader (bunkr / cyberdrop / filester) -->
+            <div class="tab-content" id="albumsView" style="display: none;">
+                <div class="section">
+                    <div class="section-title">Album downloader</div>
+                    <div class="segmented" id="albumMode" style="margin-bottom: 10px;">
+                        <button class="seg active" data-amode="quick" onclick="setAlbumMode('quick')">Quick download</button>
+                        <button class="seg" data-amode="creator" onclick="setAlbumMode('creator')">Saved creators</button>
+                    </div>
+                    <div class="field-hint" style="margin-bottom: 10px;">
+                        Whole-album downloads from <strong>bunkr</strong>, <strong>cyberdrop</strong> and <strong>filester</strong> — each into its own subfolder.
+                        Locked filester folder? append the password: <code>https://filester…/f/ID | password</code>
+                    </div>
+
+                    <!-- Quick (ad-hoc) mode -->
+                    <div id="albumQuick">
+                        <div class="form-row">
+                            <span class="form-label">Folder</span>
+                            <button class="btn btn-ghost btn-sm" onclick="pickAlbumDest()">Browse…</button>
+                            <span class="field-hint album-path" id="albumDestPath" style="flex: 1;">— no folder chosen</span>
+                        </div>
+                        <div class="form-row" style="align-items: stretch;">
+                            <span class="form-label">Links</span>
+                            <textarea id="albumLinks" class="input-field album-links" rows="5"
+                                      placeholder="https://cyberdrop.cr/a/…&#10;https://bunkr.cr/a/…&#10;https://filester.gg/f/…  (| password if locked)"></textarea>
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label"></span>
+                            <button class="btn btn-primary btn-sm" id="albumDownloadBtn" onclick="downloadQuick()">Download all</button>
+                        </div>
+                    </div>
+
+                    <!-- Saved-creator mode (isolated from the regular downloader's creators) -->
+                    <div id="albumCreator" style="display: none;">
+                        <div class="form-row">
+                            <span class="form-label">Creator</span>
+                            <select class="select-field" id="albumCreatorSelect" style="flex: 1;" onchange="onAlbumCreatorChange()">
+                                <option value="">— select a creator —</option>
+                            </select>
+                            <button class="btn btn-ghost btn-sm" onclick="newAlbumCreator()">+ New</button>
+                            <button class="btn btn-ghost btn-sm" id="albumCreatorDelete" onclick="deleteAlbumCreator()" style="display: none;">Delete</button>
+                        </div>
+                        <div class="form-row" id="albumCreatorRootRow" style="display: none;">
+                            <span class="form-label">Root</span>
+                            <span class="field-hint album-path" id="albumCreatorRoot" style="flex: 1;"></span>
+                            <button class="btn btn-ghost btn-sm" onclick="openAlbumCreatorFolder()">Open</button>
+                        </div>
+                        <div id="albumLinkList" class="album-link-list"></div>
+                        <div class="form-row" id="albumAddRow" style="display: none;">
+                            <span class="form-label">Add link</span>
+                            <input id="albumNewLink" class="input-field" style="flex: 1;"
+                                   placeholder="bunkr / cyberdrop / filester URL"
+                                   onkeydown="if(event.key==='Enter')addAlbumLink()">
+                            <input id="albumNewPassword" class="input-field" style="width: 170px;"
+                                   placeholder="password (filester, optional)"
+                                   onkeydown="if(event.key==='Enter')addAlbumLink()">
+                            <button class="btn btn-ghost btn-sm" onclick="addAlbumLink()">Add</button>
+                        </div>
+                        <div class="form-row" id="albumCreatorActions" style="display: none;">
+                            <span class="form-label"></span>
+                            <button class="btn btn-primary btn-sm" id="albumDownloadSelBtn" onclick="downloadSelectedCreator()">Download selected</button>
+                        </div>
+                    </div>
+
+                    <!-- Dedup prompt (already-downloaded albums) -->
+                    <div id="albumDedupPrompt" class="album-dedup" style="display: none;"></div>
+
+                    <!-- Shared cancel + status -->
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <button class="btn btn-danger btn-sm" id="albumCancelBtn" onclick="cancelAlbum()" style="display: none;">Cancel</button>
+                        <span class="field-hint" id="albumStatus" style="margin-left: auto;"></span>
+                    </div>
+                </div>
+
+                <div class="section" id="albumStatsSection" style="display: none;">
+                    <div class="stats-bar">
+                        <span class="stat-item"><span class="stat-label">Downloaded</span> <span id="albumStatDownloaded">0</span></span>
+                        <span class="stat-item"><span class="stat-label">Skipped</span> <span id="albumStatSkipped">0</span></span>
+                        <span class="stat-item"><span class="stat-label">Errors</span> <span id="albumStatErrors">0</span></span>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Output log
+                        <button class="btn btn-ghost btn-sm" onclick="copyAlbumLog()" style="margin-left: 10px;">Copy log</button>
+                    </div>
+                    <div class="log-container" id="albumLog"></div>
+                </div>
+
+                <div class="section" id="albumErrorsSection" style="display: none;">
+                    <div class="section-title">Files that failed
+                        <button class="btn btn-ghost btn-sm" id="albumRetryBtn" onclick="retryAlbumFailed()"
+                                style="margin-left: 10px;">Retry failed</button>
+                    </div>
+                    <div class="links-panel" id="albumErrors"></div>
+                </div>
+            </div>
         </main>
     </div>
 
@@ -273,6 +440,18 @@
                     <button class="btn btn-secondary btn-sm" id="cfgAddBtn" onclick="cfgAddLink()">Add Link</button>
                 </div>
                 <div class="field-hint" id="cfgLinkPreview" style="min-height: 16px;"></div>
+
+                <div class="section-title" style="margin-top: 14px;">Fetch Latest range</div>
+                <div class="form-row">
+                    <span class="form-label">Years</span>
+                    <input type="number" class="input-field" id="cfgRangeStart" placeholder="From (e.g. 2024)" style="max-width: 160px;" min="2006" max="2100">
+                    <span class="field-hint" style="flex: 0 0 auto;">–</span>
+                    <input type="number" class="input-field" id="cfgRangeEnd" placeholder="To (e.g. 2026)" style="max-width: 160px;" min="2006" max="2100">
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">When set, this creator's <b>Fetch Latest</b> only grabs posts published in this range (pawchive &amp; coomerfans). Leave <b>both</b> blank to fetch every year; leave one side blank for open-ended (e.g. From 2024 = 2024 onward). Set it once — it sticks until you change it.</span>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-danger btn-sm" id="cfgDeleteBtn" onclick="cfgDelete()" style="margin-right: auto;">Delete Creator</button>
@@ -377,6 +556,15 @@
                     <span class="form-label"></span>
                     <span class="field-hint">After a pack downloads, sort its images into Images/&lt;year&gt; and videos into &lt;year&gt; (named like your other files); any other files are kept together in a folder named after the archive. The original archive is deleted once extracted.</span>
                 </div>
+                <div class="form-row">
+                    <span class="form-label">Cloudflare access</span>
+                    <span id="pawCfStatus" class="status-badge status-idle">Checking…</span>
+                    <button class="btn btn-secondary btn-sm" id="pawCfConnectBtn" onclick="connectPawchive()">Connect</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint" id="pawCfHint">Pawchive now sits behind a Cloudflare check that blocks the app. Click <b>Connect</b> — a small window opens, clears the check automatically (usually a second or two), and the app remembers it. If a fetch later fails with a Cloudflare message, just click <b>Reconnect</b>.</span>
+                </div>
 
                 <div class="section-title" style="margin-top: 16px;">Pawchive Link Filters</div>
                 <div class="field-hint" style="margin-bottom: 10px;">
@@ -463,6 +651,8 @@
     <script src="js/creators.js"></script>
     <script src="js/gallery.js"></script>
     <script src="js/media.js"></script>
+    <script src="js/dupes.js"></script>
+    <script src="js/album.js"></script>
     <script src="js/overlays.js"></script>
     <script src="js/app.js"></script>
 </body>

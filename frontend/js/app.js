@@ -42,7 +42,13 @@ window.onCreatorComplete = function (data) {
     if (data.cancelled) Logger.info('Operation cancelled.');
     Logger.success(msg);
 
-    if (data.cancelled) {
+    if (data.needs_cf_auth) {
+        // Pawchive hit Cloudflare's challenge — open Settings so the Reconnect
+        // button is one click away, and refresh the badge to show the state.
+        showToast('Pawchive needs a Cloudflare reconnect — opening Settings…', 'error');
+        if (typeof openSettings === 'function') openSettings();
+        if (typeof refreshPawCfStatus === 'function') refreshPawCfStatus();
+    } else if (data.cancelled) {
         showToast('Cancelled', 'info');
     } else if (data.errors === 0) {
         showToast(`Done! ${data.downloaded} file(s) downloaded`, 'success');

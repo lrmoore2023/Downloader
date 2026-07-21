@@ -104,6 +104,7 @@ function setUpdateDiscordTokenType() {
 async function openSettings() {
     document.getElementById('settingsOverlay').classList.add('visible');
     loadLinkFilters();
+    refreshPawCfStatus();
     try {
         const roots = await pywebview.api.list_library_roots();
         document.getElementById('setRootsInfo').textContent = roots.length
@@ -288,6 +289,56 @@ async function extractBrowserCookies() {
     }
 }
 
+// ── Pawchive Cloudflare access ──────────────────────────────────
+
+// Live status pushed from the backend while the connect window is open.
+window.onPawchiveConnectStatus = function (data) {
+    const badge = document.getElementById('pawCfStatus');
+    if (badge && data && data.message) {
+        badge.textContent = data.message;
+        badge.className = 'status-badge status-idle';
+    }
+};
+
+function setPawCfBadge(connected, message, capturedAt) {
+    const badge = document.getElementById('pawCfStatus');
+    const btn = document.getElementById('pawCfConnectBtn');
+    if (badge) {
+        badge.textContent = message || (connected ? 'Connected' : 'Not connected');
+        badge.className = 'status-badge ' + (connected ? 'status-ok' : 'status-warn');
+    }
+    if (btn) btn.textContent = connected ? 'Reconnect' : 'Connect';
+}
+
+async function refreshPawCfStatus() {
+    try {
+        const s = await pywebview.api.pawchive_cf_status();
+        setPawCfBadge(!!(s && s.connected), s && s.message, s && s.captured_at);
+    } catch (e) { /* ignore */ }
+}
+
+async function connectPawchive() {
+    const btn = document.getElementById('pawCfConnectBtn');
+    const badge = document.getElementById('pawCfStatus');
+    if (btn) btn.disabled = true;
+    if (badge) {
+        badge.textContent = 'Connecting…';
+        badge.className = 'status-badge status-idle';
+    }
+    try {
+        const res = await pywebview.api.connect_pawchive();
+        if (res && res.ok) {
+            setPawCfBadge(true, 'Connected', '');
+        } else {
+            setPawCfBadge(false, (res && res.message) || 'Connection failed', '');
+        }
+    } catch (e) {
+        setPawCfBadge(false, 'Connection failed', '');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // ── Configure Links overlay ─────────────────────────────────────
 
 let cfgEditingId = '';      // '' = creating a new creator
@@ -301,6 +352,9 @@ function openConfigure() {
     document.getElementById('cfgName').value = currentCreator.name || '';
     document.getElementById('cfgDest').value = currentCreator.destination || '';
     setCfgType(currentCreator.category, currentCreator.subcategory);
+    const r = currentCreator.latest_range || {};
+    document.getElementById('cfgRangeStart').value = (r.start != null) ? r.start : '';
+    document.getElementById('cfgRangeEnd').value = (r.end != null) ? r.end : '';
     document.getElementById('cfgDeleteBtn').style.display = '';
     openConfigureCommon();
 }
@@ -312,6 +366,8 @@ function openNewCreator() {
     document.getElementById('cfgName').value = '';
     document.getElementById('cfgDest').value = '';
     setCfgType('', '');
+    document.getElementById('cfgRangeStart').value = '';
+    document.getElementById('cfgRangeEnd').value = '';
     document.getElementById('cfgDeleteBtn').style.display = 'none';
     openConfigureCommon();
 }
@@ -499,12 +555,16 @@ async function cfgSave() {
     const destination = document.getElementById('cfgDest').value.trim();
     if (!destination) { showToast('Choose a destination folder', 'error'); return; }
 
+    const rangeStart = document.getElementById('cfgRangeStart').value.trim();
+    const rangeEnd = document.getElementById('cfgRangeEnd').value.trim();
     const creator = {
         id: cfgEditingId || undefined,
         name: document.getElementById('cfgName').value.trim(),
         // Type is derived from the destination folder by the backend — not sent.
         destination,
         links: cfgLinksData.map(l => ({ url: l.url, tag: l.tag || '' })),
+        // Saved Fetch Latest range (blank sides = open/all). Backend cleans + orders it.
+        latest_range: { start: rangeStart || null, end: rangeEnd || null },
     };
     const res = await pywebview.api.save_creator(creator);
     if (res && res.error) { showToast(res.error, 'error'); return; }

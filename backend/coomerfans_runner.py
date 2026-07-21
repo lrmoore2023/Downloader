@@ -27,6 +27,7 @@ import requests
 from backend.coomerfans_scraper import (
     make_session, parse_creator_url, iter_post_urls, parse_post, fetch_html,
     refresh_media_url, build_filename, target_path, site_code,
+    norm_year_range, year_in_range,
 )
 from backend.coomerfans_archive import Archive, entry_key
 from backend.download_errors import FailureStore
@@ -35,6 +36,7 @@ from backend.download_errors import FailureStore
 # fresh one" rather than "retry the same URL".
 _EXPIRED_STATUSES = (401, 403, 404, 410)
 _GONE_REFRESH_LIMIT = 4   # give up (flag error) after this many refresh-resistant gone responses
+_VIDEO_RESTART_LIMIT = 10  # give up on a video whose connection keeps breaking (never resumes)
 
 # Transient HTTP statuses for page/post *reads* (server hiccups, rate limits,
 # Cloudflare 52x). coomerfans intermittently 500s on a valid post; a retry a
@@ -59,6 +61,14 @@ def expected_total(response, resume_pos):
         cl = int(cl)
         return cl if response.status_code == 200 else resume_pos + cl
     return None
+
+
+def content_range_start(response):
+    """Start byte of a 206 'Content-Range: bytes START-END/TOTAL' header, or None
+    if absent/unparseable. Used to confirm a resume actually continues from where
+    our .part ends before we append to it."""
+    m = re.search(r"bytes\s+(\d+)\s*-", response.headers.get("Content-Range", ""))
+    return int(m.group(1)) if m else None
 
 
 def url_is_expired(url, margin=120):
@@ -131,7 +141,7 @@ class CoomerfansRunner:
 
     def run(self, creator_url, destination, mode, archive_path,
             on_progress, on_complete, on_error, cookies_path=None, year=None,
-            errors_path=None):
+            errors_path=None, year_range=None):
         self.downloaded_count = self.skipped_count = self.error_count = 0
         self._cancel_event.clear()
         self._claimed.clear()
@@ -139,6 +149,10 @@ class CoomerfansRunner:
         self._on_progress = on_progress
         self._destination = destination
         self._mode = mode
+        # Inclusive (lo, hi) year bounds, or None for "all years". Single-year
+        # 'Download Year' collapses to (y, y); 'Fetch Latest' may carry a saved/one-off
+        # range. See handle_post in _crawl_and_parse.
+        self._year_range = norm_year_range(year, year_range)
 
         try:
             creator = parse_creator_url(creator_url)
@@ -152,7 +166,7 @@ class CoomerfansRunner:
             self._archive = Archive(archive_path) if archive_path else None
             self._errors = FailureStore(errors_path) if errors_path else None
 
-            jobs = self._crawl_and_parse(creator_url, year)
+            jobs = self._crawl_and_parse(creator_url)
             if self._cancelled():
                 self._info("Cancelled during crawl.")
                 self._finish(on_complete)
@@ -176,7 +190,7 @@ class CoomerfansRunner:
             self._running = False
 
     # ── crawl + parse ────────────────────────────────────────
-    def _crawl_and_parse(self, creator_url, year):
+    def _crawl_and_parse(self, creator_url):
         self._info("Crawling creator pages...")
 
         def on_page(page, n):
@@ -214,11 +228,18 @@ class CoomerfansRunner:
                         failed.append(post_url)
                 return
 
+            # Year-scoped run ('Download Year' or a 'Fetch Latest' range): skip the
+            # whole post when its date falls outside the bounds (undated posts can't be
+            # placed, so they're skipped too). Hoisted out of the media loop — it's a
+            # per-post decision.
+            if self._year_range is not None:
+                py = info["dt"].year if info["dt"] else None
+                if not year_in_range(py, self._year_range):
+                    return
+
             # Filenames use the post_id (the /p/{postId}/ number), not a title slug.
             name = str(info["post_id"])
             for idx, m in enumerate(info["media"], 1):
-                if year and (not info["dt"] or info["dt"].year != int(year)):
-                    continue
                 job = {
                     "post_url": info["url"],
                     "post_id": info["post_id"],
@@ -378,6 +399,17 @@ class CoomerfansRunner:
         attempt = 0
         backoff = 5
         gone_refreshes = 0
+        video_restarts = 0
+
+        # Videos: prefer a segmented download — small byte-range chunks with per-chunk
+        # retry. Coomer serves byte-accurate ranges, so this reliably completes even
+        # flaky/large files a single stream can't (a dropped chunk is retried cheaply),
+        # and it never stitches bytes across a signed-URL refresh. Returns None if the
+        # server doesn't advertise usable range support -> fall through to streaming.
+        if job["kind"] == "video":
+            seg = self._download_segmented(job, dest_path, entry, filename)
+            if seg is not None:
+                return seg
 
         while not self._cancelled():
             attempt += 1
@@ -391,6 +423,23 @@ class CoomerfansRunner:
 
             try:
                 resume_pos = os.path.getsize(part) if os.path.exists(part) else 0
+                # Coomer serves byte-MISALIGNED data on video Range-resumes: the 206's
+                # Content-Range start matches what we asked for, but the bytes don't line
+                # up, so a resumed video finalizes at the correct size yet is internally
+                # corrupt (garbage mid-stream). A fresh single-shot download is always
+                # clean. So never resume a video — discard any partial and restart from
+                # zero, giving up only after too many broken connections.
+                if job["kind"] == "video" and resume_pos:
+                    self._discard(part)
+                    resume_pos = 0
+                    video_restarts += 1
+                    if video_restarts > _VIDEO_RESTART_LIMIT:
+                        self._bump("error")
+                        self._error(
+                            f"Connection kept breaking after {video_restarts} clean restarts, "
+                            f"skipping: {filename}  [{job['post_url']}]")
+                        self._record_failure(entry, job, filename, url, "repeated connection breaks")
+                        return False
                 headers = {}
                 open_mode = "wb"
                 if resume_pos:
@@ -440,6 +489,20 @@ class CoomerfansRunner:
                         resume_pos = 0
                         open_mode = "wb"
 
+                    # A 206 MUST continue from exactly where our .part ends. If the
+                    # server resumes from a different offset (or omits Content-Range),
+                    # appending would stitch misaligned bytes into a right-length but
+                    # internally-corrupt file (garbage mid-stream, passes the size
+                    # check). Discard the .part and restart clean instead.
+                    if resume_pos and r.status_code == 206:
+                        start = content_range_start(r)
+                        if start != resume_pos:
+                            self._info(
+                                f"Resume misaligned for {filename} "
+                                f"(server start={start}, expected {resume_pos}); restarting clean")
+                            self._discard(part)
+                            continue
+
                     # Error-page guard: HTML/JSON where media is expected (e.g. an
                     # expired URL that 200s with an error page) -> refresh, don't write it.
                     ctype = (r.headers.get("Content-Type") or "").lower()
@@ -485,6 +548,111 @@ class CoomerfansRunner:
                 self._sleep_cancellable(backoff)
                 backoff = min(backoff * 2, 120)
         return False
+
+    def _download_segmented(self, job, dest_path, entry, filename, chunk=8 << 20,
+                            max_refreshes=5):
+        """Download a video in verified byte-range chunks. Returns True (done),
+        False (failed after retries), or None (no usable range support -> caller
+        falls back to the streaming path)."""
+        part = dest_path + ".part"
+        url = job["url"]
+        if url_is_expired(url):
+            fresh = refresh_media_url(self._session, job["post_url"], job["path_key"])
+            if fresh:
+                url = fresh
+
+        # Probe for total size + range support.
+        try:
+            pr = self._session.get(
+                url, headers={"Range": "bytes=0-0"}, stream=True,
+                timeout=(self.connect_timeout, self.read_timeout))
+            status = pr.status_code
+            total = None
+            m = re.search(r"/\s*(\d+)\s*$", pr.headers.get("Content-Range", ""))
+            if m:
+                total = int(m.group(1))
+            pr.close()
+        except Exception:
+            return None
+        if status != 206 or not total:
+            return None    # server won't do ranges here -> fall back to streaming
+
+        refreshes = 0
+        while not self._cancelled():
+            stale = False
+            try:
+                with open(part, "wb") as f:
+                    pos = 0
+                    while pos < total:
+                        if self._cancelled():
+                            return False
+                        end = min(pos + chunk, total) - 1
+                        data = self._fetch_chunk(url, pos, end)
+                        if data == "refresh":
+                            fresh = refresh_media_url(
+                                self._session, job["post_url"], job["path_key"])
+                            if fresh:
+                                url = fresh
+                            stale = True
+                            break
+                        if data is None:
+                            self._bump("error")
+                            self._error(f"Chunk {pos}-{end} failed for {filename}")
+                            self._record_failure(entry, job, filename, url, "chunk failed")
+                            self._discard(part)
+                            return False
+                        f.write(data)
+                        pos = end + 1
+            except Exception as e:
+                self._info(f"Segmented retry for {filename}: {e}")
+                self._sleep_cancellable(3)
+                continue
+            if stale:
+                refreshes += 1
+                if refreshes > max_refreshes:
+                    self._bump("error")
+                    self._error(f"URL kept expiring mid-file, skipping: {filename}")
+                    self._record_failure(entry, job, filename, url, "url refresh loop")
+                    self._discard(part)
+                    return False
+                continue                       # restart chunks with the fresh URL
+            break                              # all chunks written
+
+        if self._cancelled():
+            return False
+        size = os.path.getsize(part) if os.path.exists(part) else 0
+        if size != total:
+            self._discard(part)
+            return False
+        return self._finalize(part, dest_path, entry, job, filename, total)
+
+    def _fetch_chunk(self, url, pos, end, attempts=6):
+        """Fetch one verified byte-range chunk. Returns bytes, None (failed after
+        retries), or 'refresh' (signed URL expired)."""
+        backoff = 3
+        want = end - pos + 1
+        for att in range(attempts):
+            if self._cancelled():
+                return None
+            try:
+                r = self._session.get(
+                    url, headers={"Range": f"bytes={pos}-{end}"},
+                    timeout=(self.connect_timeout, self.read_timeout))
+                if r.status_code in _EXPIRED_STATUSES:
+                    return "refresh"
+                if r.status_code != 206:
+                    raise RuntimeError(f"HTTP {r.status_code} (expected 206)")
+                start = content_range_start(r)
+                if start is not None and start != pos:
+                    raise RuntimeError(f"misaligned chunk {start}!={pos}")
+                data = r.content
+                if len(data) != want:
+                    raise RuntimeError(f"short chunk {len(data)}!={want}")
+                return data
+            except Exception:
+                self._sleep_cancellable(backoff)
+                backoff = min(backoff * 2, 30)
+        return None
 
     def _finalize(self, part, dest_path, entry, job, filename, expected_size):
         """Validate (videos via ffprobe) then atomically rename .part -> final and

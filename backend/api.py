@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import tempfile
 import threading
 import time
@@ -23,6 +24,7 @@ from backend.pawchive_scraper import (
     BASE as PW_BASE, MIRROR_BASE as PW_MIRROR_BASE,
 )
 from backend.pawchive_links import PawchiveLinks
+from backend import pawchive_cf
 from backend.derpibooru_scraper import (
     parse_creator_url as db_parse_creator_url, query_label as db_query_label,
     search_url as db_search_url,
@@ -37,9 +39,14 @@ from backend.creator_runner import (
     discord_archive_path, errors_db_path,
 )
 from backend.download_errors import open_readonly as open_errors_store
+from backend import album_sites
+from backend.album_runner import AlbumRunner, album_state_dir, album_errors_db
 from backend.library_import import scan_library
 from backend.media_library import scan_creator_media
 from backend.media_server import MediaServer
+from backend import dedupe, dedupe_apply
+from backend import media_hash
+from backend.media_sig_cache import SigCache, cache_path
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_FILE = os.path.join(APP_DIR, "app_state.json")
@@ -99,9 +106,18 @@ class Api:
         self._creator_thread = None
         self._creator_aux_thread = None       # verify/repair worker
         self._aux_cancel = threading.Event()  # cancel for verify/repair
+        self._album_runner = None             # active Albums-tab download
+        self._album_thread = None
         self._verify_broken = []              # [{link, broken:[...]}] from last verify
         self._state_lock = threading.Lock()   # serialize app_state.json writes
         self._media = MediaServer()           # local streaming/thumbnail server
+        # Duplicates panel: last scan (groups keyed by id) + extra thumbnail roots
+        # (arbitrary ref/check folders) + apply result.
+        self._dupe_result = None
+        self._dupe_groups = {}
+        self._dupe_ctx = {}
+        self._dupe_extra_roots = []
+        self._dupe_apply = None
 
     def set_window(self, window):
         self._window = window
@@ -143,6 +159,12 @@ class Api:
             "cf_concurrency": 5,
             "pawchive_concurrency": 6,
             "pawchive_extract": True,
+            # Cloudflare access for pawchive.pw: a cookies.txt (with cf_clearance) and
+            # the exact UA that earned it, captured by connect_pawchive(). See
+            # pawchive_cf / pawchive_scraper.make_session.
+            "pawchive_cookies_path": "",
+            "pawchive_user_agent": "",
+            "pawchive_cf_captured_at": "",
             "cookies_path": "",
             "cookies_browser": "",
             "auth_method": "file",
@@ -151,6 +173,11 @@ class Api:
             "discord_token": "",
             "discord_token_type": "user",
             "last_creator": "",
+            # Albums tab — a registry isolated from the regular downloader's
+            # `creators`. Each: {id, name, root_dir, links:[{url, site, password,
+            # title, subfolder, file_count, first_downloaded, last_run}]}.
+            "album_creators": {},
+            "last_album_creator": "",
             "window": {},
         }
 
@@ -565,6 +592,21 @@ class Api:
         except Exception as e:
             return {"error": str(e)}
 
+    def show_in_explorer(self, path):
+        """Open the file's folder and select the file (Windows Explorer)."""
+        path = (path or "").strip().replace("/", "\\")
+        if not path or not os.path.exists(path):
+            return {"error": "File not found (already moved?)"}
+        try:
+            if os.path.isdir(path):
+                os.startfile(path)  # noqa: S606
+            else:
+                # /select, highlights the file inside its folder.
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            return {"ok": True}
+        except Exception as e:
+            return {"error": str(e)}
+
     def open_url(self, url):
         """Open an external URL in the system default browser."""
         url = (url or "").strip()
@@ -587,6 +629,60 @@ class Api:
 
     def extract_cookies(self, browser):
         return extract_from_browser(browser)
+
+    # ── Pawchive Cloudflare access ──────────────────────────────────
+
+    def pawchive_cf_status(self):
+        """Current state of the captured Cloudflare clearance, for the settings
+        badge. {connected: bool, message, captured_at}."""
+        state = self.load_state()
+        path = state.get("pawchive_cookies_path") or ""
+        res = pawchive_cf.validate_cookies_file(path)
+        return {
+            "connected": bool(res.get("valid")),
+            "message": res.get("message"),
+            "captured_at": state.get("pawchive_cf_captured_at") or "",
+        }
+
+    def connect_pawchive(self):
+        """Open pawchive in a short-lived embedded browser window, let Cloudflare's
+        JS challenge pass, then capture the cf_clearance cookie + the browser's UA and
+        persist them for the downloader. Runs on a js_api worker thread (safe to
+        block); the webview window is created at runtime and closed when done."""
+        if self._window is None:
+            return {"ok": False, "message": "App window not ready"}
+
+        def _status(msg):
+            self._push_js("onPawchiveConnectStatus", {"message": msg})
+
+        try:
+            child = webview.create_window(
+                "Connecting to pawchive…",
+                url=pawchive_cf.CONNECT_URL,
+                width=480,
+                height=620,
+            )
+        except Exception as e:
+            return {"ok": False, "message": f"Couldn't open browser window: {e}"}
+
+        try:
+            res = pawchive_cf.capture_via_window(child, timeout=60, on_status=_status)
+        except Exception as e:
+            res = {"ok": False, "message": f"Capture failed: {e}"}
+        finally:
+            try:
+                child.destroy()
+            except Exception:
+                pass
+
+        if res.get("ok"):
+            self.save_state({
+                "pawchive_cookies_path": res.get("cookies_path") or "",
+                "pawchive_user_agent": res.get("user_agent") or "",
+                "pawchive_cf_captured_at": datetime.now(timezone.utc)
+                                            .isoformat(timespec="seconds"),
+            })
+        return res
 
     # ── Window geometry ─────────────────────────────────────────────
 
@@ -774,6 +870,8 @@ class Api:
             "avatar": c.get("avatar", ""),
             "has_videos": bool(c.get("has_videos")),
             "links": c.get("links", []),
+            # Saved 'Fetch Latest' year range (pawchive/coomerfans), or None = all years.
+            "latest_range": c.get("latest_range") or None,
         }
 
     @staticmethod
@@ -1340,6 +1438,28 @@ class Api:
         except Exception as e:
             return {"error": str(e)}
 
+    @staticmethod
+    def _clean_year_range(v):
+        """Normalise a saved 'Fetch Latest' range to {"start": int|None, "end": int|None},
+        or None when empty. Bounds are ordered (start <= end). Non-dict / blank → None."""
+        if not isinstance(v, dict):
+            return None
+
+        def _i(x):
+            if x in (None, "", "null"):
+                return None
+            try:
+                return int(x)
+            except (TypeError, ValueError):
+                return None
+
+        s, e = _i(v.get("start")), _i(v.get("end"))
+        if s is None and e is None:
+            return None
+        if s is not None and e is not None and s > e:
+            s, e = e, s
+        return {"start": s, "end": e}
+
     def save_creator(self, creator):
         """Create or update a creator (from the Configure Links overlay).
 
@@ -1401,6 +1521,12 @@ class Api:
             "has_videos": bool(creator.get("has_videos")),
             "links": links,
             "last_used": existing.get("last_used") or datetime.now(timezone.utc).isoformat(),
+            # Saved 'Fetch Latest' year range. Take it from the incoming payload when the
+            # Configure overlay sent one; otherwise carry the existing value forward so a
+            # plain edit (links/name) never wipes it (the rebuild drops unlisted keys).
+            "latest_range": self._clean_year_range(
+                creator["latest_range"] if "latest_range" in creator
+                else existing.get("latest_range")),
         }
         state["creators"] = creators
         self.save_state(state)
@@ -1601,6 +1727,9 @@ class Api:
     def _configure_media(self, state):
         roots = [c.get("destination", "") for c in (state.get("creators") or {}).values()
                  if c.get("destination")]
+        # Arbitrary ref/check folders from an active Duplicates scan need thumbnail
+        # allowlisting too (they aren't creator roots).
+        roots += [r for r in self._dupe_extra_roots if r]
         self._media.configure(roots, self._thumbs_dir(state))
 
     def media_base_url(self):
@@ -1626,7 +1755,8 @@ class Api:
     # ── Download orchestration ──────────────────────────────────────
 
     def start_creator_download(self, creator_id, scope="everything", mode="full",
-                               year=None, refresh_links=True, error_entries=None):
+                               year=None, refresh_links=True, error_entries=None,
+                               year_range=None):
         """Run a download across a scope of the creator's links.
 
         scope ∈ {everything, twitter, coomerfans, onlyfans, fansly, pawchive,
@@ -1648,6 +1778,10 @@ class Api:
         """
         if self._creator_runner and self._creator_runner.is_running:
             return {"error": "A download is already in progress"}
+        # A verify/repair/import OR a Duplicates apply is a file/DB mutation on the
+        # same creator — never let a download race it.
+        if self._creator_aux_thread and self._creator_aux_thread.is_alive():
+            return {"error": "Another operation (verify/import/duplicates) is in progress"}
 
         state = self.load_state()
         c = state.get("creators", {}).get(creator_id)
@@ -1679,31 +1813,41 @@ class Api:
             entries = [str(e) for e in error_entries if e]
             entries = entries or None
 
+        # Effective year range for a 'Fetch Latest' run (pawchive/coomerfans only):
+        # an explicit `year_range` is a ONE-OFF (not persisted); otherwise fall back to
+        # the creator's saved default. Other modes carry `year` instead and ignore this.
+        eff_range = None
+        if mode == "latest":
+            eff_range = year_range if year_range is not None else (c.get("latest_range") or None)
+
         self._touch_creator(creator_id)
         self._creator_runner = CreatorRunner(workers=workers,
                                              pawchive_workers=pawchive_workers,
                                              pawchive_extract=pawchive_extract)
         self._creator_thread = threading.Thread(
             target=self._run_creator_download,
-            args=(c, scope, mode, year, bool(refresh_links), entries),
+            args=(c, scope, mode, year, bool(refresh_links), entries, eff_range),
             daemon=True,
         )
         self._creator_thread.start()
         return {"status": "started", "mode": mode, "scope": scope}
 
     def _run_creator_download(self, creator, scope, mode, year, refresh_links=True,
-                              error_entries=None):
+                              error_entries=None, year_range=None):
         state = self.load_state()
         self._creator_runner.run(
             creator=creator,
             scope=scope,
             mode=mode,
             year=year,
+            year_range=year_range,
             refresh_links=refresh_links,
             error_entries=error_entries,
             archive_dir=(state.get("archive_dir") or "").strip(),
             cookies_path=state.get("cookies_path") or "",
             cookies_browser=state.get("cookies_browser") or "",
+            pawchive_cookies_path=state.get("pawchive_cookies_path") or "",
+            pawchive_user_agent=state.get("pawchive_user_agent") or "",
             derpibooru_api_key=state.get("derpibooru_api_key") or "",
             derpibooru_filter_id=state.get("derpibooru_filter_id") or "",
             discord_token=state.get("discord_token") or "",
@@ -1741,6 +1885,320 @@ class Api:
         return ((self._creator_runner and self._creator_runner.is_running)
                 or (self._creator_aux_thread and self._creator_aux_thread.is_alive()))
 
+    # ── Album downloader (Albums tab) ───────────────────────────────
+
+    def _album_busy(self):
+        return bool(self._album_runner and self._album_runner.is_running)
+
+    def start_album_download(self, destination, links, retry=False,
+                             creator_id=None, force_urls=None):
+        """Download whole albums (bunkr/cyberdrop/filester) into `destination`.
+
+        `links` is a list of pasted lines; each may carry an optional inline
+        `<url> | <password>`. `creator_id` (Albums tab) ties the run to an album-
+        creator so results are recorded to its ledger and `destination` defaults
+        to its root_dir. `force_urls` is the subset to re-download whole (the
+        "Redownload whole" choice); the rest scan for new only. Routed per-site
+        to cyberdrop-dl or gallery-dl. Pushes onAlbum{Progress,Complete,Error}.
+        """
+        if self._album_busy():
+            return {"error": "An album download is already in progress"}
+        # Share the single-download-at-a-time invariant with creator downloads.
+        if self._creator_runner and self._creator_runner.is_running:
+            return {"error": "A download is already in progress"}
+        if self._creator_aux_thread and self._creator_aux_thread.is_alive():
+            return {"error": "Another operation (verify/import/duplicates) is in progress"}
+
+        state = self.load_state()
+        # In creator mode the destination is the album-creator's root_dir.
+        if creator_id:
+            ac = (state.get("album_creators") or {}).get(creator_id)
+            if not ac:
+                return {"error": "Album creator not found"}
+            destination = ac.get("root_dir") or destination
+
+        destination = (destination or "").strip()
+        if not destination:
+            return {"error": "Pick a destination folder first"}
+        if not os.path.isdir(destination):
+            return {"error": "That destination folder doesn't exist"}
+        urls = [str(x) for x in (links or []) if str(x).strip()]
+        if not urls:
+            return {"error": "Paste at least one album link"}
+        forced = [str(x) for x in (force_urls or []) if str(x).strip()]
+
+        self._album_runner = AlbumRunner(
+            APP_DIR,
+            cookies_path=state.get("cookies_path") or "",
+            cookies_browser=state.get("cookies_browser") or "",
+        )
+        self._album_thread = threading.Thread(
+            target=self._run_album_download,
+            args=(destination, urls, bool(retry), creator_id, forced),
+            daemon=True,
+        )
+        self._album_thread.start()
+        return {"status": "started"}
+
+    def _run_album_download(self, destination, urls, retry, creator_id, force_urls):
+        def _on_complete(summary):
+            # Record per-link results to the album-creator's ledger before the UI
+            # is notified, so a refresh shows updated counts/dates immediately.
+            if creator_id:
+                try:
+                    self._record_album_results(creator_id, summary.get("results") or [])
+                except Exception:
+                    pass
+            self._push_js("onAlbumComplete", summary)
+
+        self._album_runner.run(
+            destination=destination,
+            links=urls,
+            retry=retry,
+            force_urls=force_urls,
+            on_progress=lambda d: self._push_js("onAlbumProgress", d),
+            on_complete=_on_complete,
+            on_error=lambda d: self._push_js("onAlbumError", d),
+        )
+
+    def cancel_album_download(self):
+        if self._album_runner and self._album_runner.is_running:
+            self._album_runner.cancel()
+        return {"status": "cancelling"}
+
+    def list_album_errors(self, destination):
+        """Recorded per-file failures for a destination (for the Retry panel).
+
+        Returns {failures:[{url,filename,page_url,reason,attempts}]} — the
+        retryable stragglers (state 'failed'), newest first."""
+        destination = (destination or "").strip()
+        if not destination:
+            return {"failures": []}
+        db_path = album_errors_db(album_state_dir(APP_DIR, destination))
+        store = open_errors_store(db_path)
+        if store is None:
+            return {"failures": []}
+        try:
+            rows = store.list_failures(state="failed")
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
+        rows.sort(key=lambda r: r.get("last_attempt") or "", reverse=True)
+        return {"failures": [
+            {
+                "entry": r.get("entry"),
+                "url": r.get("url"),
+                "filename": r.get("filename"),
+                "page_url": r.get("page_url"),
+                "reason": r.get("reason"),
+                "attempts": r.get("attempts"),
+            }
+            for r in rows
+        ]}
+
+    def dismiss_album_error(self, destination, entry):
+        """Tick a failed file off the Albums retry panel (sticky — never re-shown
+        or re-attempted unless the album is force-redownloaded)."""
+        destination = (destination or "").strip()
+        if not destination or not entry:
+            return {"status": "noop"}
+        db_path = album_errors_db(album_state_dir(APP_DIR, destination))
+        store = open_errors_store(db_path)
+        if store is None:
+            return {"status": "noop"}
+        try:
+            store.dismiss(entry)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
+        return {"status": "dismissed"}
+
+    # ── Album creators (Albums-tab registry, isolated from `creators`) ──
+
+    @staticmethod
+    def _album_norm_url(url):
+        """Match key for an album link: host+path, lowercased, no trailing slash."""
+        try:
+            from urllib.parse import urlparse
+            p = urlparse((url or "").strip())
+            host = (p.hostname or "").lower()
+            path = (p.path or "").rstrip("/")
+            return f"{host}{path}" if host else (url or "").strip().lower()
+        except Exception:
+            return (url or "").strip().lower()
+
+    def _gen_album_id(self):
+        return "ac_" + base64.urlsafe_b64encode(os.urandom(6)).decode("ascii").rstrip("=")
+
+    def list_album_creators(self):
+        """All album creators (name + root + link count), newest-used first."""
+        state = self.load_state()
+        acs = state.get("album_creators") or {}
+        out = [
+            {
+                "id": ac.get("id", cid),
+                "name": ac.get("name") or self._basename(ac.get("root_dir", "")),
+                "root_dir": ac.get("root_dir", ""),
+                "link_count": len(ac.get("links") or []),
+                "last_used": ac.get("last_used") or "",
+            }
+            for cid, ac in acs.items()
+        ]
+        out.sort(key=lambda a: a.get("last_used") or "", reverse=True)
+        return out
+
+    def get_album_creator(self, creator_id):
+        state = self.load_state()
+        return (state.get("album_creators") or {}).get(creator_id)
+
+    def save_album_creator(self, payload):
+        """Create or update an album creator. Requires name + root_dir; makes the
+        folder. Returns {id}. Never touches the regular `creators` map."""
+        payload = payload or {}
+        name = (payload.get("name") or "").strip()
+        root = self._fwd(payload.get("root_dir"))
+        if not root:
+            return {"error": "Root folder is required"}
+        if not name:
+            name = self._basename(root)
+        try:
+            os.makedirs(root, exist_ok=True)
+        except OSError:
+            pass
+        state = self.load_state()
+        acs = state.get("album_creators") or {}
+        cid = payload.get("id") or self._gen_album_id()
+        existing = acs.get(cid, {})
+        acs[cid] = {
+            "id": cid,
+            "name": name,
+            "root_dir": root,
+            "links": existing.get("links") or [],
+            "created": existing.get("created") or self._now_iso(),
+            "last_used": existing.get("last_used") or "",
+        }
+        self.save_state({"album_creators": acs, "last_album_creator": cid})
+        return {"id": cid}
+
+    def delete_album_creator(self, creator_id):
+        state = self.load_state()
+        acs = state.get("album_creators") or {}
+        if creator_id in acs:
+            acs.pop(creator_id, None)
+            self.save_state({"album_creators": acs})
+        return {"status": "deleted"}
+
+    def add_album_link(self, creator_id, url, password=None):
+        """Add a bunkr/cyberdrop/filester link to an album creator (deduped)."""
+        url = (url or "").strip()
+        site = album_sites.detect_site(url)
+        if not site:
+            return {"error": "Not a supported album link (bunkr / cyberdrop / filester)"}
+        state = self.load_state()
+        acs = state.get("album_creators") or {}
+        ac = acs.get(creator_id)
+        if not ac:
+            return {"error": "Album creator not found"}
+        links = ac.get("links") or []
+        key = self._album_norm_url(url)
+        if any(self._album_norm_url(l.get("url")) == key for l in links):
+            return {"error": "That link is already in this creator"}
+        links.append({
+            "url": url, "site": site["key"],
+            "password": (password or "").strip() or None,
+            "title": None, "subfolder": None, "file_count": 0,
+            "first_downloaded": None, "last_run": None,
+        })
+        ac["links"] = links
+        self.save_state({"album_creators": acs})
+        return {"status": "added", "site": site["key"]}
+
+    def remove_album_link(self, creator_id, url):
+        state = self.load_state()
+        acs = state.get("album_creators") or {}
+        ac = acs.get(creator_id)
+        if not ac:
+            return {"error": "Album creator not found"}
+        key = self._album_norm_url(url)
+        ac["links"] = [l for l in (ac.get("links") or [])
+                       if self._album_norm_url(l.get("url")) != key]
+        self.save_state({"album_creators": acs})
+        return {"status": "removed"}
+
+    def check_album_links(self, urls):
+        """For each url, whether it's already recorded in some album creator.
+
+        Returns {results:[{url, known, creator_id, creator_name, root_dir, title,
+        file_count, last_run}]} so the UI can offer Redownload/Scan-new/Skip."""
+        state = self.load_state()
+        acs = state.get("album_creators") or {}
+        # Index every downloaded link by normalized url.
+        index = {}
+        for cid, ac in acs.items():
+            for l in ac.get("links") or []:
+                if l.get("last_run"):   # only "known" once actually downloaded
+                    index[self._album_norm_url(l.get("url"))] = (ac, l)
+        out = []
+        for u in urls or []:
+            u = str(u).strip()
+            hit = index.get(self._album_norm_url(u))
+            if hit:
+                ac, l = hit
+                out.append({
+                    "url": u, "known": True,
+                    "creator_id": ac.get("id"), "creator_name": ac.get("name"),
+                    "root_dir": ac.get("root_dir"), "title": l.get("title"),
+                    "subfolder": l.get("subfolder"), "file_count": l.get("file_count"),
+                    "last_run": l.get("last_run"),
+                })
+            else:
+                out.append({"url": u, "known": False})
+        return {"results": out}
+
+    def _record_album_results(self, creator_id, results):
+        """Fold a run's per-link outcomes into the album creator's ledger."""
+        if not results:
+            return
+        state = self.load_state()
+        acs = state.get("album_creators") or {}
+        ac = acs.get(creator_id)
+        if not ac:
+            return
+        links = ac.get("links") or []
+        by_key = {self._album_norm_url(l.get("url")): l for l in links}
+        now = self._now_iso()
+        for r in results:
+            key = self._album_norm_url(r.get("url"))
+            l = by_key.get(key)
+            if l is None:
+                # A pasted link not yet saved on this creator — add it now.
+                l = {"url": r.get("url"), "site": r.get("site"), "password": None,
+                     "title": None, "subfolder": None, "file_count": 0,
+                     "first_downloaded": None, "last_run": None}
+                links.append(l)
+                by_key[key] = l
+            if r.get("title"):
+                l["title"] = r.get("title")
+            if r.get("subfolder"):
+                l["subfolder"] = r.get("subfolder")
+            # Cumulative count of files pulled for this album (grows as scan-for-
+            # new adds more). Reset to this run's count on a forced whole redownload.
+            l["file_count"] = (l.get("file_count") or 0) + (r.get("downloaded") or 0)
+            l["last_run"] = now
+            if not l.get("first_downloaded"):
+                l["first_downloaded"] = now
+        ac["links"] = links
+        ac["last_used"] = now
+        self.save_state({"album_creators": acs})
+
+    @staticmethod
+    def _now_iso():
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
+
     @staticmethod
     def _tag(link, data):
         d = dict(data)
@@ -1750,10 +2208,11 @@ class Api:
 
     # ── Verify & Repair (coomerfans links only) ─────────────────────
 
-    def start_creator_verify(self, creator_id):
+    def start_creator_verify(self, creator_id, deep=False):
         """Scan a creator's coomerfans files for present-but-broken media across
         all of their coomerfans links. Missing files are ignored (intentional
-        deletions)."""
+        deletions). `deep` also decode-scans videos to catch right-size-but-corrupt
+        files (slower)."""
         if self._aux_busy():
             return {"error": "An operation is already in progress"}
 
@@ -1769,11 +2228,12 @@ class Api:
         self._aux_cancel.clear()
         self._verify_broken = []
         self._creator_aux_thread = threading.Thread(
-            target=self._run_creator_verify, args=(c, cf_links, archive_dir), daemon=True)
+            target=self._run_creator_verify, args=(c, cf_links, archive_dir, bool(deep)),
+            daemon=True)
         self._creator_aux_thread.start()
         return {"status": "started"}
 
-    def _run_creator_verify(self, creator, cf_links, archive_dir):
+    def _run_creator_verify(self, creator, cf_links, archive_dir, deep=False):
         try:
             session = make_session()
             dest = creator["destination"]
@@ -1791,6 +2251,7 @@ class Api:
                     archive_path, dest, link["service"], link["user_id"], session,
                     on_progress=lambda d, _l=link: self._push_js("onCreatorProgress", self._tag(_l, d)),
                     should_cancel=self._aux_cancel.is_set,
+                    deep=deep,
                 )
                 checked += res["checked"]
                 present += res["present"]
@@ -1866,6 +2327,204 @@ class Api:
         except Exception as e:
             self._push_js("onCreatorRepairComplete", {
                 "repaired": total_repaired, "still_bad": total_bad, "error": str(e)})
+
+    # ── Duplicates panel (dedup/similar detection) ──────────────────
+
+    DEDUPE_DIR = os.path.join(APP_DIR, ".dedupe")
+
+    def _ffmpeg_exe(self):
+        try:
+            return self._media._ffmpeg_exe()
+        except Exception:
+            return None
+
+    def _open_sig_cache(self, archive_dir):
+        cp = cache_path(archive_dir)
+        if not cp:
+            return None
+        try:
+            return SigCache(cp)
+        except Exception:
+            return None
+
+    def _archive_candidates(self, creator, archive_dir):
+        """(db_path list) for the creator's coomerfans+pawchive links — the archives
+        whose rows map a downloaded filename back to an entry (for _new adoption)."""
+        out = []
+        dest = creator.get("destination", "")
+        for link in creator.get("links", []):
+            plat = link.get("platform")
+            if plat == "coomerfans":
+                out.append(cf_archive_path(archive_dir, link, dest))
+            elif plat == "pawchive":
+                out.append(pawchive_archive_path(archive_dir, link, dest))
+        return [p for p in out if p and os.path.isfile(p)]
+
+    def _make_entry_resolver(self, creator, archive_dir):
+        """A closure filename->(db_path, entry) over the creator's cf/pawchive DBs.
+        Twitter/derpibooru/discord are intentionally excluded (different schema /
+        no expected_size), so their matches fall back to manual review."""
+        dbs = self._archive_candidates(creator, archive_dir)
+
+        def resolve(filename, kind, year):
+            for db in dbs:
+                try:
+                    conn = sqlite3.connect(db)
+                    try:
+                        cur = conn.execute(
+                            "SELECT entry FROM archive WHERE filename=? LIMIT 1",
+                            (filename,))
+                        row = cur.fetchone()
+                    finally:
+                        conn.close()
+                except Exception:
+                    continue
+                if row:
+                    return (db, row[0])
+            return None
+        return resolve
+
+    def start_dupe_scan(self, creator_id, mode="within", params=None):
+        """Scan for duplicate/similar media. mode ∈ {within, ref_check, new}.
+        params: {image_distance?, orientations?, ref_dir?, check_dir?}."""
+        if self._aux_busy():
+            return {"error": "An operation is already in progress"}
+        params = params or {}
+        state = self.load_state()
+        archive_dir = (state.get("archive_dir") or "").strip()
+
+        dest = ref_dir = check_dir = ""
+        if mode in ("within", "new"):
+            c = state.get("creators", {}).get(creator_id)
+            if not c:
+                return {"error": "Creator not found"}
+            dest = c.get("destination", "")
+            if not dest:
+                return {"error": "This creator has no destination folder."}
+            try:
+                os.listdir(dest)
+            except OSError:
+                return {"error": f"Folder not reachable (NAS offline?): {dest}"}
+        elif mode == "ref_check":
+            ref_dir = (params.get("ref_dir") or "").strip()
+            check_dir = (params.get("check_dir") or "").strip()
+            if not os.path.isdir(ref_dir) or not os.path.isdir(check_dir):
+                return {"error": "Pick two valid folders (reference and check)."}
+        else:
+            return {"error": f"Unknown mode: {mode}"}
+
+        self._dupe_ctx = {"mode": mode, "creator_id": creator_id, "dest": dest,
+                          "ref_dir": ref_dir, "check_dir": check_dir,
+                          "archive_dir": archive_dir}
+        # Allowlist arbitrary folders for /thumb during this scan.
+        self._dupe_extra_roots = [d for d in (dest, ref_dir, check_dir) if d]
+        self._media.start()
+        self._configure_media(state)
+
+        self._aux_cancel.clear()
+        self._dupe_result = None
+        self._dupe_groups = {}
+        self._creator_aux_thread = threading.Thread(
+            target=self._run_dupe_scan, args=(creator_id, mode, params, archive_dir),
+            daemon=True)
+        self._creator_aux_thread.start()
+        return {"status": "started", "mode": mode}
+
+    def _run_dupe_scan(self, creator_id, mode, params, archive_dir):
+        cache = self._open_sig_cache(archive_dir)
+        ffmpeg = self._ffmpeg_exe()
+        prog = lambda d: self._push_js("onDupeProgress", d)
+        try:
+            opts = {"image_distance": int(params.get("image_distance",
+                                                     media_hash.IMAGE_DEFAULT_DISTANCE)),
+                    "orientations": bool(params.get("orientations", mode == "new"))}
+            if mode == "within":
+                res = dedupe.scan_within(
+                    self._dupe_ctx["dest"], cache, ffmpeg, opts,
+                    on_progress=prog, should_cancel=self._aux_cancel.is_set)
+            elif mode == "ref_check":
+                res = dedupe.scan_ref_check(
+                    self._dupe_ctx["ref_dir"], self._dupe_ctx["check_dir"],
+                    cache, ffmpeg, opts,
+                    on_progress=prog, should_cancel=self._aux_cancel.is_set)
+            else:  # new
+                state = self.load_state()
+                creator = state.get("creators", {}).get(creator_id, {})
+                resolver = self._make_entry_resolver(creator, archive_dir)
+                res = dedupe.scan_new_ingest(
+                    self._dupe_ctx["dest"], cache, ffmpeg, resolve_entry=resolver,
+                    opts=opts, on_progress=prog, should_cancel=self._aux_cancel.is_set)
+            self._dupe_result = res
+            self._dupe_groups = {g["id"]: g for g in res.get("groups", [])}
+            group_count = len(res.get("groups", []))
+            file_count = sum(len(g["items"]) for g in res.get("groups", []))
+            self._push_js("onDupeScanResult", {
+                "reachable": res.get("reachable", True), "mode": mode,
+                "groups": res.get("groups", []),
+                "unmatched_new": res.get("unmatched_new", []),
+                "group_count": group_count, "file_count": file_count,
+                "note": res.get("note"),
+                "cancelled": self._aux_cancel.is_set(),
+                "base": self._media.base_url(), "token": self._media.token,
+            })
+        except Exception as e:
+            self._push_js("onDupeScanResult", {"error": str(e)})
+        finally:
+            if cache:
+                cache.close()
+
+    def start_dupe_apply(self, decisions):
+        """Apply the user's per-group decisions from the last scan. Reversible."""
+        if self._aux_busy():
+            return {"error": "An operation is already in progress"}
+        if not self._dupe_result or not self._dupe_groups:
+            return {"error": "Nothing to apply — run a scan first."}
+        if not isinstance(decisions, (list, tuple)) or not decisions:
+            return {"error": "No decisions selected."}
+
+        os.makedirs(self.DEDUPE_DIR, exist_ok=True)
+        journal = os.path.join(self.DEDUPE_DIR, f"apply-{self._backup_stamp()}.jsonl")
+        self._aux_cancel.clear()
+        self._creator_aux_thread = threading.Thread(
+            target=self._run_dupe_apply, args=(list(decisions), journal), daemon=True)
+        self._creator_aux_thread.start()
+        return {"status": "started", "count": len(decisions)}
+
+    def _run_dupe_apply(self, decisions, journal):
+        try:
+            res = dedupe_apply.apply(
+                decisions, self._dupe_groups, self._dupe_ctx, journal,
+                on_progress=lambda d: self._push_js("onDupeApplyProgress", d),
+                should_cancel=self._aux_cancel.is_set)
+            self._dupe_apply = res
+            self._push_js("onDupeApplyComplete", {
+                "moved": res["moved"], "renamed": res["renamed"],
+                "adopted": res["adopted"], "deleted": res["deleted"],
+                "skipped": res["skipped"], "errors": res["errors"],
+                "journal": os.path.basename(res["journal"]),
+                "cancelled": self._aux_cancel.is_set(),
+            })
+        except Exception as e:
+            self._push_js("onDupeApplyComplete", {"error": str(e)})
+
+    def dupe_revert(self, journal=None):
+        """Undo the last (or a named) dedup apply — restores disk + archive."""
+        if self._aux_busy():
+            return {"error": "An operation is already in progress"}
+        name = journal or (os.path.basename(self._dupe_apply["journal"])
+                           if self._dupe_apply else None)
+        if not name:
+            return {"error": "No apply to undo."}
+        path = os.path.join(self.DEDUPE_DIR, name)
+        if not os.path.isfile(path):
+            return {"error": f"Journal not found: {name}"}
+        res = dedupe_apply.revert(path)
+        return {"status": "reverted", "restored": res["restored"],
+                "errors": res["errors"]}
+
+    def cancel_dupe(self):
+        self._aux_cancel.set()
+        return {"status": "cancelling"}
 
     # ── JS bridge helper ───────────────────────────────────────────
 

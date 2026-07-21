@@ -21,5 +21,19 @@ pawchive_diag.jsonl
 # Cached media thumbnails (local fallback; usually on the NAS archive dir)
 .thumbs/
 
+# Duplicates panel: reversible apply journals (undo lives here until re-scan)
+.dedupe/
+
+# Albums tab: per-destination engine state (cyberdrop-dl db/config/logs, gallery-dl
+# archive, the shared failures db) — bookkeeping, regenerated as needed
+.album_state/
+
+# Exported browser cookies (pawchive Cloudflare clearance, etc.) — personal/secret
+*_cookies.txt
+.pawchive_cookies.txt
+
+# Stray downloaded media from early album-downloader testing (not source)
+gallery-dl/
+
 # Claude Code local settings
 .claude/

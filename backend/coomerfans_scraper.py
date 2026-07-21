@@ -141,6 +141,78 @@ def target_path(destination, kind, dt, filename):
     return os.path.join(destination, year, filename)
 
 
+# ── Year-range scoping (shared by pawchive + coomerfans crawls) ─────
+
+def norm_year_range(year=None, year_range=None):
+    """Normalise a year filter to inclusive `(lo, hi)` bounds — ints or None — or
+    return None meaning "all years".
+
+    `year_range` wins when given: a {"start", "end"} dict or a (lo, hi) sequence,
+    each bound optional (None/""/"null" → open-ended). Otherwise a single scalar
+    `year` collapses to `(y, y)` — so the existing single-year "Download Year" path
+    is just the degenerate range and behaves identically. Bounds are ordered so
+    lo <= hi. Blank on both sides → None (no filtering)."""
+    def _i(v):
+        if v in (None, "", "null"):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    lo = hi = None
+    if year_range is not None:
+        if isinstance(year_range, dict):
+            lo, hi = _i(year_range.get("start")), _i(year_range.get("end"))
+        elif isinstance(year_range, (list, tuple)) and len(year_range) == 2:
+            lo, hi = _i(year_range[0]), _i(year_range[1])
+    if lo is None and hi is None:
+        y = _i(year)
+        if y is not None:
+            lo = hi = y
+    if lo is None and hi is None:
+        return None
+    if lo is not None and hi is not None and lo > hi:
+        lo, hi = hi, lo
+    return (lo, hi)
+
+
+def year_in_range(y, rng):
+    """True if year `y` (int or None) falls within an inclusive `(lo, hi)` range.
+    A None range means "all years" (always True). An undated post (`y is None`) is
+    NOT in any bounded range — it can't be placed, so year-scoped runs skip it (the
+    same choice the old single-year filter made)."""
+    if rng is None:
+        return True
+    if y is None:
+        return False
+    lo, hi = rng
+    if lo is not None and y < lo:
+        return False
+    if hi is not None and y > hi:
+        return False
+    return True
+
+
+def year_scan_decision(y, rng):
+    """Crawl gate for a listing walked strictly NEWEST->OLDEST by date.
+
+    Returns one of:
+      'stop' — year `y` is below the range's lower bound, so every remaining (older)
+               post is out of range too → stop paginating (the early-stop optimisation).
+      'skip' — out of range but not past it (e.g. newer than the upper bound, or
+               undated) → skip this post but keep scanning older ones.
+      'take' — in range → download it.
+    A None range means no scoping, so always 'take'. Undated posts (`y is None`) never
+    trigger 'stop' (we can't prove older posts are out of range from an undated one)."""
+    if rng is None:
+        return "take"
+    lo, _ = rng
+    if lo is not None and y is not None and y < lo:
+        return "stop"
+    return "take" if year_in_range(y, rng) else "skip"
+
+
 # ── Page fetching / parsing ─────────────────────────────────────────
 
 def fetch_html(session, url, timeout=(15, 60)):
