@@ -233,18 +233,24 @@ async function renderPendingLinks(fromPoll = false) {
         return;
     }
     const items = res.items || [];
+    // Posts flagged for a video/archive but carrying no outstanding links never
+    // appear in `items` (that list iterates links), so they are rendered from
+    // their own list — and they alone are enough to keep the panel open.
+    const linkless = res.linkless || [];
     // Skip needless re-renders during the download poll so a click isn't disrupted.
-    const sig = id + '::' + items.map(i => i.key).join('|');
+    const sig = id + '::' + items.map(i => i.key).join('|')
+              + '::' + linkless.map(f => f.post_id).join('|');
     if (fromPoll && sig === lastPendingSig) return;
     lastPendingSig = sig;
-    if (!items.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+    if (!items.length && !linkless.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
 
     // Group the flat list by post so multiple links from one post sit together.
     const groups = [];
     const byId = {};
     items.forEach(i => {
         if (!byId[i.post_id]) {
-            byId[i.post_id] = { title: i.title, post_url: i.post_url, date: i.date, prefix: i.prefix, links: [] };
+            byId[i.post_id] = { title: i.title, post_url: i.post_url, date: i.date, prefix: i.prefix,
+                                media_kinds: i.media_kinds || [], links: [] };
             groups.push(byId[i.post_id]);
         }
         byId[i.post_id].links.push(i);
@@ -265,20 +271,21 @@ async function renderPendingLinks(fromPoll = false) {
                      onchange="resolvePostLinks(this, '${groupKeys}')">
               <a class="pending-posttitle" href="#" onclick="openLink('${encodeURIComponent(g.post_url)}');return false;"
                  title="Open this post on pawchive.st">${escapeHtml(g.title || '(untitled)')}</a>
+              ${mediaBadges(g.media_kinds)}
               <span class="pending-date">${escapeHtml(g.date)}</span>
               <button class="btn-tiny" onclick="copyText('${encodeURIComponent(g.prefix)}')"
                       title="Paste in front of the downloaded file's own name">Copy name prefix</button>
             </div>
             <div class="pending-rows">${rows}</div>
         </div>`;
-    }).join('');
+    }).join('') + linkless.map(pendingFlaggedRow).join('');
 
     const caret = pendingCollapsed ? '▸' : '▾';
     panel.style.display = '';
     panel.innerHTML = `<div class="pending-head" onclick="togglePending()">
           <span class="pending-caret">${caret}</span>
           <span>Links needing attention</span>
-          <span class="pending-count">${items.length}</span>
+          <span class="pending-count">${items.length + linkless.length}</span>
           <span class="field-hint pending-hint">manual downloads &amp; failed grabs — check off when done (Ctrl+Z to undo)</span>
           <button class="btn-tiny pending-clear-all" onclick="event.stopPropagation(); resolveAllPending()"
                   title="Mark every link here done (Ctrl+Z to undo)">Resolve all</button>
@@ -310,11 +317,36 @@ function pendingChildRow(i) {
 // A single-link post: same header + rows layout as a multi-link group (title with
 // the name-prefix button beside it, the lone link underneath) — no "check all"
 // since the child row's own checkbox resolves the single link.
+// Attachment badges for a tracked post. A links-only creator downloads nothing,
+// so a post holding a video or an archive is something the user may still want
+// to fetch by hand — the badge plus the post title link is how they find it.
+function mediaBadges(kinds) {
+    return (kinds || []).filter(k => k === 'video' || k === 'archive')
+        .map(k => `<span class="badge badge-media badge-media-${k}" title="This post contains a ${k === 'video' ? 'video file' : 'archive (zip/rar/...)'}">${k}</span>`)
+        .join('');
+}
+
+// A flagged post with no outstanding links of its own: header only, so the post
+// page stays reachable. There is nothing to check off, hence no checkbox.
+function pendingFlaggedRow(f) {
+    return `<div class="pending-group pending-flagged">
+        <div class="pending-post">
+          <a class="pending-posttitle" href="#" onclick="openLink('${encodeURIComponent(f.post_url)}');return false;"
+             title="Open this post on pawchive.st">${escapeHtml(f.title || '(untitled)')}</a>
+          ${mediaBadges(f.media_kinds)}
+          <span class="pending-date">${escapeHtml(f.date)}</span>
+          <button class="btn-tiny" onclick="copyText('${encodeURIComponent(f.prefix)}')"
+                  title="Paste in front of the downloaded file's own name">Copy name prefix</button>
+        </div>
+      </div>`;
+}
+
 function pendingSingleRow(g, i) {
     return `<div class="pending-group pending-single">
         <div class="pending-post">
           <a class="pending-posttitle" href="#" onclick="openLink('${encodeURIComponent(g.post_url)}');return false;"
              title="Open this post on pawchive.st">${escapeHtml(g.title || '(untitled)')}</a>
+          ${mediaBadges(g.media_kinds)}
           <span class="pending-date">${escapeHtml(g.date)}</span>
           <button class="btn-tiny" onclick="copyText('${encodeURIComponent(g.prefix)}')"
                   title="Paste in front of the downloaded file's own name">Copy name prefix</button>

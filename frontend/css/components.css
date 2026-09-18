@@ -1497,6 +1497,26 @@
     border: 1px dashed var(--text-secondary);
     color: var(--text-secondary);
 }
+/* Attachment flags on a tracked post: this post holds a video / an archive that
+   nothing downloaded, so the post page link next to it is the way in. */
+.badge.badge-media {
+    text-transform: none;
+}
+.badge.badge-media-video {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    color: var(--accent-bright);
+}
+.badge.badge-media-archive {
+    background: var(--warn-soft);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+}
+/* A flagged post with no links has no rows beneath it — keep the header from
+   reading as a truncated group. */
+.pending-group.pending-flagged .pending-post {
+    border-bottom: none;
+}
 
 /* Filename label in the errors panel — take the flexible middle column so the
    URL/post buttons sit to its right (mirrors .pending-url's role). */

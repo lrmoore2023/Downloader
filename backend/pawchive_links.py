@@ -49,6 +49,27 @@ def _replace_with_retry(src, dst, attempts=10, delay=0.15):
             time.sleep(delay * (i + 1))
 
 
+# Attachment kinds worth flagging on a tracked post. A links-only creator
+# downloads nothing, so these are the posts whose files the user may still want
+# to fetch by hand — surfaced in the URL panel with the post page link.
+FLAG_KINDS = ("video", "archive")
+
+
+def post_media_kinds(post):
+    """Distinct attachment kinds on a post, including not-yet-imported ones.
+
+    A 'deferred' attachment has no servable bytes yet but its extension is
+    already known, so it still tells the user the post holds a video/archive.
+    """
+    kinds = set()
+    for key in ("media", "deferred_media"):
+        for m in post.get(key) or []:
+            k = m.get("kind")
+            if k:
+                kinds.add(k)
+    return sorted(kinds)
+
+
 def make_key(post_id, url):
     return f"{post_id}{KEY_SEP}{url}"
 
@@ -184,6 +205,10 @@ class PawchiveLinks:
                     "resolved_at": prev.get("resolved_at"),
                 }
 
+            # A 'pending' post carries no enumerated media yet, so an empty read
+            # must not erase kinds a previous run already established.
+            kinds = post_media_kinds(post) or (posts.get(pid) or {}).get("media_kinds") or []
+
             posts[pid] = {
                 "post_id": pid,
                 "title": post.get("title", ""),
@@ -192,6 +217,7 @@ class PawchiveLinks:
                 "date": post["dt"].strftime("%Y-%m-%d %H:%M:%S") if post.get("dt") else "",
                 "prefix": filename_prefix(post.get("dt"), post.get("service")),
                 "body_text": _html_to_text(post.get("content_html", "")),
+                "media_kinds": kinds,
                 "links": links,
             }
             if self.autosave:
@@ -273,7 +299,36 @@ class PawchiveLinks:
                         "kind": link.get("kind", "reference"),
                         "status": link.get("status", "pending"),
                         "missing": link.get("missing"),
+                        "media_kinds": p.get("media_kinds") or [],
                     })
+        out.sort(key=lambda i: i["date"], reverse=True)
+        return out
+
+    def flagged(self):
+        """Posts holding a video or archive attachment, newest post first.
+
+        Independent of links: a tracked post worth flagging often has no external
+        links at all, and `pending()` iterates links, so such a post would other-
+        wise never reach the UI. `outstanding` says whether pending() already
+        emits rows for it, so the panel can render it as its own group instead of
+        duplicating one.
+        """
+        out = []
+        with self._lock:
+            for p in self.data.get("posts", {}).values():
+                kinds = [k for k in (p.get("media_kinds") or []) if k in FLAG_KINDS]
+                if not kinds:
+                    continue
+                out.append({
+                    "post_id": p["post_id"],
+                    "title": p.get("title", ""),
+                    "post_url": p.get("url", ""),
+                    "date": p.get("date", ""),
+                    "prefix": p.get("prefix", ""),
+                    "media_kinds": kinds,
+                    "outstanding": any(self._is_outstanding(l)
+                                       for l in (p.get("links") or {}).values()),
+                })
         out.sort(key=lambda i: i["date"], reverse=True)
         return out
 

@@ -1096,16 +1096,24 @@ class Api:
             return {"reachable": False, "items": [], "counts": {}, "pawchive": True}
         try:
             filters = self._link_filters()
-            items = []
+            items, flagged = [], []
             for p in paths:
                 if not os.path.isfile(p):
                     continue
-                items.extend(i for i in PawchiveLinks(p).pending()
+                links = PawchiveLinks(p)
+                items.extend(i for i in links.pending()
                              if not link_is_filtered(i.get("url", ""), filters))
+                flagged.extend(links.flagged())
+            # Posts holding a video/archive that have no outstanding links of
+            # their own would never appear via pending() — the panel renders
+            # these as their own group so the post page link is still reachable.
+            linkless = [f for f in flagged if not f.get("outstanding")]
             counts = {"outstanding": len(items),
-                      "failed": sum(1 for i in items if i.get("status") == "failed")}
+                      "failed": sum(1 for i in items if i.get("status") == "failed"),
+                      "flagged": len(flagged)}
             return {"reachable": True, "pawchive": True,
-                    "items": items, "counts": counts}
+                    "items": items, "flagged": flagged,
+                    "linkless": linkless, "counts": counts}
         except Exception as e:
             return {"reachable": False, "items": [], "counts": {}, "error": str(e)}
 
