@@ -161,3 +161,63 @@ def test_merge_is_idempotent(tmp_path, monkeypatch):
     assert app._merge_legacy_maps(creators, {}, {}, pw) == 1
     assert app._merge_legacy_maps(creators, {}, {}, pw) == 0
     assert len(next(iter(creators.values()))["links"]) == 1
+
+
+# ── errors.db sidecars must never be read as archive DBs ────────────
+
+def test_errors_sidecar_is_not_listed_as_an_archive_db(tmp_path):
+    from backend.library_import import _list_dbs
+    arch = tmp_path / "arch"; arch.mkdir()
+    _mkdb(str(arch / "pawchive_patreon_1.db"), ["a.jpg"])
+    # the FailureStore sidecar: same prefix, .db suffix, no `archive` table
+    sqlite3.connect(str(arch / "pawchive_patreon_1.errors.db")).close()
+    sqlite3.connect(str(arch / "coomerfans_onlyfans_2.errors.db")).close()
+    names = {os.path.basename(p) for p in _list_dbs(str(arch))}
+    assert names == {"pawchive_patreon_1.db"}
+
+
+def test_sidecars_do_not_produce_unmatched_warnings(tmp_path):
+    # The sidecar has no filenames, so before the fix it reported as unmatched.
+    name = "2026.05.01 - Patreon - a.jpg"
+    roots, arch, _ = _setup(tmp_path, [name], [name])
+    sqlite3.connect(os.path.join(arch, "pawchive_patreon_4231621.errors.db")).close()
+    _, _, pw, report = scan_library(roots, arch, session=None, resolve_online=False)
+    assert report["pw_dbs"] == 1              # the sidecar is not counted
+    assert report["unmatched"] == []
+    assert report["matched_pw"] == 1
+
+
+# ── creator folders nested below the chosen root ────────────────────
+
+def test_finds_creators_two_levels_below_root(tmp_path):
+    # P:/Real  ->  P:/Real/Furry/<creator>  — the layout that silently missed.
+    from backend.library_import import _list_creator_folders
+    root = tmp_path / "Real"
+    creator = root / "Furry" / "Sillyliloomfie"
+    creator.mkdir(parents=True)
+    found = _list_creator_folders([str(root)])
+    assert str(creator) in found
+    assert str(root / "Furry") in found       # intermediate kept, harmless
+
+
+def test_depth_limit_is_respected(tmp_path):
+    from backend.library_import import _list_creator_folders
+    deep = tmp_path / "r" / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    found = _list_creator_folders([str(tmp_path / "r")], max_depth=2)
+    assert str(tmp_path / "r" / "a" / "b") in found
+    assert str(deep) not in found
+
+
+def test_nested_creator_actually_correlates(tmp_path):
+    root = tmp_path / "Real"
+    folder = root / "Furry" / "Someone"
+    folder.mkdir(parents=True)
+    name = "2026.05.01 - Patreon - a.jpg"
+    _mkfiles(str(folder), "2026", [name])
+    arch = tmp_path / "arch"; arch.mkdir()
+    _mkdb(str(arch / "pawchive_patreon_9.db"), [name])
+    _, _, pw, report = scan_library([str(root)], str(arch), session=None, resolve_online=False)
+    assert report["matched_pw"] == 1
+    assert pw["patreon_9"]["destination"] == str(folder)
+    assert pw["patreon_9"]["name"] == "Someone"    # folder name, not the category

@@ -82,18 +82,39 @@ def resolve_pw_name(session, service, user_id):
         return None
 
 
-def _list_creator_folders(roots):
-    folders = []
-    for root in roots or []:
-        if not root or not os.path.isdir(root):
-            continue
+def _list_creator_folders(roots, max_depth=2):
+    """Candidate creator folders under each root, to `max_depth` levels.
+
+    The library is organised <root>/<category>/<creator> as often as it is
+    <root>/<creator> (e.g. P:/Real/Furry/<creator> and P:/Real/Creators/
+    <creator> both exist), so scanning only one level below the chosen root
+    silently misses every creator in a categorised tree. Intermediate folders
+    stay in the list: they simply never match, because correlation requires a
+    real filename hit, and keeping them costs one cached listdir each.
+    """
+    folders, seen = [], set()
+
+    def walk(base, depth):
+        if depth > max_depth:
+            return
         try:
-            for e in os.listdir(root):
-                p = os.path.join(root, e)
-                if os.path.isdir(p):
-                    folders.append(p)
+            entries = sorted(os.listdir(base))
         except OSError:
-            pass
+            return
+        for e in entries:
+            p = os.path.join(base, e)
+            if not os.path.isdir(p):
+                continue
+            key = os.path.normcase(os.path.abspath(p))
+            if key in seen:
+                continue
+            seen.add(key)
+            folders.append(p)
+            walk(p, depth + 1)
+
+    for root in roots or []:
+        if root and os.path.isdir(root):
+            walk(root, 1)
     return folders
 
 
@@ -146,9 +167,18 @@ def _folder_tw_tweetids(folder):
 # ── archive DB readers ──────────────────────────────────────────────
 
 def _list_dbs(archive_dir):
+    """Real per-account archive DBs in the archive dir.
+
+    Each creator can also have a `<name>.errors.db` sidecar (the FailureStore)
+    living right beside its archive. Those share the prefix and the .db suffix
+    but have no `archive` table at all, so treating one as an archive DB yields
+    a mangled user_id ("49965584.errors"), an empty filename set and therefore a
+    guaranteed "no folder match" warning. They are excluded here rather than at
+    each call site so every platform pass benefits.
+    """
     try:
         return [os.path.join(archive_dir, f) for f in os.listdir(archive_dir)
-                if f.lower().endswith(".db")]
+                if f.lower().endswith(".db") and not f.lower().endswith(".errors.db")]
     except OSError:
         return []
 
@@ -342,6 +372,7 @@ def scan_library(roots, archive_dir, session, known_cf=None,
         log(f"  {base} → {os.path.basename(folder)}/Twitter")
 
     report = {
+        "roots": list(roots or []),
         "folders": len(folders),
         "cf_dbs": len(cf_dbs), "pw_dbs": len(pw_dbs), "tw_dbs": len(tw_dbs),
         "matched_cf": matched_cf, "matched_pw": matched_pw,
