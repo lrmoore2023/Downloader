@@ -54,6 +54,7 @@ from backend.pawchive_scraper import (
 )
 from backend.pawchive_archive import Archive, entry_key, ext_entry_key
 from backend.pawchive_links import PawchiveLinks
+from backend.rate_limit import AdaptiveThrottle
 from backend.download_errors import FailureStore
 # Reuse the proven low-level helpers verbatim.
 from backend.coomerfans_runner import (
@@ -86,46 +87,9 @@ _MANIFEST_FLUSH_EVERY = 20
 LATEST_DIRNAME = "_latest"
 
 
-class _AdaptiveThrottle:
-    """Self-tuning request pacer shared by all workers (AIMD).
-
-    Each caller reserves the next time slot, so N workers issue at most one
-    request per `interval` overall. The interval adapts: it eases *down* toward
-    `floor` on every clean response (probing for the fastest safe rate) and jumps
-    *up* toward `ceil` on a 429 (respecting Retry-After), so the whole pool backs
-    off together instead of each worker hammering the same wall. Used with a tight
-    profile for the rate-limit-sensitive API and a loose one for the file CDN."""
-
-    def __init__(self, interval, floor, ceil, recover=0.9):
-        self.interval = interval
-        self.floor = floor
-        self.ceil = ceil
-        self.recover = recover   # per-success multiplier easing interval toward floor
-        self._lock = threading.Lock()
-        self._next = 0.0   # monotonic time of the next allowed request
-
-    def wait(self, is_cancelled):
-        with self._lock:
-            now = time.monotonic()
-            start = max(now, self._next)
-            self._next = start + self.interval
-        while True:
-            remaining = start - time.monotonic()
-            if remaining <= 0 or is_cancelled():
-                return
-            time.sleep(min(0.2, remaining))
-
-    def on_success(self):
-        # Additive-ish speed-up: ease the interval down toward the floor.
-        with self._lock:
-            if self.interval > self.floor:
-                self.interval = max(self.floor, self.interval * self.recover)
-
-    def on_throttled(self, retry_after):
-        # Multiplicative back-off + honor the server's Retry-After for the next slot.
-        with self._lock:
-            self.interval = min(self.ceil, max(self.interval * 2, 0.5))
-            self._next = max(self._next, time.monotonic() + retry_after)
+# The AIMD pacer now lives in backend.rate_limit so the coomerfans bot-guard
+# path can share it. Aliased to keep this module's existing call sites intact.
+_AdaptiveThrottle = AdaptiveThrottle
 
 
 # A subset of response headers worth capturing when diagnosing rate limits.

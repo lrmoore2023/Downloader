@@ -19,6 +19,7 @@ real post media.
 
 import os
 import re
+import time
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlsplit
 
@@ -213,12 +214,114 @@ def year_scan_decision(y, rng):
     return "take" if year_in_range(y, rng) else "skip"
 
 
+# ── Media CDN shards ────────────────────────────────────────────────
+
+# Media is sharded over img1..img10.coomerfans.com. Measured 2026-09-12:
+#   * images (/storage/1/, /storage/8/) are served by EVERY shard,
+#   * videos are 404 on most shards but img1 served every one tested,
+#   * img7 refuses TCP connections outright (5/5 attempts, hard timeout).
+# So a file whose URL lands on a dead shard is still downloadable elsewhere, and
+# img1 is the safest first hop. Ordering matters: try the broadest mirrors first
+# so videos don't burn attempts on shards that will 404 them.
+CDN_SHARD_ORDER = (1, 5, 2, 3, 4, 6, 8, 9, 10)
+
+_CDN_HOST_RE = re.compile(r"^(https?://)img(\d+)(\.coomerfans\.com)", re.I)
+
+
+def media_shard(url):
+    """Shard number for an img{N}.coomerfans.com URL, or None if not one."""
+    m = _CDN_HOST_RE.match(url or "")
+    return int(m.group(2)) if m else None
+
+
+def swap_media_host(url, shard):
+    """Same media URL pointed at a different shard (signature/path untouched)."""
+    return _CDN_HOST_RE.sub(rf"\g<1>img{shard}\g<3>", url or "", count=1)
+
+
+# ── Bot-guard challenge ─────────────────────────────────────────────
+
+# coomerfans fronts its HTML host (not the img*.coomerfans.com CDN) with a
+# scoring bot-guard. Every response carries X-Bg-Score; once it crosses ~1.0 the
+# guard answers 503 + "Checking your browser" with Retry-After, for ~15s. The
+# score tracks *concurrency*, not volume: one worker at full tilt sits near 0.17,
+# eight workers trip it within a second. So this is a pacing problem, not a
+# blocked-client problem — there is no cookie or token to acquire, you just have
+# to stay under the line. BotChallenge exists to tell that apart from a real 503.
+# The score is a slowly-decaying budget, not a rate gate: even a strictly serial
+# crawl walks it from ~0.6 to ~1.3 over 160 post reads. Start easing off early and
+# idle near the top so it can decay — see AdaptiveThrottle.on_score.
+BG_TRIP_SCORE = 1.0      # observed challenge at 1.02-1.08, allow at 0.21
+BG_WARN_SCORE = 0.35     # start widening the interval well below the trip line
+BG_COOLOFF = 12.0        # seconds the read pool idles once the score nears the line
+
+
+class BotChallenge(requests.HTTPError):
+    """503 bot-guard interstitial: transient, and Retry-After is meaningful."""
+
+    def __init__(self, message, response=None, retry_after=5, score=None):
+        super().__init__(message, response=response)
+        self.retry_after = retry_after
+        self.score = score
+
+
+def bg_score(response):
+    """Server-reported suspicion score for this client, or None if absent."""
+    try:
+        return float(response.headers.get("X-Bg-Score"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _retry_after(response, default=5):
+    ra = (response.headers.get("Retry-After") or "").strip()
+    return max(1, min(int(ra), 300)) if ra.isdigit() else default
+
+
+def check_challenge(response):
+    """Raise BotChallenge if this response is a bot-guard interstitial."""
+    if (response.headers.get("X-Bg-Decision") or "").lower() == "challenge" or (
+            response.status_code == 503 and "Checking your browser" in response.text[:2000]):
+        score = bg_score(response)
+        raise BotChallenge(
+            f"bot-check triggered (score {score if score is not None else '?'})",
+            response=response, retry_after=_retry_after(response), score=score)
+
+
 # ── Page fetching / parsing ─────────────────────────────────────────
 
 def fetch_html(session, url, timeout=(15, 60)):
     r = session.get(url, timeout=timeout)
+    check_challenge(r)
     r.raise_for_status()
     return r.text
+
+
+def fetch_html_patient(session, url, timeout=(15, 60), attempts=5,
+                       should_cancel=None):
+    """fetch_html that waits out a bot-guard challenge instead of failing.
+
+    For serial callers (Verify & Repair) that have no pacer of their own: a
+    challenge here would otherwise surface as "could not re-read post" and quietly
+    strand a repairable file. Honors Retry-After; re-raises anything else.
+    """
+    last = None
+    for attempt in range(1, attempts + 1):
+        if should_cancel and should_cancel():
+            return None
+        try:
+            return fetch_html(session, url, timeout=timeout)
+        except BotChallenge as e:
+            last = e
+            if attempt == attempts:
+                break
+            waited = 0.0
+            while waited < e.retry_after:
+                if should_cancel and should_cancel():
+                    return None
+                time.sleep(0.5)
+                waited += 0.5
+    raise last
 
 
 def iter_post_urls(session, creator_url, on_page=None, should_cancel=None,
@@ -270,14 +373,16 @@ def iter_post_urls(session, creator_url, on_page=None, should_cancel=None,
         page += 1
 
 
-def parse_post(session, post_url):
+def parse_post(session, post_url, fetch=None):
     """Parse a single post page into structured media metadata.
 
     Returns dict: {post_id, user_id, service, title, dt (UTC datetime|None),
                    url, media: [{url, path_key, kind, ext}]}
     Media are collected in document order and de-duplicated by storage path.
     """
-    html = fetch_html(session, post_url)
+    html = (fetch or fetch_html)(session, post_url)
+    if html is None:            # paced fetch declined (cancelled mid-retry)
+        return None
     return parse_post_html(html, post_url)
 
 
@@ -338,14 +443,16 @@ def parse_post_html(html, post_url):
     }
 
 
-def refresh_media_url(session, post_url, path_key):
+def refresh_media_url(session, post_url, path_key, fetch=None):
     """Re-parse a post and return a fresh (possibly re-signed) URL for the
     media item identified by its storage path. Used when a signed video URL
     has expired mid-queue. Returns the new URL or None.
     """
     try:
-        info = parse_post(session, post_url)
+        info = parse_post(session, post_url, fetch=fetch)
     except Exception:
+        return None
+    if not info:
         return None
     for m in info["media"]:
         if m["path_key"] == path_key:

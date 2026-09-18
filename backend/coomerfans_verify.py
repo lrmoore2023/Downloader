@@ -13,7 +13,7 @@ import os
 import shutil
 import subprocess
 
-from backend.coomerfans_scraper import BASE, parse_post
+from backend.coomerfans_scraper import BASE, parse_post, fetch_html_patient
 from backend.coomerfans_runner import ffprobe_ok, expected_total
 from backend.coomerfans_archive import Archive, entry_key
 
@@ -73,7 +73,7 @@ def _network_size(session, post_url, index, cache):
     """Authoritative full size of a post's media[index] from the server."""
     info = cache.get(post_url)
     if info is None:
-        info = parse_post(session, post_url)
+        info = parse_post(session, post_url, fetch=fetch_html_patient)
         cache[post_url] = info
     media = info["media"]
     if 0 <= index - 1 < len(media):
@@ -179,7 +179,8 @@ def repair_broken(broken, destination, service, user_id, runner, session,
         if should_cancel and should_cancel():
             break
         try:
-            info = parse_post(session, _post_url(post_id, user_id, service))
+            info = parse_post(session, _post_url(post_id, user_id, service),
+                              fetch=fetch_html_patient)
         except Exception as e:
             log(f"Could not re-read post {post_id}: {e}")
             still_bad += len(items)

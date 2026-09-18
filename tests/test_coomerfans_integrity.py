@@ -408,7 +408,7 @@ def t_repair_present_and_deleted():
 
     # repair: monkeypatch parse_post to point media at the local server
     orig = cv.parse_post
-    cv.parse_post = lambda s, url: {
+    cv.parse_post = lambda s, url, fetch=None: {
         "url": url, "dt": datetime(2025, 1, 2, tzinfo=timezone.utc),
         "media": [{"url": BASE + "/full", "path_key": "/pk", "kind": "image", "ext": "jpg"}],
     }

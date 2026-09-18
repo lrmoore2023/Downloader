@@ -38,6 +38,14 @@ window.onCreatorComplete = function (data) {
     if (typeof renderPendingLinks === 'function') renderPendingLinks();
     if (typeof renderErrorLinks === 'function') renderErrorLinks();
 
+    // Authoritative final counts from the runner. The live stats bar is driven by
+    // per-file progress events, and not every backend emits one for skips (the
+    // coomerfans/pawchive runners bump an internal counter instead), which left
+    // Skipped reading 0 on runs that skipped hundreds of already-present files.
+    setStat('statDownloaded', data.downloaded);
+    setStat('statSkipped', data.skipped);
+    setStat('statErrors', data.errors);
+
     const msg = `Done. Downloaded: ${data.downloaded} | Skipped: ${data.skipped} | Errors: ${data.errors}`;
     if (data.cancelled) Logger.info('Operation cancelled.');
     Logger.success(msg);
@@ -185,6 +193,11 @@ function skipDownload(id, btn) {
 }
 
 // Make an entry key safe for use in an element id.
+function setStat(id, value) {
+    const el = document.getElementById(id);
+    if (el && value !== undefined && value !== null) el.textContent = String(value);
+}
+
 function cssId(s) {
     return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
 }
