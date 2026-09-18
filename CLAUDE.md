@@ -53,6 +53,23 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   only loses the creator list. Keep that distinction in mind.
 - A track-only creator has a blank destination, a generated `tc_` id, and keeps
   its manifests under `<archive_dir>/tracked/<id>/`.
+- **The creator index is also mirrored off-machine** to
+  `<archive_dir>/.state-backups/` on every index change (last 20, written on a
+  daemon thread so a slow NAS never stalls a save). `app_state.json` used to live
+  only on the app's own drive, and when that drive died the index went with it
+  while every archive DB survived. `recover_from_backup()` reads these too, so a
+  fresh install with an empty index can rebuild from the NAS alone. These
+  snapshots carry **no credentials** — the archive dir is a shared network share.
+
+### Re-adding a creator never re-downloads
+
+Archive DB paths are derived from `archive_dir` + platform + service + user_id
+(`cf_archive_path` / `pawchive_archive_path` in `creator_runner.py`) — never from
+the creator id, name, or when the record was created. So pointing a brand-new
+creator record at an existing folder with the same link resolves to the same DB
+and the same `.errors.db` sidecar: downloads are skipped and dismissed errors
+stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
+**destination folder**, so they survive too as long as the folder is the same.
 
 ## Standing rules
 
@@ -94,3 +111,9 @@ authored as `lrmoore2023 <lrmoore2023@users.noreply.github.com>`.
 
 `main` is the trunk and is what to work on. Never commit `app_state.json`,
 `*_cookies.txt`, or anything else in `.gitignore` — it is personal data.
+
+**The GitHub repo is public.** Never push the archive DBs, the creator index, or
+anything else naming a creator or a downloaded file. The archive dir records
+every tracked account and every filename downloaded; publishing it would be
+permanent and world-readable. Durable copies of that data belong on the NAS (see
+the mirror above), not in git. Code only.

@@ -54,6 +54,13 @@ STATE_FILE = os.path.join(APP_DIR, "app_state.json")
 # failure. Written whenever the creator index changes; pruned to the last N.
 STATE_BACKUP_DIR = os.path.join(APP_DIR, "app_state.backups")
 STATE_BACKUP_KEEP = 40
+# A second, off-machine copy of the creator index, written into the NAS archive
+# dir beside the archive DBs. app_state.json lived only on the app's own drive;
+# when that drive died the whole index went with it while every archive DB
+# survived on the NAS. These snapshots carry NO credentials (see
+# _nas_backup_payload) because the archive dir is a shared network location.
+NAS_BACKUP_DIRNAME = ".state-backups"
+NAS_BACKUP_KEEP = 20
 AVATAR_DIR = os.path.join(APP_DIR, ".avatars")
 
 
@@ -100,6 +107,11 @@ def _replace_with_retry(src, dst, attempts=10, delay=0.1):
 
 
 class Api:
+
+    # Class-level: serializes the off-machine index mirror across every Api
+    # instance, and exists even on instances built with __new__ (the tests do
+    # that to skip MediaServer/window setup).
+    _nas_backup_lock = threading.Lock()
     def __init__(self):
         self._window = None
         self._creator_runner = None          # active download orchestrator
@@ -281,6 +293,68 @@ class Api:
                     pass
         except Exception:
             pass
+        # Separate try: a NAS problem must not cost us the local snapshot.
+        try:
+            self._backup_state_nas(state)
+        except Exception:
+            pass
+
+    def _nas_backup_dir(self, state):
+        """<archive_dir>/.state-backups, or None when no archive dir is set."""
+        d = (state.get("archive_dir") or "").strip()
+        if not d:
+            return None
+        return os.path.join(d, NAS_BACKUP_DIRNAME)
+
+    @staticmethod
+    def _nas_backup_payload(state):
+        """What goes off-machine: the creator index and the two path settings
+        needed to make sense of it — deliberately NOT the whole state.
+
+        app_state.json also holds a Discord token, a derpibooru API key and
+        cookie-file paths; the archive dir is a shared network share, so
+        credentials must not be copied there.
+        """
+        return {
+            "creators": state.get("creators") or {},
+            "archive_dir": state.get("archive_dir", ""),
+            "library_root": state.get("library_root", ""),
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    def _backup_state_nas(self, state):
+        """Mirror the creator index to the NAS, off the main thread.
+
+        Runs in a daemon thread because save_state holds the state lock while it
+        backs up and the archive dir is a network share — a slow or offline NAS
+        must never stall a save. Failures are swallowed for the same reason.
+        """
+        root = self._nas_backup_dir(state)
+        if not root:
+            return
+        payload = self._nas_backup_payload(state)
+        stamp = self._backup_stamp()
+
+        def write():
+            with self._nas_backup_lock:
+                try:
+                    os.makedirs(root, exist_ok=True)
+                    path = os.path.join(root, f"app_state-{stamp}.json")
+                    fd, tmp = tempfile.mkstemp(dir=root, suffix=".tmp")
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, indent=2)
+                    _replace_with_retry(tmp, path)
+                    names = sorted(n for n in os.listdir(root)
+                                   if n.startswith("app_state-") and n.endswith(".json"))
+                    for stale in names[:-NAS_BACKUP_KEEP]:
+                        try:
+                            os.remove(os.path.join(root, stale))
+                        except OSError:
+                            pass
+                except Exception:
+                    pass
+
+        threading.Thread(target=write, daemon=True).start()
 
     def _ensure_backup_seed(self):
         """At startup, guarantee at least one recovery point exists for the
@@ -442,6 +516,16 @@ class Api:
                     paths.append(os.path.join(d, name))
         except OSError:
             pass
+        # Off-machine copies last: they are the fallback when this machine's
+        # own backups are gone (a fresh install, or a dead drive).
+        nas = self._nas_backup_dir(self.load_state())
+        if nas:
+            try:
+                for name in sorted(os.listdir(nas), reverse=True):
+                    if name.startswith("app_state-") and name.endswith(".json"):
+                        paths.append(os.path.join(nas, name))
+            except OSError:
+                pass
         paths.append(STATE_FILE + ".pre-migrate.bak")
         return paths
 
