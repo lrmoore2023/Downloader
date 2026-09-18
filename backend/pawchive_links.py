@@ -165,6 +165,10 @@ class PawchiveLinks:
                 url = l["url"]
                 prev = prev_links.get(url, {})
                 st = link_states.get(url, {})
+                # A completed grab is final: a later run that skips auto-grabs
+                # (links-only creator) must never downgrade it back to 'skipped'.
+                if prev.get("status") == "grabbed" and st.get("status") == "skipped":
+                    st = {}
                 default_status = "pending"
                 links[url] = {
                     "url": url,
@@ -240,10 +244,12 @@ class PawchiveLinks:
         if link.get("status") == "grabbed":
             return False
         # A direct file is the runner's job: only surface it when the auto-grab
-        # actually FAILED (pending == still in progress / will be retried). Every
+        # actually FAILED (pending == still in progress / will be retried) or was
+        # deliberately not attempted ('skipped' — a links-only creator downloads
+        # nothing, so the user handles even direct files by hand). Every
         # manual/reference link always needs the user until resolved.
         if link.get("kind") == "direct":
-            return link.get("status") == "failed"
+            return link.get("status") in ("failed", "skipped")
         return True
 
     def pending(self):
@@ -298,7 +304,9 @@ class PawchiveLinks:
         if not manual:
             lines.append("_None — you're all caught up._")
         for i in manual:
-            tag = " **[auto-download FAILED]**" if i["status"] == "failed" else ""
+            tag = (" **[auto-download FAILED]**" if i["status"] == "failed"
+                   else " _[auto-download disabled]_" if i["status"] == "skipped"
+                   else "")
             lines.append(f"- **{i['title'] or '(untitled)'}** · {i['date']}{tag}")
             lines.append(f"  - {i['host']} — <{i['url']}>"
                          + (f"  ({i['label']})" if i['label'] else ""))

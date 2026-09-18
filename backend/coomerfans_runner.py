@@ -127,6 +127,15 @@ class CoomerfansRunner:
         self._service = None
         self._user_id = None
         self._mode = "full"
+        # Per-creator fetch prefs (overwritten by run(); all-on by default).
+        self._include_images = True
+        self._include_videos = True
+        self._tracked_posts = []
+
+    def _kind_included(self, kind):
+        """Whether the creator's fetch prefs include this media kind ('videos'
+        covers every non-image kind)."""
+        return self._include_images if kind == "image" else self._include_videos
 
     # ── public contract ──────────────────────────────────────
     @property
@@ -141,10 +150,15 @@ class CoomerfansRunner:
 
     def run(self, creator_url, destination, mode, archive_path,
             on_progress, on_complete, on_error, cookies_path=None, year=None,
-            errors_path=None, year_range=None):
+            errors_path=None, year_range=None, include_images=True,
+            include_videos=True):
         self.downloaded_count = self.skipped_count = self.error_count = 0
         self._cancel_event.clear()
         self._claimed.clear()
+        # Per-creator what-to-fetch switches ('videos' = every non-image kind).
+        self._include_images = bool(include_images)
+        self._include_videos = bool(include_videos)
+        self._tracked_posts = []   # (post_id, dt) whose media was fully excluded
         self._running = True
         self._on_progress = on_progress
         self._destination = destination
@@ -177,6 +191,18 @@ class CoomerfansRunner:
             self._download_all(jobs)
             if not self._cancelled():
                 self._reconcile(jobs)
+
+            # Mark fully-excluded posts 'seen' so the next 'latest' skips them.
+            # Only after an UNcancelled run — an interrupted one must stay
+            # revisitable. Marker entry keys never collide with real media
+            # entries, so re-enabling a kind + 'Download Everything' still works.
+            if self._tracked_posts and self._archive and not self._cancelled():
+                for pid, pdt in self._tracked_posts:
+                    yr = f"{pdt:%Y}" if pdt else "unknown"
+                    self._archive.record(f"coomerfans_{pid}_tracked", pid, None,
+                                         "tracked", yr)
+                self._info(f"{len(self._tracked_posts)} post(s) tracked without "
+                           "downloading (excluded by this creator's fetch settings).")
 
             self._finish(on_complete)
         except Exception as e:
@@ -238,8 +264,13 @@ class CoomerfansRunner:
                     return
 
             # Filenames use the post_id (the /p/{postId}/ number), not a title slug.
+            # Fetch prefs may exclude kinds; entry keys keep the ALL-media index
+            # so they stay stable across pref changes.
             name = str(info["post_id"])
+            added = 0
             for idx, m in enumerate(info["media"], 1):
+                if not self._kind_included(m["kind"]):
+                    continue
                 job = {
                     "post_url": info["url"],
                     "post_id": info["post_id"],
@@ -253,6 +284,13 @@ class CoomerfansRunner:
                 }
                 with jobs_lock:
                     jobs.append(job)
+                added += 1
+            # A post whose every media item was excluded is fully handled under
+            # the current prefs — remember it so a marker row (written after the
+            # run) makes the next 'latest' skip it instead of re-reading it.
+            if info["media"] and not added:
+                with jobs_lock:
+                    self._tracked_posts.append((info["post_id"], info["dt"]))
 
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
             futures = [ex.submit(handle_post, u, 4) for u in post_urls]

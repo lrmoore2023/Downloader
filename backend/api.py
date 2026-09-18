@@ -36,7 +36,7 @@ from backend.discord_scraper import (
 from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
     pawchive_archive_path, twitter_archive_path, derpibooru_archive_path,
-    discord_archive_path, errors_db_path,
+    discord_archive_path, errors_db_path, fetch_prefs, is_track_only,
 )
 from backend.download_errors import open_readonly as open_errors_store
 from backend import album_sites
@@ -832,6 +832,10 @@ class Api:
     def _category_of(self, c):
         # Folders are the source of truth: derive the major from the destination
         # first, only falling back to any stored (possibly stale/flat) category.
+        # A folder-less (track-only) creator has no folder to derive from — it
+        # lives in the fixed "Tracked" bucket.
+        if not c.get("destination"):
+            return "Tracked"
         major, _ = self._derive_category_pair(c.get("destination", ""))
         return major or c.get("category") or ""
 
@@ -853,6 +857,7 @@ class Api:
                 "summary": self._summary(c.get("links", [])),
                 "link_count": len(c.get("links", [])),
                 "last_used": c.get("last_used", ""),
+                "fetch": fetch_prefs(c),
             })
         out.sort(key=lambda a: a["last_used"], reverse=True)
         return out
@@ -869,6 +874,7 @@ class Api:
             "subcategory": self._subcategory_of(c),
             "avatar": c.get("avatar", ""),
             "has_videos": bool(c.get("has_videos")),
+            "fetch": fetch_prefs(c),
             "links": c.get("links", []),
             # Saved 'Fetch Latest' year range (pawchive/coomerfans), or None = all years.
             "latest_range": c.get("latest_range") or None,
@@ -1030,28 +1036,38 @@ class Api:
 
     # ── External-links manifest (pawchive + discord) ────────────────
 
-    def _pawchive_links_path(self, creator):
-        return os.path.join(creator.get("destination", ""), "_pawchive_links.json")
+    def _manifest_root(self, creator_id, creator, state=None):
+        """Folder holding a creator's external-links manifests. The destination
+        when it has one; a track-only (folder-less) creator keeps them under
+        <archive_dir>/tracked/<creator_id> (app dir when archive_dir is unset)."""
+        dest = (creator or {}).get("destination", "")
+        if dest:
+            return dest
+        state = state or self.load_state()
+        base = (state.get("archive_dir") or "").strip()
+        if not (base and os.path.isdir(base)):
+            base = APP_DIR
+        return os.path.join(base, "tracked", creator_id or "unknown")
 
-    def _link_manifest_paths(self, creator):
+    def _link_manifest_paths(self, creator_id, creator, state=None):
         """Manifest JSON paths relevant to a creator: pawchive and/or discord,
         depending on which link platforms it has. Both stores share the same
         format (PawchiveLinks), so the panel aggregates across them."""
-        dest = creator.get("destination", "")
+        root = self._manifest_root(creator_id, creator, state)
         platforms = {l.get("platform") for l in creator.get("links", [])}
         paths = []
         if "pawchive" in platforms:
-            paths.append(os.path.join(dest, "_pawchive_links.json"))
+            paths.append(os.path.join(root, "_pawchive_links.json"))
         if "discord" in platforms:
-            paths.append(os.path.join(dest, "_discord_links.json"))
+            paths.append(os.path.join(root, "_discord_links.json"))
         return paths
 
-    def _pending_counts(self, creator):
+    def _pending_counts(self, creator_id, creator):
         """Filtered outstanding/failed counts aggregated across the creator's
         manifests (used for the button badge)."""
         filters = self._link_filters()
         items = []
-        for p in self._link_manifest_paths(creator):
+        for p in self._link_manifest_paths(creator_id, creator):
             if not os.path.isfile(p):
                 continue
             try:
@@ -1069,11 +1085,14 @@ class Api:
         c = self.load_state().get("creators", {}).get(creator_id)
         if not c:
             return {"reachable": False, "items": [], "counts": {}, "error": "Creator not found"}
-        paths = self._link_manifest_paths(c)
+        paths = self._link_manifest_paths(creator_id, c)
         if not paths:
             return {"reachable": True, "items": [], "counts": {}, "pawchive": False}
+        # Only a creator WITH a destination can have it offline (NAS down). A
+        # track-only creator's manifests live under the archive dir; a missing
+        # folder there just means nothing has been fetched yet.
         dest = c.get("destination", "")
-        if not dest or not os.path.isdir(dest):
+        if dest and not os.path.isdir(dest):
             return {"reachable": False, "items": [], "counts": {}, "pawchive": True}
         try:
             filters = self._link_filters()
@@ -1103,7 +1122,9 @@ class Api:
                     "error": "Creator not found"}
         state = self.load_state()
         archive_dir = (state.get("archive_dir") or "").strip()
-        dest = c.get("destination", "")
+        # Archive-path fallback only; a folder-less creator's DBs live with its
+        # manifests (mirrors the runner's links_root fallback).
+        dest = c.get("destination", "") or self._manifest_root(creator_id, c, state)
         items, failed, gone = [], 0, 0
         for link in filter_links(c.get("links", []), scope):
             apath = self._archive_path_for_link(link, archive_dir, dest)
@@ -1163,7 +1184,7 @@ class Api:
         if not c:
             return {"error": "Creator not found"}
         archive_dir = (self.load_state().get("archive_dir") or "").strip()
-        dest = c.get("destination", "")
+        dest = c.get("destination", "") or self._manifest_root(creator_id, c)
         dismissed = False
         for link in c.get("links", []):
             apath = self._archive_path_for_link(link, archive_dir, dest)
@@ -1191,7 +1212,7 @@ class Api:
         if not c:
             return {"error": "Creator not found"}
         archive_dir = (self.load_state().get("archive_dir") or "").strip()
-        dest = c.get("destination", "")
+        dest = c.get("destination", "") or self._manifest_root(creator_id, c)
         wanted = set(entries or [])
         done = []
         for link in c.get("links", []):
@@ -1222,7 +1243,7 @@ class Api:
         if not c:
             return {"error": "Creator not found"}
         archive_dir = (self.load_state().get("archive_dir") or "").strip()
-        dest = c.get("destination", "")
+        dest = c.get("destination", "") or self._manifest_root(creator_id, c)
         entries = []
         for link in filter_links(c.get("links", []), scope):
             apath = self._archive_path_for_link(link, archive_dir, dest)
@@ -1249,7 +1270,7 @@ class Api:
         if not c:
             return {"error": "Creator not found"}
         archive_dir = (self.load_state().get("archive_dir") or "").strip()
-        dest = c.get("destination", "")
+        dest = c.get("destination", "") or self._manifest_root(creator_id, c)
         wanted = set(entries or [])
         restored = 0
         for link in c.get("links", []):
@@ -1287,6 +1308,9 @@ class Api:
         c = self.load_state().get("creators", {}).get(creator_id)
         if not c:
             return {"error": "Creator not found"}
+        if not c.get("destination"):
+            # Track-only creator: no media folder to scan for stray files.
+            return {"renamed": 0, "already_present": 0, "not_found": 0}
         archive_dir = (self.load_state().get("archive_dir") or "").strip()
         dest = c.get("destination", "")
         want = set(entries) if entries else None
@@ -1405,15 +1429,15 @@ class Api:
         if not c:
             return {"error": "Creator not found"}
         dest = c.get("destination", "")
-        if not dest or not os.path.isdir(dest):
+        if dest and not os.path.isdir(dest):
             return {"error": "Destination folder is not reachable"}
         try:
-            for p in self._link_manifest_paths(c):
+            for p in self._link_manifest_paths(creator_id, c):
                 if not os.path.isfile(p):
                     continue
                 if PawchiveLinks(p).mark_resolved(key, bool(resolved)):
                     return {"ok": True, "resolved": bool(resolved),
-                            "counts": self._pending_counts(c)}
+                            "counts": self._pending_counts(creator_id, c)}
             return {"error": "Link not found"}
         except Exception as e:
             return {"error": str(e)}
@@ -1425,16 +1449,16 @@ class Api:
         if not c:
             return {"error": "Creator not found"}
         dest = c.get("destination", "")
-        if not dest or not os.path.isdir(dest):
+        if dest and not os.path.isdir(dest):
             return {"error": "Destination folder is not reachable"}
         try:
             n = 0
-            for p in self._link_manifest_paths(c):
+            for p in self._link_manifest_paths(creator_id, c):
                 if not os.path.isfile(p):
                     continue
                 n += PawchiveLinks(p).mark_many_resolved(keys or [], bool(resolved))
             return {"ok": True, "updated": n, "resolved": bool(resolved),
-                    "counts": self._pending_counts(c)}
+                    "counts": self._pending_counts(creator_id, c)}
         except Exception as e:
             return {"error": str(e)}
 
@@ -1460,17 +1484,71 @@ class Api:
             s, e = e, s
         return {"start": s, "end": e}
 
+    @staticmethod
+    def _clean_fetch(v):
+        """Normalise a what-to-fetch payload to the 3-bool dict (absent/malformed
+        → all-true, matching fetch_prefs' reading of stored records)."""
+        return fetch_prefs({"fetch": v})
+
+    def _gen_tracked_id(self):
+        """Stable random id for a creator without a destination folder (mirrors
+        _gen_album_id; the 'tc_' prefix marks it as a tracked creator)."""
+        return "tc_" + base64.urlsafe_b64encode(os.urandom(6)).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _migrate_manifests(old_root, new_root):
+        """Best-effort move of the external-links manifests (+ .md rollups) when a
+        creator's manifest home changes (folder added/removed/renamed), so resolved
+        checkmarks survive the transition. Never overwrites an existing file."""
+        if not old_root or not new_root:
+            return
+        if os.path.normpath(old_root) == os.path.normpath(new_root):
+            return
+        for base in ("_pawchive_links", "_discord_links"):
+            for ext in (".json", ".md"):
+                src = os.path.join(old_root, base + ext)
+                dst = os.path.join(new_root, base + ext)
+                try:
+                    if os.path.isfile(src) and not os.path.exists(dst):
+                        os.makedirs(new_root, exist_ok=True)
+                        os.replace(src, dst)
+                except OSError:
+                    pass
+        try:
+            os.rmdir(old_root)   # only succeeds if we emptied it
+        except OSError:
+            pass
+
     def save_creator(self, creator):
         """Create or update a creator (from the Configure Links overlay).
 
         Re-parses each link's URL so platform/service/user_id/username are
         authoritative, dedupes, re-keys by normalized destination, and creates
         the folder. Does not touch downloaded files or archive DBs.
+
+        A destination is optional when the creator downloads nothing (its
+        `fetch` prefs have Images and Videos both off) — such a "track-only"
+        creator is keyed by a generated 'tc_' id instead of its folder.
         """
         creator = creator or {}
         destination = self._fwd(creator.get("destination"))
-        if not destination:
-            return {"error": "Destination folder is required"}
+
+        state = self.load_state()
+        creators = state.get("creators", {})
+        old_id = creator.get("id")
+        prior = creators.get(old_id) if old_id else None
+        # What-to-fetch checkboxes: take them from the payload when the overlay
+        # sent them; otherwise carry the stored value forward (legacy callers).
+        fetch = self._clean_fetch(
+            creator["fetch"] if "fetch" in creator
+            else (prior or {}).get("fetch"))
+        track_only = not (fetch["images"] or fetch["videos"])
+
+        if not destination and not track_only:
+            return {"error": "Destination folder is required (uncheck Images and "
+                             "Videos to track links without downloading)"}
+        if not destination and not (creator.get("name") or "").strip():
+            return {"error": "A name is required for a creator without a folder"}
 
         links, seen = [], set()
         for l in creator.get("links", []):
@@ -1491,22 +1569,25 @@ class Api:
             links.append(built)
 
         name = (creator.get("name") or "").strip() or self._basename(destination)
-        # Category follows the destination folder — derive both fields from it.
-        major, subcategory = self._derive_category_pair(destination)
-        category = major or (creator.get("category") or "").strip()
-        new_id = self._norm_dest(destination)
+        if destination:
+            # Category follows the destination folder — derive both fields from it.
+            major, subcategory = self._derive_category_pair(destination)
+            category = major or (creator.get("category") or "").strip()
+            new_id = self._norm_dest(destination)
+            try:
+                os.makedirs(destination, exist_ok=True)
+            except OSError:
+                pass
+        else:
+            # Track-only: no folder to key by — keep the record's generated id
+            # across edits so archives/manifests stay attached.
+            category, subcategory = "Tracked", ""
+            new_id = (old_id if (old_id or "").startswith("tc_")
+                      else self._gen_tracked_id())
 
-        try:
-            os.makedirs(destination, exist_ok=True)
-        except OSError:
-            pass
-
-        state = self.load_state()
-        creators = state.get("creators", {})
-        old_id = creator.get("id")
         if old_id and old_id != new_id:
             creators.pop(old_id, None)
-        existing = creators.get(new_id, {})
+        existing = creators.get(new_id) or prior or {}
         # Preserve a chosen icon if that account still has a link.
         avatar = creator.get("avatar") or existing.get("avatar") or ""
         valid_accts = {f"{l['service']}_{l['user_id']}" for l in links if l["platform"] == "coomerfans"}
@@ -1519,6 +1600,7 @@ class Api:
             "subcategory": subcategory,
             "avatar": avatar,
             "has_videos": bool(creator.get("has_videos")),
+            "fetch": fetch,
             "links": links,
             "last_used": existing.get("last_used") or datetime.now(timezone.utc).isoformat(),
             # Saved 'Fetch Latest' year range. Take it from the incoming payload when the
@@ -1528,6 +1610,12 @@ class Api:
                 creator["latest_range"] if "latest_range" in creator
                 else existing.get("latest_range")),
         }
+        # A changed manifest home (folder added, removed, or renamed) moves the
+        # links manifests along so resolved checkmarks survive.
+        if prior is not None:
+            old_root = self._manifest_root(old_id, prior, state)
+            new_root = self._manifest_root(new_id, creators[new_id], state)
+            self._migrate_manifests(old_root, new_root)
         state["creators"] = creators
         self.save_state(state)
         return {"id": new_id, "name": name}
@@ -1543,11 +1631,11 @@ class Api:
         if c is None:
             return {"ok": False}
         if delete_archives:
-            deleted = self._delete_creator_archives(c, state)   # archives + errors + manifest
+            deleted = self._delete_creator_archives(creator_id, c, state)   # archives + errors + manifest
         else:
             # Keep the archive (a re-add resumes), but still forget "errors needing
             # attention" — deleting a creator should reset its errors to none.
-            self._delete_creator_error_dbs(c, state)
+            self._delete_creator_error_dbs(creator_id, c, state)
             deleted = []
         creators.pop(creator_id, None)
         state["creators"] = creators
@@ -1571,7 +1659,8 @@ class Api:
         if not link:
             return {"error": "Link not found"}
         path = self._archive_path_for_link(
-            link, (state.get("archive_dir") or "").strip(), c.get("destination", ""))
+            link, (state.get("archive_dir") or "").strip(),
+            c.get("destination", "") or self._manifest_root(creator_id, c, state))
         if not path:
             return {"error": "This platform keeps no clearable history."}
         existed = os.path.isfile(path)
@@ -1629,11 +1718,12 @@ class Api:
             pass
         return main_deleted
 
-    def _delete_creator_archives(self, creator, state):
+    def _delete_creator_archives(self, creator_id, creator, state):
         """Remove each of a creator's per-link archive DBs (+ sqlite side files).
         Returns the basenames of the main .db files actually deleted."""
         archive_dir = (state.get("archive_dir") or "").strip()
-        dest = creator.get("destination", "")
+        dest = creator.get("destination", "") or self._manifest_root(
+            creator_id, creator, state)
         removed = []
         for link in creator.get("links", []):
             path = self._archive_path_for_link(link, archive_dir, dest)
@@ -1646,7 +1736,7 @@ class Api:
         # resolved checkmarks) at its destination. Clearing archives means "start
         # fresh", so drop the manifest too — otherwise a re-download keeps every
         # link you'd previously marked done hidden.
-        for jp in self._link_manifest_paths(creator):
+        for jp in self._link_manifest_paths(creator_id, creator, state):
             for p in (jp, os.path.splitext(jp)[0] + ".md"):
                 try:
                     if os.path.isfile(p):
@@ -1654,13 +1744,21 @@ class Api:
                         removed.append(os.path.basename(p))
                 except OSError:
                     pass
+        # A track-only creator's manifests live in a per-creator folder we own —
+        # remove it once emptied (best-effort; ignored when files remain).
+        if not creator.get("destination"):
+            try:
+                os.rmdir(self._manifest_root(creator_id, creator, state))
+            except OSError:
+                pass
         return removed
 
-    def _delete_creator_error_dbs(self, creator, state):
+    def _delete_creator_error_dbs(self, creator_id, creator, state):
         """Delete each of a creator's per-link error stores (+ side files) so its
         'errors needing attention' resets to none. Archives and media are untouched."""
         archive_dir = (state.get("archive_dir") or "").strip()
-        dest = creator.get("destination", "")
+        dest = creator.get("destination", "") or self._manifest_root(
+            creator_id, creator, state)
         for link in creator.get("links", []):
             path = self._archive_path_for_link(link, archive_dir, dest)
             if path:
@@ -1745,6 +1843,9 @@ class Api:
         c = state.get("creators", {}).get(creator_id)
         if not c:
             return {"reachable": False, "items": [], "error": "Creator not found"}
+        if not c.get("destination"):
+            return {"reachable": False, "items": [],
+                    "error": "Tracked creator — no local media"}
         self._media.start()
         self._configure_media(state)
         res = scan_creator_media(c.get("destination", ""))
@@ -1793,6 +1894,14 @@ class Api:
             return {"error": "Select a year to download"}
         if not filter_links(c["links"], scope):
             return {"error": f"No '{scope}' links for this creator."}
+        # A links-only creator downloads nothing, and only pawchive collects
+        # external links without downloading — a scope with no pawchive link
+        # would be a no-op, so say so instead of running an empty pass.
+        if is_track_only(c) and not any(
+                l.get("platform") == "pawchive"
+                for l in filter_links(c["links"], scope)):
+            return {"error": "This creator is links-only — only its pawchive links "
+                             "collect external links, and this scope has none."}
 
         try:
             workers = max(3, min(10, int(state.get("cf_concurrency") or 5)))
@@ -1826,14 +1935,16 @@ class Api:
                                              pawchive_extract=pawchive_extract)
         self._creator_thread = threading.Thread(
             target=self._run_creator_download,
-            args=(c, scope, mode, year, bool(refresh_links), entries, eff_range),
+            args=(creator_id, c, scope, mode, year, bool(refresh_links), entries,
+                  eff_range),
             daemon=True,
         )
         self._creator_thread.start()
         return {"status": "started", "mode": mode, "scope": scope}
 
-    def _run_creator_download(self, creator, scope, mode, year, refresh_links=True,
-                              error_entries=None, year_range=None):
+    def _run_creator_download(self, creator_id, creator, scope, mode, year,
+                              refresh_links=True, error_entries=None,
+                              year_range=None):
         state = self.load_state()
         self._creator_runner.run(
             creator=creator,
@@ -1843,6 +1954,7 @@ class Api:
             year_range=year_range,
             refresh_links=refresh_links,
             error_entries=error_entries,
+            links_root=self._manifest_root(creator_id, creator, state),
             archive_dir=(state.get("archive_dir") or "").strip(),
             cookies_path=state.get("cookies_path") or "",
             cookies_browser=state.get("cookies_browser") or "",
@@ -2223,6 +2335,8 @@ class Api:
         cf_links = [l for l in c.get("links", []) if l.get("platform") == "coomerfans"]
         if not cf_links:
             return {"error": "This creator has no coomerfans links to verify."}
+        if not c.get("destination"):
+            return {"error": "This creator has no destination folder to verify."}
 
         archive_dir = (state.get("archive_dir") or "").strip()
         self._aux_cancel.clear()

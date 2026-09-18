@@ -230,6 +230,10 @@ class PawchiveRunner:
         self._dl_sessions = []            # every worker session, for cleanup
         self._dl_sessions_lock = threading.Lock()
         self._cookies_path = None
+        # Per-creator fetch prefs (overwritten by run(); all-on by default).
+        self._include_images = True
+        self._include_videos = True
+        self._grab_direct = True
         # UA the embedded browser used to earn a Cloudflare cf_clearance cookie; pinned
         # on every session so the replayed cookie validates (see make_session).
         self._user_agent = None
@@ -421,8 +425,18 @@ class PawchiveRunner:
     def run(self, creator_url, destination, mode, archive_path, links_path,
             on_progress, on_complete, on_error, cookies_path=None, year=None,
             errors_path=None, error_entries=None, user_agent=None,
-            year_range=None):
+            year_range=None, include_images=True, include_videos=True,
+            collect_links=True):
         self.downloaded_count = self.skipped_count = self.error_count = 0
+        # Per-creator what-to-fetch switches. 'videos' covers every non-image
+        # media kind (video + archive packs). Direct external links are FILE
+        # downloads, so auto-grabs follow the media switches: with both off the
+        # run downloads nothing and only tracks links in the manifest.
+        self._include_images = bool(include_images)
+        self._include_videos = bool(include_videos)
+        self._grab_direct = self._include_images or self._include_videos
+        if not collect_links:
+            links_path = None
         # Targeted 'errors' run: only re-attempt these recorded failures (a specific
         # post / file / year the user asked to recheck). None = every recorded error.
         self._error_entries = set(error_entries) if error_entries else None
@@ -461,9 +475,12 @@ class PawchiveRunner:
         # re-staged; the archive marks staged posts 'seen' so they aren't re-fetched.
         self._write_root = (os.path.join(destination, LATEST_DIRNAME)
                             if mode == "latest" else destination)
-        if self._write_root != self._destination:
+        if self._write_root != self._destination and self._grab_direct:
             self._info(f"Fetch Latest: new files staged in {LATEST_DIRNAME}\\ — "
                        "move them into your year folders when ready.")
+        if not self._grab_direct:
+            self._info("Track-only creator: no files will be downloaded — "
+                       "collecting post links only.")
         if self._diag.enabled:
             self._info(f"diagnostics → {_DIAG_PATH}")
 
@@ -533,7 +550,9 @@ class PawchiveRunner:
             # Let any queued extractions finish before reconciling (reconcile checks
             # files on disk, and extraction moves/deletes them).
             self._drain_extractions()
-            if not self._cancelled():
+            # A track-only run downloads nothing: there is no disk state to
+            # reconcile against (and possibly no destination folder at all).
+            if not self._cancelled() and self._grab_direct:
                 self._reconcile(media_jobs)
             self._finalize_manifest(posts)
 
@@ -547,7 +566,8 @@ class PawchiveRunner:
             #    from the failure store WITHOUT re-downloading the rest of the post —
             #    picking up files pawchive has imported since. It touches only failure-
             #    store entries (never archived files), so deletions are never resurrected.
-            if mode in ("full", "redownload_year", "latest") and not self._cancelled():
+            if (mode in ("full", "redownload_year", "latest")
+                    and not self._cancelled() and self._grab_direct):
                 self._recover_errors(crawl_fallback=False)
 
             self._finish(on_complete)
@@ -587,6 +607,11 @@ class PawchiveRunner:
             f"peak {summary['max_concurrency']} concurrent, {elapsed}s")
 
     # ── crawl + build jobs ───────────────────────────────────
+    def _kind_included(self, kind):
+        """Whether the creator's fetch prefs include this media kind ('videos'
+        covers every non-image kind: video + archive packs)."""
+        return self._include_images if kind == "image" else self._include_videos
+
     def _crawl(self, year_range=None):
         self._info("Crawling creator posts...")
 
@@ -594,6 +619,7 @@ class PawchiveRunner:
             self._info(f"Page {page}: {n} post(s)")
 
         media_jobs, ext_jobs, posts = [], [], {}
+        tracked_posts = []   # (post_id, dt) crawled but fully excluded by fetch prefs
         rng = year_range
         posts_since_flush = 0
         pending_skipped = 0   # posts pawchive hasn't imported yet (no files to fetch)
@@ -667,10 +693,17 @@ class PawchiveRunner:
             # them; videos always use standard naming (they carry real names and
             # live in a separate folder). image_no counts images as we go so the
             # ordinal reflects position among the post's images, in page order.
-            image_count = sum(1 for m in post["media"] if m["kind"] == "image")
+            # Fetch prefs may exclude kinds: entry keys keep the ALL-media index
+            # (stable across pref changes), but ordinals count included images
+            # only, so filenames stay dense.
+            image_count = sum(1 for m in post["media"]
+                              if m["kind"] == "image" and self._include_images)
             ord_width = max(2, len(str(image_count)))
             image_no = 0
+            jobs_before = len(media_jobs)
             for idx, m in enumerate(post["media"], 1) if not is_pending else ():
+                if not self._kind_included(m["kind"]):
+                    continue
                 ordinal = None
                 if m["kind"] == "image":
                     image_no += 1
@@ -694,10 +727,26 @@ class PawchiveRunner:
                     # explicit 'pending' fast-fails. Pending posts don't reach here.
                     "preview_state": post.get("preview_state", ""),
                 })
+            # A post whose every media item was excluded by the fetch prefs is
+            # fully handled once its links are recorded — remember it so a marker
+            # row (written after the crawl) makes future 'latest' runs skip it.
+            # Pending/deferred posts stay unmarked: they must be revisited until
+            # pawchive imports them. Posts with no media at all are re-scanned
+            # each run, exactly as today.
+            if (post["media"] and len(media_jobs) == jobs_before
+                    and not is_pending and not has_deferred):
+                tracked_posts.append((post["post_id"], post["dt"]))
             ei = 0
+            skipped_states = {}
             for l in post["external_links"]:
                 if l["kind"] == "direct":
                     ei += 1   # advance for every direct link so entry keys stay stable
+                    # A links-only creator downloads nothing: leave direct files
+                    # in the manifest as 'skipped' so the panel surfaces them for
+                    # a manual grab instead of auto-fetching them to disk.
+                    if not self._grab_direct:
+                        skipped_states[l["url"]] = {"status": "skipped"}
+                        continue
                     # Skip a link the user checked off in the URL tab — never re-grab it
                     # (same rule as a dismissed error). Unchecked links stay up for grabs.
                     if self._links and self._links.is_resolved(post["post_id"], l["url"]):
@@ -716,7 +765,7 @@ class PawchiveRunner:
             # attention" panel fills in progressively during a long crawl instead
             # of only appearing once the whole crawl finishes.
             if self._links:
-                self._links.upsert_post(post, {})
+                self._links.upsert_post(post, skipped_states)
                 posts_since_flush += 1
                 if posts_since_flush >= _MANIFEST_FLUSH_EVERY:
                     posts_since_flush = 0
@@ -735,12 +784,12 @@ class PawchiveRunner:
                     and img_posts_per_day[job["dt"].date()] > 1):
                 job["include_time"] = True
 
-        if pending_skipped:
+        if pending_skipped and self._grab_direct:
             newly = (f"{pending_logged} newly logged in errors"
                      if pending_logged else "already tracked / checked off")
             self._info(f"{pending_skipped} post(s) not imported by pawchive yet "
                        f"({newly}; no files fetched) — auto-downloads once pawchive imports them.")
-        if deferred_posts:
+        if deferred_posts and self._grab_direct:
             newly = (f"{deferred_logged} newly logged in errors"
                      if deferred_logged else "already tracked / checked off")
             self._info(f"{deferred_posts} post(s) with file(s) pawchive hasn't imported "
@@ -748,6 +797,20 @@ class PawchiveRunner:
 
         # One NAS write for the whole crawl (autosave is off during the loop).
         self._save_links()
+
+        # Mark fully-excluded posts 'seen' (a synthetic per-post marker row) so
+        # the next 'latest' run skips them — their links are recorded above and
+        # there is nothing to download under the current fetch prefs. Only after
+        # an UNcancelled crawl: an interrupted crawl must stay revisitable.
+        # Entry keys don't collide with real media entries, so re-enabling a
+        # media kind + 'Download Everything' still fetches the files later.
+        if tracked_posts and self._archive and not self._cancelled():
+            for pid, pdt in tracked_posts:
+                year = f"{pdt:%Y}" if pdt else "unknown"
+                self._archive.record(f"pawchive_{pid}_tracked", pid, None,
+                                     "tracked", year)
+            self._info(f"{len(tracked_posts)} post(s) tracked without downloading "
+                       "(links recorded; excluded by this creator's fetch settings).")
         return media_jobs, ext_jobs, posts
 
     def _url(self, url):
@@ -1246,10 +1309,12 @@ class PawchiveRunner:
         from the listing's preview_state on each crawl — when the post flips to
         'scraped' it downloads via the normal path and _clear_failure removes this
         record — so we never re-attempt the file while it's absent."""
-        if not self._errors:
+        if not self._errors or not self._grab_direct:
             return 0
         logged = 0
         for idx, m in enumerate(post["media"], 1):
+            if not self._kind_included(m["kind"]):
+                continue   # excluded by fetch prefs — not ours to watch
             entry = entry_key(post["post_id"], idx)
             if entry in self._known_failure_entries:
                 continue   # already shown, or checked off — don't touch it
@@ -1276,11 +1341,13 @@ class PawchiveRunner:
         the media index it WILL occupy once imported — len(media)+j. When pawchive
         fills in its path it becomes media[len(media)+j-1], the crawl builds a normal
         job under the SAME entry key, downloads it, and _clear_failure drops this row."""
-        if not self._errors:
+        if not self._errors or not self._grab_direct:
             return 0
         base = len(post["media"])   # deferred slots trail the imported ones
         logged = 0
         for j, m in enumerate(post.get("deferred_media") or [], 1):
+            if not self._kind_included(m["kind"]):
+                continue   # excluded by fetch prefs — not ours to watch
             entry = entry_key(post["post_id"], base + j)
             if entry in self._known_failure_entries:
                 continue   # already shown, or checked off — don't touch it
@@ -1684,6 +1751,11 @@ class PawchiveRunner:
             # would have no other path to get grabbed.
             if reason == "deferred":
                 return f.get("post_id") not in self._crawled_post_ids
+            # Fetch prefs: don't auto-retry a kind this creator no longer
+            # downloads (rows from before a pref change). A TARGETED panel
+            # retry still honors the user's explicit click.
+            if f.get("media_kind") and not self._kind_included(f["media_kind"]):
+                return False
             return True
 
         failures = [f for f in (self._errors.list_failures(state=("failed", "gone"))

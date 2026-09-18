@@ -352,6 +352,7 @@ function openConfigure() {
     document.getElementById('cfgName').value = currentCreator.name || '';
     document.getElementById('cfgDest').value = currentCreator.destination || '';
     setCfgType(currentCreator.category, currentCreator.subcategory);
+    cfgSetFetch(currentCreator.fetch);
     const r = currentCreator.latest_range || {};
     document.getElementById('cfgRangeStart').value = (r.start != null) ? r.start : '';
     document.getElementById('cfgRangeEnd').value = (r.end != null) ? r.end : '';
@@ -366,10 +367,54 @@ function openNewCreator() {
     document.getElementById('cfgName').value = '';
     document.getElementById('cfgDest').value = '';
     setCfgType('', '');
+    cfgSetFetch(null);
     document.getElementById('cfgRangeStart').value = '';
     document.getElementById('cfgRangeEnd').value = '';
     document.getElementById('cfgDeleteBtn').style.display = 'none';
     openConfigureCommon();
+}
+
+// ── What-to-fetch checkboxes (Images / Videos / External links) ─────
+
+function cfgSetFetch(f) {
+    // Absent prefs (legacy creators, New Creator) mean fetch everything.
+    document.getElementById('cfgFetchImages').checked = !f || f.images !== false;
+    document.getElementById('cfgFetchVideos').checked = !f || f.videos !== false;
+    document.getElementById('cfgFetchLinks').checked = !f || f.links !== false;
+    cfgFetchChanged();
+}
+
+function cfgReadFetch() {
+    return {
+        images: document.getElementById('cfgFetchImages').checked,
+        videos: document.getElementById('cfgFetchVideos').checked,
+        links: document.getElementById('cfgFetchLinks').checked,
+    };
+}
+
+function cfgFetchChanged() {
+    const f = cfgReadFetch();
+    const trackOnly = !f.images && !f.videos;
+    // The folder can only be removed for a track-only creator.
+    document.getElementById('cfgClearDestBtn').disabled = !trackOnly;
+    const hint = document.getElementById('cfgFetchHint');
+    if (trackOnly) {
+        hint.innerHTML = f.links
+            ? '<b>Track-only:</b> nothing is downloaded — pawchive posts\' external links are collected in the URL panel to check off. Other platforms are skipped. A folder is optional.'
+            : 'Nothing is selected — a download run would do nothing. Check at least one box.';
+    } else {
+        hint.innerHTML = 'Images/Videos apply to pawchive &amp; coomerfans (Twitter/Derpibooru always fetch everything). Uncheck <b>both</b> to track a creator\'s post links without downloading anything — no folder needed.';
+    }
+}
+
+function cfgClearDest() {
+    const f = cfgReadFetch();
+    if (f.images || f.videos) {
+        showToast('Uncheck Images and Videos first — a downloading creator needs a folder', 'error');
+        return;
+    }
+    document.getElementById('cfgDest').value = '';
+    setCfgType('Tracked', '');
 }
 
 // Render the read-only Type chip ("Major · Sub") — the type is dictated by the
@@ -553,7 +598,17 @@ async function cfgSave() {
     }
 
     const destination = document.getElementById('cfgDest').value.trim();
-    if (!destination) { showToast('Choose a destination folder', 'error'); return; }
+    const fetchPrefs = cfgReadFetch();
+    const trackOnly = !fetchPrefs.images && !fetchPrefs.videos;
+    // A folder is only optional for a track-only creator (downloads nothing).
+    if (!destination && !trackOnly) {
+        showToast('Choose a destination folder (or uncheck Images and Videos to track links only)', 'error');
+        return;
+    }
+    if (!destination && !document.getElementById('cfgName').value.trim()) {
+        showToast('Give the creator a name (it has no folder to name it after)', 'error');
+        return;
+    }
 
     const rangeStart = document.getElementById('cfgRangeStart').value.trim();
     const rangeEnd = document.getElementById('cfgRangeEnd').value.trim();
@@ -562,6 +617,7 @@ async function cfgSave() {
         name: document.getElementById('cfgName').value.trim(),
         // Type is derived from the destination folder by the backend — not sent.
         destination,
+        fetch: fetchPrefs,
         links: cfgLinksData.map(l => ({ url: l.url, tag: l.tag || '' })),
         // Saved Fetch Latest range (blank sides = open/all). Backend cleans + orders it.
         latest_range: { start: rangeStart || null, end: rangeEnd || null },

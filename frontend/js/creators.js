@@ -5,7 +5,8 @@ let currentCreatorId = '';
 let currentCreator = null;        // full object {id, name, destination, category, has_videos, links}
 let currentScope = 'everything';
 // Fixed type hierarchy (mirrors the P:\{Major}\{Sub} folder layout on the NAS).
-const CATEGORY_TREE = { Furry: ['2D', '3D'], Hentai: ['2D', '3D'], Real: ['Real', 'Furry'] };
+// 'Tracked' is the folder-less bucket: track-only creators with no destination.
+const CATEGORY_TREE = { Furry: ['2D', '3D'], Hentai: ['2D', '3D'], Real: ['Real', 'Furry'], Tracked: [] };
 let currentMajor = 'All';         // shared type filter (Creator dropdown + Gallery)
 let currentSub = null;            // active subcategory within the major (null = all subs)
 let currentSort = 'recent';       // 'recent' (last downloaded) | 'name' (A–Z)
@@ -111,7 +112,7 @@ function buildCategoryFilter() {
 
 function buildSubRow(subEl) {
     const subs = CATEGORY_TREE[currentMajor];
-    if (!subs) { subEl.style.display = 'none'; subEl.innerHTML = ''; return; }
+    if (!subs || !subs.length) { subEl.style.display = 'none'; subEl.innerHTML = ''; return; }
     subEl.style.display = '';
     subEl.innerHTML = '';
     subs.forEach(s => {
@@ -287,7 +288,10 @@ async function renderPendingLinks(fromPoll = false) {
 
 // One link row inside a multi-link post group.
 function pendingChildRow(i) {
-    const failed = i.status === 'failed' ? '<span class="badge badge-failed">failed</span>' : '';
+    const failed = i.status === 'failed' ? '<span class="badge badge-failed">failed</span>'
+        : i.status === 'skipped'
+            ? '<span class="badge badge-skipped" title="Direct file link — not auto-downloaded because this creator is links-only">not auto-grabbed</span>'
+            : '';
     const missing = (i.missing && i.missing.length)
         ? `<span class="pending-missing">missing: ${escapeHtml(i.missing.join(', '))}</span>` : '';
     // Highlight the hosts worth spotting at a glance (mega, google drive, tinyurl).
@@ -841,7 +845,21 @@ function renderChips() {
     if (s.twitter) chips.push('<span class="chip chip-twitter">Twitter</span>');
     if (s.derpibooru) chips.push(chipHtml('Derpibooru', s.derpibooru));
     if (s.discord) chips.push('<span class="chip chip-discord">Discord</span>');
+    const fc = fetchChip(currentCreator.fetch);
+    if (fc) chips.push(fc);
     el.innerHTML = chips.join('');
+}
+
+// Read-only what-to-fetch chip ("Links only", "Images only", …). Null when the
+// creator fetches everything (the default — no chip noise).
+function fetchChip(f) {
+    if (!f || (f.images !== false && f.videos !== false && f.links !== false)) return null;
+    let label;
+    if (!f.images && !f.videos) label = f.links ? 'Links only' : 'Fetches nothing';
+    else if (!f.videos) label = f.links ? 'Images only' : 'Images, no links';
+    else if (!f.images) label = f.links ? 'Videos only' : 'Videos, no links';
+    else label = 'No link scan';
+    return `<span class="chip chip-fetch" title="What this creator fetches — change it in Configure Links">${label}</span>`;
 }
 
 function chipHtml(label, n) {
@@ -930,18 +948,24 @@ function updateActionAvailability() {
     const hasCreator = !!currentCreator;
     const hasLinks = hasCreator && currentCreator.links.length > 0;
     const hasCf = hasCreator && currentCreator.links.some(l => l.platform === 'coomerfans');
+    // A track-only creator may have no destination folder — everything that
+    // touches local media (open folder, verify) is off for it.
+    const hasDest = hasCreator && !!currentCreator.destination;
+    const fetchLinks = !hasCreator || !currentCreator.fetch
+        || currentCreator.fetch.links !== false;
     // The "refresh external links" opt-out only means anything for platforms that
-    // keep a "Links needing attention" manifest (pawchive/discord) — hide it otherwise.
+    // keep a "Links needing attention" manifest (pawchive/discord) — hide it
+    // otherwise, and when this creator's link scanning is switched off entirely.
     const hasLinkManifest = hasCreator && currentCreator.links.some(
         l => l.platform === 'pawchive' || l.platform === 'discord');
     const refreshRow = document.getElementById('refreshLinksRow');
-    if (refreshRow) refreshRow.style.display = hasLinkManifest ? '' : 'none';
+    if (refreshRow) refreshRow.style.display = (hasLinkManifest && fetchLinks) ? '' : 'none';
 
     document.getElementById('btnConfigure').disabled = !hasCreator || isBusy;
-    document.getElementById('btnOpenFolder').disabled = !hasCreator;
+    document.getElementById('btnOpenFolder').disabled = !hasDest;
     ['btnDownloadAll', 'btnFetchLatest', 'btnRedownload'].forEach(id =>
         document.getElementById(id).disabled = !hasLinks || isBusy);
-    document.getElementById('btnVerify').disabled = !hasCf || isBusy;
+    document.getElementById('btnVerify').disabled = !hasCf || !hasDest || isBusy;
     const btnErr = document.getElementById('btnRedownloadErrors');
     if (btnErr) btnErr.disabled = isBusy || currentErrorCount === 0;
 }

@@ -42,6 +42,30 @@ from backend.archive_sync import (
 )
 
 
+# ── per-creator fetch preferences ────────────────────────────────────
+
+def fetch_prefs(creator):
+    """The creator's what-to-fetch checkboxes as a clean 3-bool dict.
+
+    A creator without a `fetch` key (every pre-feature record) fetches
+    everything, so absence — or any malformed value — means all-true.
+    'videos' covers every non-image media kind (video + archive packs).
+    """
+    f = (creator or {}).get("fetch")
+    if not isinstance(f, dict):
+        return {"images": True, "videos": True, "links": True}
+    return {"images": bool(f.get("images", True)),
+            "videos": bool(f.get("videos", True)),
+            "links": bool(f.get("links", True))}
+
+
+def is_track_only(creator):
+    """True when nothing downloadable is enabled — the creator only tracks
+    external links (and may have no destination folder at all)."""
+    p = fetch_prefs(creator)
+    return not (p["images"] or p["videos"])
+
+
 # ── scope → link filtering ──────────────────────────────────────────
 
 def filter_links(links, scope):
@@ -196,7 +220,7 @@ class CreatorRunner:
             derpibooru_api_key=None, derpibooru_filter_id=None,
             discord_token=None, discord_token_type=None, refresh_links=True,
             error_entries=None, pawchive_cookies_path=None,
-            pawchive_user_agent=None, year_range=None):
+            pawchive_user_agent=None, year_range=None, links_root=None):
         # A targeted 'errors' recheck (specific pawchive failures the user picked in
         # the panel — a file/post/year). Only pawchive uses the per-entry failure
         # store, so a targeted run skips other platforms (which treat 'errors' as a
@@ -218,6 +242,20 @@ class CreatorRunner:
         # Inclusive year-range for a 'Fetch Latest' run (pawchive/coomerfans only);
         # None = all years. Resolved by the API layer (one-off vs saved default).
         self._year_range = year_range
+        # What this creator fetches (Images / Videos / External links). A
+        # track-only creator downloads nothing and may have NO destination —
+        # its manifests (and, without an archive_dir, its DBs) live under
+        # links_root, which the API resolves (destination when there is one).
+        self._fetch = fetch_prefs(creator)
+        self._track_only = is_track_only(creator)
+        self._links_root = links_root or creator.get("destination", "")
+        # A destination folder is created by save_creator; the tracked/<id>
+        # manifest home of a folder-less creator is ours to create.
+        if self._links_root and not creator.get("destination"):
+            try:
+                os.makedirs(self._links_root, exist_ok=True)
+            except OSError:
+                pass
         self._running = True
         self._cancel.clear()
         self._needs_cf_auth = False
@@ -242,6 +280,14 @@ class CreatorRunner:
                     break
                 # Targeted error recheck → pawchive only (see run() docstring).
                 if error_entries is not None and link.get("platform") != "pawchive":
+                    continue
+                # A links-only creator downloads nothing, and only the pawchive
+                # engine collects external links without downloading — the other
+                # platforms have nothing to do for it.
+                if self._track_only and link.get("platform") != "pawchive":
+                    on_progress({"type": "info",
+                                 "message": f"[{link_label(link)}] links-only creator — "
+                                            "skipped (only pawchive links collect external links)."})
                     continue
                 on_progress({"type": "info", "message": f"──── {link_label(link)} ────"})
                 try:
@@ -312,18 +358,28 @@ class CreatorRunner:
             year=year,
             errors_path=errors_path,
             year_range=self._year_range,
+            include_images=self._fetch["images"],
+            include_videos=self._fetch["videos"],
         )
         self._accumulate(stats)
 
     def _run_pawchive(self, link, creator, mode, year, archive_dir, on_progress, on_error):
-        destination = creator["destination"]
+        # A track-only creator has no destination; its manifests (and DB
+        # fallbacks) live under links_root instead. Nothing is written to
+        # `destination` in that case — every media/ext job is filtered out.
+        destination = creator["destination"] or self._links_root
         archive_path = pawchive_archive_path(archive_dir, link, destination)
         errors_path = errors_db_path(archive_path)
         # The stateful external-links manifest lives at the creator root (no
         # pawchive subfolder — media shares the coomerfans root layout).
-        links_path = os.path.join(destination, "_pawchive_links.json")
+        links_path = os.path.join(self._links_root, "_pawchive_links.json")
         prog = self._prefix(link, on_progress)
         err = self._prefix(link, on_error)
+
+        if mode == "errors" and self._track_only:
+            prog({"type": "info",
+                  "message": "links-only creator — no downloadable files to recheck."})
+            return
 
         # Same curation rule as coomerfans: 'latest' is a top-up over a prior
         # download; with no archive there's nothing to top up.
@@ -354,6 +410,9 @@ class CreatorRunner:
             cookies_path=self._pawchive_cookies_path,
             user_agent=self._pawchive_user_agent,
             year_range=self._year_range,
+            include_images=self._fetch["images"],
+            include_videos=self._fetch["videos"],
+            collect_links=self._fetch["links"],
         )
         self._accumulate(stats)
 
@@ -405,7 +464,7 @@ class CreatorRunner:
         errors_path = errors_db_path(archive_path)
         # The stateful external-links manifest lives at the creator root (shared
         # layout, no subfolder) — a separate file from pawchive's.
-        links_path = os.path.join(destination, "_discord_links.json")
+        links_path = os.path.join(self._links_root, "_discord_links.json")
         prog = self._prefix(link, on_progress)
         err = self._prefix(link, on_error)
 

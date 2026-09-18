@@ -660,6 +660,15 @@
     color: #a5b0ff;
 }
 
+/* What-to-fetch chip ("Links only", "Images only", …) — distinct from the
+   platform chips so the fetch mode reads at a glance. */
+.chip.chip-fetch {
+    background: rgba(140, 140, 160, 0.12);
+    border-color: rgba(140, 140, 160, 0.45);
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
 .chip .chip-count {
     font-family: var(--font-mono);
     color: var(--text-primary);
@@ -1479,6 +1488,14 @@
     background: var(--warn-soft);
     border: 1px solid var(--warn);
     color: var(--warn);
+}
+
+/* Direct link deliberately not auto-downloaded (links-only creator) — neutral,
+   informational: the user grabs it by hand like any manual link. */
+.badge.badge-skipped {
+    background: transparent;
+    border: 1px dashed var(--text-secondary);
+    color: var(--text-secondary);
 }
 
 /* Filename label in the errors panel — take the flexible middle column so the
