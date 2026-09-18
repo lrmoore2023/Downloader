@@ -221,3 +221,22 @@ def test_nested_creator_actually_correlates(tmp_path):
     assert report["matched_pw"] == 1
     assert pw["patreon_9"]["destination"] == str(folder)
     assert pw["patreon_9"]["name"] == "Someone"    # folder name, not the category
+
+
+# ── twitter archive entry spellings ─────────────────────────────────
+
+def test_tweet_ids_parse_with_and_without_the_separator(tmp_path):
+    # Both spellings exist in the real archive dir depending on which gallery-dl
+    # wrote the DB; requiring the underscore zeroed out every DB of the second
+    # kind, so it matched no folder at all.
+    from backend.library_import import _tw_db_tweetids
+    p = str(tmp_path / "twitter_someone.db")
+    conn = sqlite3.connect(p)
+    conn.execute("CREATE TABLE archive (entry TEXT PRIMARY KEY)")
+    conn.executemany("INSERT INTO archive VALUES (?)", [
+        ("twitter_1111111111111111111_0_1",),      # with separator
+        ("twitter2222222222222222222_0_1",),       # without
+        ("twitter2222222222222222222_0_2",),       # same tweet, second file
+    ])
+    conn.commit(); conn.close()
+    assert _tw_db_tweetids(p) == {"1111111111111111111", "2222222222222222222"}

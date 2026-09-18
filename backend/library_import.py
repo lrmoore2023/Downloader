@@ -41,8 +41,12 @@ from backend.pawchive_scraper import (
 _YEAR_RE = re.compile(r"^\d{4}$")
 # Twitter files on disk (original + newer "- Twitter -" form) -> tweet id
 _TW_FILE_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2} - (?:Twitter - )?(\d+)_\d+\.\w+$")
-# gallery-dl archive entry: "twitter_1234567890_0_1" -> tweet id
-_TW_ENTRY_RE = re.compile(r"twitter_(\d+)_\d+_\d+")
+# gallery-dl archive entry -> tweet id. Both spellings are present in the real
+# archive dir ("twitter_1234567890_0_1" and "twitter1234567890_0_1"), depending on
+# the gallery-dl version/keyword format that wrote it, so the separator after the
+# category is optional. Requiring it silently zeroed out every DB of the second
+# kind: the ids never parsed, so the DB matched no folder.
+_TW_ENTRY_RE = re.compile(r"twitter_?(\d+)_\d+_\d+")
 
 
 # ── online name resolution ──────────────────────────────────────────
