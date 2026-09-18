@@ -354,11 +354,12 @@ class Api:
         self.save_state(state)
         return {"migrated": True, "creators": len(creators)}
 
-    def _merge_legacy_maps(self, creators, artist_map, cf_artist_map):
-        """Fold legacy artist_map (twitter) + cf_artist_map (coomerfans) into a
-        `creators` dict, grouping links by destination folder. Additive and
-        deduped by URL, so it's safe to call across multiple legacy snapshots.
-        Returns the number of links added."""
+    def _merge_legacy_maps(self, creators, artist_map, cf_artist_map,
+                           pw_artist_map=None):
+        """Fold legacy artist_map (twitter) + cf_artist_map (coomerfans) +
+        pw_artist_map (pawchive) into a `creators` dict, grouping links by
+        destination folder. Additive and deduped by URL, so it's safe to call
+        across multiple legacy snapshots. Returns the number of links added."""
         added = 0
 
         def ensure(dest):
@@ -389,6 +390,20 @@ class Api:
                 continue
             add_link(ensure(dest), {
                 "platform": "coomerfans",
+                "service": info.get("service"),
+                "user_id": info.get("user_id"),
+                "name": info.get("name"),
+                "url": info.get("url"),
+            }, info.get("last_used", ""))
+
+        # pawchive writes into the creator folder itself (same target_path as
+        # coomerfans), so it groups at the same root — no subfolder adjustment.
+        for info in (pw_artist_map or {}).values():
+            dest = info.get("destination")
+            if not dest:
+                continue
+            add_link(ensure(dest), {
+                "platform": "pawchive",
                 "service": info.get("service"),
                 "user_id": info.get("user_id"),
                 "name": info.get("name"),
@@ -548,11 +563,11 @@ class Api:
             creators = state.get("creators", {})
             known = self._known_cf_index(state)
             log = lambda m: self._push_js("onImportProgress", {"type": "info", "message": m})
-            cf_map, tw_map, report = scan_library(
+            cf_map, tw_map, pw_map, report = scan_library(
                 roots, archive_dir, session, known_cf=known,
                 log=log, should_cancel=self._aux_cancel.is_set,
             )
-            added = self._merge_legacy_maps(creators, tw_map, cf_map)
+            added = self._merge_legacy_maps(creators, tw_map, cf_map, pw_map)
             state["creators"] = creators
             self.save_state(state)
             report.update({

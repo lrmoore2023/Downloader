@@ -5,12 +5,16 @@ that file was truncated/corrupted, the index shrinks even though every download
 is still on the NAS. This module rebuilds the index from ground truth:
 
   * the per-account archive DBs in the central archive dir
-    (coomerfans_<service>_<id>.db, twitter_<username>.db), and
+    (coomerfans_<service>_<id>.db, pawchive_<service>_<id>.db,
+    twitter_<username>.db), and
   * the creator folders under the library roots.
 
 Correlation (which account lives in which folder):
   * coomerfans — the DB records each item's `filename`; a folder owns the
     account if it physically contains one of those files.
+  * pawchive   — identical: same archive schema, and pawchive shares
+    coomerfans' on-disk layout (target_path), so the same filename
+    correlation works unchanged.
   * twitter   — the gallery-dl DB records `twitter_<tweetid>_0_<num>` entries;
     a folder owns the account if its <folder>/Twitter/ subtree contains files
     for those tweet ids.
@@ -29,6 +33,10 @@ import sqlite3
 import time
 
 from backend.coomerfans_scraper import BASE
+from backend.pawchive_scraper import (
+    creator_url as pw_creator_url, fetch_profile as pw_fetch_profile,
+    make_session as pw_make_session,
+)
 
 _YEAR_RE = re.compile(r"^\d{4}$")
 # Twitter files on disk (original + newer "- Twitter -" form) -> tweet id
@@ -60,6 +68,19 @@ def resolve_cf_name(session, service, user_id):
 
 
 # ── disk indexing ───────────────────────────────────────────────────
+
+def resolve_pw_name(session, service, user_id):
+    """Canonical pawchive display name for a service+id, or None.
+
+    Best-effort only: the pawchive API sits behind a Cloudflare JS challenge, so
+    without a captured cf_clearance cookie this simply fails and the caller falls
+    back to the folder name (which is what the user actually recognises anyway).
+    """
+    try:
+        return (pw_fetch_profile(session, service, user_id) or {}).get("name") or None
+    except Exception:
+        return None
+
 
 def _list_creator_folders(roots):
     folders = []
@@ -141,11 +162,21 @@ def _parse_cf_db(name):
     return (svc, uid)
 
 
+def _parse_pw_db(name):
+    """pawchive_<service>_<id>.db -> (service, user_id) or (None, None)."""
+    core = name[len("pawchive_"):-3]     # strip prefix + ".db"
+    if "_" not in core:
+        return (None, None)
+    svc, uid = core.rsplit("_", 1)
+    return (svc, uid)
+
+
 def _parse_tw_db(name):
     return name[len("twitter_"):-3] or None
 
 
-def _cf_db_filenames(db_path, limit=40):
+def _db_filenames(db_path, limit=40):
+    """Sample of recorded basenames. coomerfans and pawchive share this schema."""
     try:
         conn = sqlite3.connect(db_path)
         try:
@@ -180,10 +211,10 @@ def _tw_db_tweetids(db_path, limit=400):
 
 def scan_library(roots, archive_dir, session, known_cf=None,
                  log=None, should_cancel=None, resolve_online=True):
-    """Return (cf_map, tw_map, report).
+    """Return (cf_map, tw_map, pw_map, report).
 
-    cf_map / tw_map are shaped like the legacy cf_artist_map / artist_map so the
-    caller can reuse its folder-grouping merge.
+    cf_map / tw_map / pw_map are shaped like the legacy cf_artist_map /
+    artist_map so the caller can reuse its folder-grouping merge.
     """
     known_cf = known_cf or {}
     log = log or (lambda m: None)
@@ -194,8 +225,10 @@ def scan_library(roots, archive_dir, session, known_cf=None,
 
     dbs = _list_dbs(archive_dir)
     cf_dbs = sorted(d for d in dbs if os.path.basename(d).startswith("coomerfans_"))
+    pw_dbs = sorted(d for d in dbs if os.path.basename(d).startswith("pawchive_"))
     tw_dbs = sorted(d for d in dbs if os.path.basename(d).startswith("twitter_"))
-    log(f"Found {len(cf_dbs)} coomerfans + {len(tw_dbs)} twitter archive DB(s).")
+    log(f"Found {len(cf_dbs)} coomerfans + {len(pw_dbs)} pawchive "
+        f"+ {len(tw_dbs)} twitter archive DB(s).")
 
     cf_basename_cache = {}   # folder -> set(basenames)
     tw_id_cache = {}         # folder -> set(tweetids)
@@ -210,8 +243,9 @@ def scan_library(roots, archive_dir, session, known_cf=None,
             tw_id_cache[folder] = _folder_tw_tweetids(folder)
         return tw_id_cache[folder]
 
-    cf_map, tw_map = {}, {}
-    matched_cf = matched_tw = resolved = 0
+    cf_map, pw_map, tw_map = {}, {}, {}
+    matched_cf = matched_pw = matched_tw = resolved = 0
+    pw_session = None
     unmatched = []
 
     # coomerfans
@@ -222,7 +256,7 @@ def scan_library(roots, archive_dir, session, known_cf=None,
         svc, uid = _parse_cf_db(base)
         if not svc:
             continue
-        wanted = _cf_db_filenames(db)
+        wanted = _db_filenames(db)
         folder = next((f for f in folders if wanted & folder_cf(f)), None) if wanted else None
         if not folder:
             unmatched.append(base)
@@ -243,6 +277,47 @@ def scan_library(roots, archive_dir, session, known_cf=None,
             "destination": folder, "last_used": "",
         }
         matched_cf += 1
+        log(f"  {base} → {os.path.basename(folder)}")
+
+    # pawchive — same archive schema and the same on-disk layout as coomerfans
+    # (both use coomerfans_scraper.target_path), so the filename correlation and
+    # the folder basename cache are reused as-is.
+    for db in pw_dbs:
+        if cancelled():
+            break
+        base = os.path.basename(db)
+        svc, uid = _parse_pw_db(base)
+        if not svc:
+            continue
+        wanted = _db_filenames(db)
+        folder = next((f for f in folders if wanted & folder_cf(f)), None) if wanted else None
+        if not folder:
+            unmatched.append(base)
+            log(f"  ⚠ no folder match for {base}")
+            continue
+        name = None
+        if resolve_online:
+            if pw_session is None:
+                try:
+                    pw_session = pw_make_session()
+                except Exception:
+                    pw_session = False        # don't retry per-DB
+            if pw_session:
+                name = resolve_pw_name(pw_session, svc, uid)
+                if name:
+                    resolved += 1
+                    log(f"  resolved {svc}/{uid} → {name}")
+                    time.sleep(0.4)           # be gentle on the site
+        # Falling back to the folder name is deliberate: pawchive's API sits
+        # behind a Cloudflare challenge, and the folder name is what the user
+        # recognises anyway. Never fall back to the bare numeric id.
+        name = name or os.path.basename(folder.rstrip("/\\")) or uid
+        pw_map[f"{svc}_{uid}"] = {
+            "name": name, "service": svc, "user_id": uid,
+            "url": pw_creator_url(svc, uid),
+            "destination": folder, "last_used": "",
+        }
+        matched_pw += 1
         log(f"  {base} → {os.path.basename(folder)}")
 
     # twitter
@@ -268,8 +343,9 @@ def scan_library(roots, archive_dir, session, known_cf=None,
 
     report = {
         "folders": len(folders),
-        "cf_dbs": len(cf_dbs), "tw_dbs": len(tw_dbs),
-        "matched_cf": matched_cf, "matched_tw": matched_tw,
+        "cf_dbs": len(cf_dbs), "pw_dbs": len(pw_dbs), "tw_dbs": len(tw_dbs),
+        "matched_cf": matched_cf, "matched_pw": matched_pw,
+        "matched_tw": matched_tw,
         "resolved_online": resolved, "unmatched": unmatched,
     }
-    return cf_map, tw_map, report
+    return cf_map, tw_map, pw_map, report
