@@ -36,8 +36,13 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   (pawchive, coomerfans, twitter, derpibooru, discord), plus the Albums tab
   (`album_runner`, `gofile_downloader`, `cyberdrop_dl_runner`, `filester_*`).
 - `backend/rate_limit.py` — `AdaptiveThrottle`, the shared AIMD request pacer.
-- `frontend/js/` — `app.js` (shell/stats), `creators.js` (creator panel + URL panel),
-  `overlays.js` (Configure dialogs), `album.js`, `dupes.js`.
+- **PMV tab** (metadata only, never downloads): `backend/pmv_tracker.py` (manifests +
+  the two numbering rules), `backend/pmv_runner.py` (the fetch job),
+  `backend/r34video_scraper.py`, `backend/iwara_scraper.py` (pawchive reuses
+  `pawchive_scraper`), `frontend/js/pmv.js`. Api methods are the `*_pmv_*` group.
+- `frontend/js/` — `app.js` (shell/stats), `creators.js` (creator panel + URL panel +
+  `switchView`), `overlays.js` (Configure/Settings dialogs), `album.js`, `dupes.js`,
+  `pmv.js`. The PMV tab is the first and default view; Creator is second.
 
 ## State model
 
@@ -53,6 +58,16 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   only loses the creator list. Keep that distinction in mind.
 - A track-only creator has a blank destination, a generated `tc_` id, and keeps
   its manifests under `<archive_dir>/tracked/<id>/`.
+- **PMV creators** are a separate registry (`pmv_creators`, generated `pc_` ids,
+  snapshotted + NAS-mirrored like `creators`). Each site link owns one JSON
+  manifest at `<archive_dir>/pmv/<pc_id>/<platform>_<user_id>.json`
+  (`pawchive_<service>_<id>` for pawchive; `<app>/.pmv/` when no archive dir) holding
+  every listed video, its catalogue number and the ✓/✗ status. Numbers are the
+  user's filename contract: rule34video/iwara are **locked** (append-only, a
+  deleted video keeps its slot), pawchive is **chronological** (recomputed by
+  date every walk because it back-fills old posts; ✓ posts that move show
+  "shifted"). `iwara_email/iwara_password/iwara_token` are credentials — never in
+  the NAS payload. Probe numbering read-only with `tools/pmv_probe.py <url>`.
 - **The creator index is also mirrored off-machine** to
   `<archive_dir>/.state-backups/` on every index change (last 20, written on a
   daemon thread so a slow NAS never stalls a save). `app_state.json` used to live
@@ -85,6 +100,15 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
 
 ## Site gotchas
 
+- **rule34video** (PMV tab) — KVS engine. Listing pages are async blocks
+  (`?mode=async&function=get_block&block_id=list_videos_uploaded_videos&from_videos=NN`,
+  8 per page, newest first) and a page past the end is a **404**, which is the
+  clean end signal, not an error. Exact date + best quality (`'4k'`) are only on
+  the video page, fetched once per new video.
+- **iwara** (PMV tab) — public JSON API (`api.iwara.tv/profile/<user>`,
+  `/videos?user=<uuid>&sort=date&page=N&limit=50`), 0-based pages, stop at
+  `count`. Login is optional: `POST /user/login` → 3-week user JWT, `POST
+  /user/token` → 1-hour access token; on 401 the walk degrades to anonymous.
 - **pawchive** — the API is behind a Cloudflare JS challenge; only `file.pawchive.pw`
   is not. The in-app solve is Settings ▸ Pawchive ▸ Connect, which captures
   `cf_clearance` + the browser UA (`backend/pawchive_cf.py`). `cf_clearance` is

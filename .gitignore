@@ -37,3 +37,6 @@ gallery-dl/
 
 # Claude Code local settings
 .claude/
+
+# PMV tracker manifests when no archive dir is set (metadata naming creators/videos)
+.pmv/
