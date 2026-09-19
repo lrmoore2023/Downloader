@@ -41,6 +41,10 @@ from backend.creator_runner import (
 from backend.download_errors import open_readonly as open_errors_store
 from backend import album_sites
 from backend.album_runner import AlbumRunner, album_state_dir, album_errors_db
+from backend import pmv_tracker as pt
+from backend.pmv_runner import PmvRunner
+from backend import r34video_scraper as r34
+from backend import iwara_scraper as iw
 from backend.library_import import scan_library
 from backend.media_library import scan_creator_media
 from backend.media_server import MediaServer
@@ -130,6 +134,11 @@ class Api:
         self._dupe_ctx = {}
         self._dupe_extra_roots = []
         self._dupe_apply = None
+        # PMV tracker fetch job (metadata only). Its own slot: it never blocks,
+        # and is never blocked by, a creator download.
+        self._pmv_runner = None
+        self._pmv_thread = None
+        self._pmv_cancel = threading.Event()
 
     def set_window(self, window):
         self._window = window
@@ -190,6 +199,20 @@ class Api:
             # title, subfolder, file_count, first_downloaded, last_run}]}.
             "album_creators": {},
             "last_album_creator": "",
+            # PMV tab — tracked PMV creators (metadata only, never downloads).
+            # Each: {id, name, notes, tags, links:[{platform, url, user_id, username,
+            # display_name, service?, site_code}], created}. Per-video manifests live
+            # under <archive_dir>/pmv/<pc_id>/ (see pmv_tracker).
+            "pmv_creators": {},
+            "pmv_last_fetch": {},        # {pc_id: iso} — kept out of pmv_creators so a
+                                         # fetch doesn't roll a new index snapshot
+            "last_pmv_creator": "",
+            "pmv_sort": "name",
+            # iwara login (optional; some uploads are hidden from guests). Stored
+            # locally like discord_token; the NAS mirror never carries it.
+            "iwara_email": "",
+            "iwara_password": "",
+            "iwara_token": "",
             "window": {},
         }
 
@@ -317,6 +340,7 @@ class Api:
         """
         return {
             "creators": state.get("creators") or {},
+            "pmv_creators": state.get("pmv_creators") or {},
             "archive_dir": state.get("archive_dir", ""),
             "library_root": state.get("library_root", ""),
             "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -377,6 +401,7 @@ class Api:
         with self._state_lock:
             merged = self._read_state_unlocked()
             prev_creators = json.dumps(merged.get("creators", {}), sort_keys=True)
+            prev_pmv = json.dumps(merged.get("pmv_creators", {}), sort_keys=True)
             merged.update(state or {})
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE_FILE), suffix=".tmp")
             try:
@@ -389,9 +414,10 @@ class Api:
                 except OSError:
                     pass
                 raise
-            # Roll a backup only when the creator index actually changed, so
-            # frequent window-geometry saves don't churn the backup set.
-            if json.dumps(merged.get("creators", {}), sort_keys=True) != prev_creators:
+            # Roll a backup only when a creator index actually changed (regular
+            # or PMV), so frequent window-geometry saves don't churn the backup set.
+            if (json.dumps(merged.get("creators", {}), sort_keys=True) != prev_creators
+                    or json.dumps(merged.get("pmv_creators", {}), sort_keys=True) != prev_pmv):
                 self._backup_state(merged)
 
     # ── Migration: legacy artist_map/cf_artist_map → creators ───────
@@ -537,7 +563,9 @@ class Api:
         already present in the live state is never overwritten."""
         state = self.load_state()
         creators = state.get("creators", {})
+        pmv = state.get("pmv_creators") or {}
         before = len(creators)
+        pmv_before = len(pmv)
         added_links, used = 0, []
 
         for path in self._backup_sources():
@@ -552,6 +580,11 @@ class Api:
                 if cid not in creators and isinstance(rec, dict) and rec.get("links"):
                     creators[cid] = rec
                     touched += 1
+            # PMV tracker creators travel in the same snapshots.
+            for cid, rec in (data.get("pmv_creators") or {}).items():
+                if cid not in pmv and isinstance(rec, dict) and rec.get("links"):
+                    pmv[cid] = rec
+                    touched += 1
             # Legacy: fold old flat artist maps for anything still missing.
             links = self._merge_legacy_maps(
                 creators, data.get("artist_map"), data.get("cf_artist_map"))
@@ -560,11 +593,13 @@ class Api:
                 used.append(os.path.basename(path))
 
         state["creators"] = creators
+        state["pmv_creators"] = pmv
         self.save_state(state)
         return {
             "links_added": added_links,
             "creators_added": len(creators) - before,
             "creators_total": len(creators),
+            "pmv_added": len(pmv) - pmv_before,
             "sources": used,
         }
 
@@ -2746,6 +2781,399 @@ class Api:
     def cancel_dupe(self):
         self._aux_cancel.set()
         return {"status": "cancelling"}
+
+    # ── PMV tracker ────────────────────────────────────────────────
+    # Tracks PMV creators across rule34video / iwara / pawchive and keeps a
+    # per-video ✓/✗ checklist with catalogue numbers. Metadata only: nothing
+    # here ever downloads a file. Creator records live in state
+    # (`pmv_creators`); per-site video manifests live under
+    # <archive_dir>/pmv/<pc_id>/ (see backend/pmv_tracker.py).
+
+    def _pmv_busy(self):
+        t = getattr(self, "_pmv_thread", None)
+        return bool(t and t.is_alive())
+
+    def _gen_pmv_id(self):
+        return "pc_" + base64.urlsafe_b64encode(os.urandom(6)).decode("ascii").rstrip("=")
+
+    def _pmv_root(self, creator_id, state=None):
+        """Folder holding a PMV creator's manifests: <archive_dir>/pmv/<id>, or
+        <app>/.pmv/<id> when no archive dir is configured (mirrors _manifest_root)."""
+        state = state if state is not None else self.load_state()
+        base = (state.get("archive_dir") or "").strip()
+        if base and os.path.isdir(base):
+            return os.path.join(base, "pmv", creator_id or "unknown")
+        return os.path.join(APP_DIR, ".pmv", creator_id or "unknown")
+
+    def _pmv_creators(self, state=None):
+        state = state if state is not None else self.load_state()
+        pcs = state.get("pmv_creators")
+        return pcs if isinstance(pcs, dict) else {}
+
+    @staticmethod
+    def _pmv_tags(value):
+        if isinstance(value, str):
+            value = value.split(",")
+        out = []
+        for t in value or []:
+            t = str(t).strip()
+            if t and t not in out:
+                out.append(t)
+        return out
+
+    def resolve_pmv_link(self, url):
+        """Validate a pasted rule34video / iwara / pawchive URL for the PMV editor.
+        Returns {valid, platform, user_id, username, display_name, service?, url,
+        site_code} or {valid: False}. Name lookups are best-effort network calls."""
+        url = (url or "").strip()
+        low = url.lower()
+        if "rule34video.com" in low:
+            m = r34.parse_member_url(url)
+            uid = m["user_id"] if m else None
+            name = ""
+            try:
+                sess = r34.make_session()
+                if not uid and r34.video_id_from_url(url):
+                    # A video link: find its uploader.
+                    d = r34.fetch_video_detail(sess, url)
+                    uid = d.get("uploader_id")
+                if uid:
+                    name = (r34.fetch_member(sess, uid) or {}).get("name") or ""
+            except Exception:
+                pass
+            if uid:
+                return {"valid": True, "platform": "rule34video", "user_id": uid,
+                        "username": name, "display_name": name,
+                        "url": r34.member_url(uid), "site_code": pt.default_site_code("rule34video")}
+            return {"valid": False}
+        if "iwara.tv" in low:
+            m = iw.parse_profile_url(url)
+            if not m:
+                return {"valid": False}
+            username = m["username"]
+            uuid, name = "", ""
+            try:
+                p = iw.fetch_profile(iw.make_session(), username)
+                uuid, name = p.get("id") or "", p.get("name") or ""
+            except Exception:
+                pass
+            return {"valid": True, "platform": "iwara", "user_id": uuid, "username": username,
+                    "display_name": name, "url": iw.profile_url(username),
+                    "site_code": pt.default_site_code("iwara"),
+                    "note": "" if uuid else "profile lookup failed — will retry on fetch"}
+        if "pawchive" in low:
+            pw = pw_parse_creator_url(url)
+            if not pw:
+                return {"valid": False}
+            name = ""
+            try:
+                state = self.load_state()
+                sess = pw_make_session(user_agent=state.get("pawchive_user_agent") or None,
+                                       cookies_path=state.get("pawchive_cookies_path") or None)
+                name = pw_fetch_profile(sess, pw["service"], pw["user_id"]).get("name") or ""
+            except Exception:
+                pass
+            return {"valid": True, "platform": "pawchive", "service": pw["service"],
+                    "user_id": pw["user_id"], "username": name, "display_name": name,
+                    "url": pw_creator_url(pw["service"], pw["user_id"]),
+                    "site_code": pt.default_site_code("pawchive")}
+        return {"valid": False}
+
+    def _pmv_clean_link(self, raw):
+        """Normalize one link record from the editor; resolves URL-only entries."""
+        if not isinstance(raw, dict):
+            return None
+        link = dict(raw)
+        if not link.get("platform") or (link["platform"] != "iwara" and not link.get("user_id")):
+            info = self.resolve_pmv_link(link.get("url", ""))
+            if not info.get("valid"):
+                return None
+            code = link.get("site_code")
+            link = info
+            if code:
+                link["site_code"] = code
+        if link.get("platform") not in pt.PLATFORMS:
+            return None
+        out = {
+            "platform": link["platform"],
+            "url": link.get("url") or "",
+            "user_id": str(link.get("user_id") or ""),
+            "username": link.get("username") or "",
+            "display_name": link.get("display_name") or "",
+            "site_code": (link.get("site_code") or "").strip() or pt.default_site_code(link["platform"]),
+        }
+        if link["platform"] == "pawchive":
+            out["service"] = (link.get("service") or "").lower()
+            if not out["service"] or not out["user_id"]:
+                return None
+        elif link["platform"] == "iwara":
+            if not out["username"] and not out["user_id"]:
+                return None
+        elif not out["user_id"]:
+            return None
+        return out
+
+    def list_pmv_creators(self):
+        """Every PMV creator with per-site counts (reads the manifests)."""
+        state = self.load_state()
+        pcs = self._pmv_creators(state)
+        last_fetch = state.get("pmv_last_fetch") or {}
+        out = []
+        for cid, rec in pcs.items():
+            root = self._pmv_root(cid, state)
+            total = {"total": 0, "unreviewed": 0, "new": 0, "downloaded": 0,
+                     "skipped": 0, "shifted": 0, "gone": 0}
+            sites = []
+            for link in rec.get("links") or []:
+                key = pt.link_key(link)
+                m = pt.load_manifest(pt.manifest_path(root, key), link.get("platform"), link.get("user_id"))
+                c = pt.counts(m)
+                for k in total:
+                    total[k] += c.get(k, 0)
+                sites.append({"link_key": key, "platform": link.get("platform"),
+                              "site_code": link.get("site_code") or pt.default_site_code(link.get("platform")),
+                              "username": link.get("username") or "",
+                              "display_name": link.get("display_name") or "",
+                              "url": link.get("url") or "", "counts": c,
+                              "last_fetch": m.get("last_fetch") or "",
+                              "last_error": m.get("last_error") or "",
+                              "initial_complete": bool(m.get("initial_complete"))})
+            out.append({"id": rec.get("id", cid), "name": rec.get("name") or cid,
+                        "tags": rec.get("tags") or [], "notes": rec.get("notes") or "",
+                        "links": sites, "counts": total,
+                        "last_fetch": last_fetch.get(cid) or ""})
+        out.sort(key=lambda r: (r["name"] or "").lower())
+        return out
+
+    def get_pmv_creator(self, creator_id):
+        return self._pmv_creators().get(creator_id)
+
+    def save_pmv_creator(self, payload):
+        """Create or update a PMV creator. Links keep the order given (priority =
+        source of truth first) and are deduped by site identity. Returns {id}."""
+        payload = payload or {}
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return {"error": "Name is required — it becomes the filename prefix"}
+        links, seen = [], set()
+        for raw in payload.get("links") or []:
+            link = self._pmv_clean_link(raw)
+            if link is None:
+                bad = raw.get("url", "?") if isinstance(raw, dict) else raw
+                return {"error": f"Unrecognized link: {bad}"}
+            key = pt.link_key(link) if (link.get("user_id") or link["platform"] != "iwara") \
+                else f"iwara_@{link['username'].lower()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            links.append(link)
+        state = self.load_state()
+        pcs = self._pmv_creators(state)
+        cid = payload.get("id") or self._gen_pmv_id()
+        existing = pcs.get(cid) or {}
+        pcs[cid] = {
+            "id": cid,
+            "name": name,
+            "notes": (payload.get("notes") or "").strip(),
+            "tags": self._pmv_tags(payload.get("tags")),
+            "links": links,
+            "created": existing.get("created") or pt.now_iso(),
+        }
+        self.save_state({"pmv_creators": pcs, "last_pmv_creator": cid})
+        return {"id": cid}
+
+    def delete_pmv_creator(self, creator_id, delete_manifests=False):
+        state = self.load_state()
+        pcs = self._pmv_creators(state)
+        if creator_id in pcs:
+            pcs.pop(creator_id, None)
+            lf = dict(state.get("pmv_last_fetch") or {})
+            lf.pop(creator_id, None)
+            self.save_state({"pmv_creators": pcs, "pmv_last_fetch": lf})
+        if delete_manifests:
+            shutil.rmtree(self._pmv_root(creator_id, state), ignore_errors=True)
+        return {"status": "deleted"}
+
+    def _pmv_link(self, rec, link_key):
+        for link in (rec or {}).get("links") or []:
+            if pt.link_key(link) == link_key:
+                return link
+        return None
+
+    def get_pmv_items(self, creator_id):
+        """The full checklist for one creator: sites in priority order, each with
+        its videos newest-first plus the derived prefix / shifted / media flags."""
+        state = self.load_state()
+        rec = self._pmv_creators(state).get(creator_id)
+        if not rec:
+            return {"error": "Creator not found"}
+        root = self._pmv_root(creator_id, state)
+        sites = []
+        for link in rec.get("links") or []:
+            key = pt.link_key(link)
+            m = pt.load_manifest(pt.manifest_path(root, key), link.get("platform"), link.get("user_id"))
+            code = link.get("site_code") or pt.default_site_code(link.get("platform"))
+            width = pt.number_width(m["items"])
+            rows = []
+            for it in m["items"].values():
+                row = dict(it)
+                row["prefix"] = pt.format_prefix(rec.get("name") or "", code, it.get("number"), width)
+                row["shifted"] = pt.is_shifted(it)
+                row["media_post"] = pt.is_media_post(it)
+                rows.append(row)
+            rows.sort(key=lambda r: -(r.get("number") or 0))
+            sites.append({
+                "link_key": key, "platform": link.get("platform"), "site_code": code,
+                "username": link.get("username") or "", "display_name": link.get("display_name") or "",
+                "url": link.get("url") or "", "numbering": m.get("numbering"), "width": width,
+                "last_fetch": m.get("last_fetch") or "", "last_full_scan": m.get("last_full_scan") or "",
+                "last_error": m.get("last_error") or "", "initial_complete": bool(m.get("initial_complete")),
+                "counts": pt.counts(m), "items": rows,
+            })
+        return {"creator": rec, "sites": sites,
+                "last_fetch": (state.get("pmv_last_fetch") or {}).get(creator_id) or ""}
+
+    def set_pmv_status(self, creator_id, link_key, item_id, status):
+        return self.set_pmv_status_bulk(creator_id, link_key, [item_id], status)
+
+    def set_pmv_status_bulk(self, creator_id, link_key, item_ids, status):
+        """Mark videos ✓ downloaded / ✗ skipped / unreviewed. Marking ✓ records the
+        current number so a later renumber (pawchive) can be flagged as shifted."""
+        if status not in pt.STATUSES:
+            return {"error": f"Bad status {status!r}"}
+        state = self.load_state()
+        rec = self._pmv_creators(state).get(creator_id)
+        link = self._pmv_link(rec, link_key)
+        if not link:
+            return {"error": "Site link not found"}
+        path = pt.manifest_path(self._pmv_root(creator_id, state), link_key)
+        now = pt.now_iso()
+        updated = 0
+        try:
+            with pt.manifest_lock(path):
+                m = pt.load_manifest(path, link.get("platform"), link.get("user_id"))
+                for vid in item_ids or []:
+                    it = m["items"].get(str(vid))
+                    if it is not None:
+                        pt.set_status(it, status, now)
+                        updated += 1
+                if updated:
+                    pt.save_manifest(path, m)
+        except OSError as e:
+            return {"error": f"Could not write the manifest: {e}"}
+        return {"ok": True, "updated": updated}
+
+    def ack_pmv_shift(self, creator_id, link_key, item_id):
+        """Accept a ✓ post's new number (after renaming the file) so the shifted
+        warning clears."""
+        state = self.load_state()
+        rec = self._pmv_creators(state).get(creator_id)
+        link = self._pmv_link(rec, link_key)
+        if not link:
+            return {"error": "Site link not found"}
+        path = pt.manifest_path(self._pmv_root(creator_id, state), link_key)
+        with pt.manifest_lock(path):
+            m = pt.load_manifest(path, link.get("platform"), link.get("user_id"))
+            it = m["items"].get(str(item_id))
+            if it is None:
+                return {"error": "Video not found"}
+            it["number_at_check"] = it.get("number")
+            pt.save_manifest(path, m)
+        return {"ok": True, "number": it.get("number")}
+
+    def start_pmv_fetch(self, creator_ids=None, mode="latest", link_key=None):
+        """Fetch new listings for the given creators (None / [] = all). mode
+        'latest' walks until it meets known videos; 'full' rescans a whole site
+        (rule34video / iwara — pawchive is always a full walk). link_key limits
+        the run to one site of one creator."""
+        if self._pmv_busy():
+            return {"error": "A PMV fetch is already running"}
+        mode = "full" if mode == "full" else "latest"
+        state = self.load_state()
+        pcs = self._pmv_creators(state)
+        ids = [c for c in (creator_ids or []) if c in pcs]
+        if not creator_ids:
+            ids = sorted(pcs, key=lambda c: (pcs[c].get("name") or "").lower())
+        jobs = []
+        for cid in ids:
+            rec = pcs[cid]
+            for link in rec.get("links") or []:
+                if link_key and pt.link_key(link) != link_key:
+                    continue
+                jobs.append({"creator": rec, "link": link, "mode": mode})
+        if not jobs:
+            return {"error": "Nothing to fetch — add a creator with at least one site link"}
+        self._pmv_cancel = threading.Event()
+        self._pmv_runner = PmvRunner(
+            manifest_root_for=lambda cid, _s=state: self._pmv_root(cid, _s),
+            state=state,
+            cancel=self._pmv_cancel,
+            on_progress=lambda d: self._push_js("onPmvProgress", d),
+            on_complete=self._on_pmv_complete,
+        )
+        self._pmv_thread = threading.Thread(target=self._pmv_runner.run, args=(jobs,), daemon=True)
+        self._pmv_thread.start()
+        return {"status": "started", "jobs": len(jobs), "creators": len(ids), "mode": mode}
+
+    def _on_pmv_complete(self, result):
+        try:
+            changed = {}
+            state = self.load_state()
+            if result.get("iwara_token"):
+                changed["iwara_token"] = result["iwara_token"]
+            lf = dict(state.get("pmv_last_fetch") or {})
+            now = pt.now_iso()
+            touched = False
+            for cid, pc in (result.get("per_creator") or {}).items():
+                if pc.get("errors", 0) == 0 or pc.get("new", 0):
+                    lf[cid] = now
+                    touched = True
+            if touched:
+                changed["pmv_last_fetch"] = lf
+            if changed:
+                self.save_state(changed)
+        except Exception:
+            pass
+        self._push_js("onPmvComplete", result)
+
+    def cancel_pmv_fetch(self):
+        self._pmv_cancel.set()
+        if self._pmv_runner:
+            self._pmv_runner.cancel()
+        return {"status": "cancelling"}
+
+    def pmv_fetch_status(self):
+        return {"running": self._pmv_busy()}
+
+    def iwara_login_status(self):
+        state = self.load_state()
+        configured = bool((state.get("iwara_email") or "").strip() and state.get("iwara_password"))
+        token = state.get("iwara_token") or ""
+        exp = iw.jwt_exp(token)
+        return {
+            "configured": configured,
+            "token_valid": iw.token_valid(token),
+            "expires": datetime.fromtimestamp(exp, tz=timezone.utc).isoformat(timespec="minutes") if exp else "",
+        }
+
+    def iwara_test_login(self):
+        """Try the saved iwara credentials now; on success stores the user token."""
+        state = self.load_state()
+        email = (state.get("iwara_email") or "").strip()
+        password = state.get("iwara_password") or ""
+        if not (email and password):
+            return {"ok": False, "message": "Enter an email and password first"}
+        try:
+            auth = iw.IwaraAuth(iw.make_session(), email, password,
+                                user_token=state.get("iwara_token") or None)
+            tok = auth.access_token(force_refresh=True)
+        except Exception as e:
+            return {"ok": False, "message": f"{e.__class__.__name__}: {e}"}
+        if tok:
+            if auth.user_token_changed:
+                self.save_state({"iwara_token": auth.user_token})
+            return {"ok": True, "message": "Logged in"}
+        return {"ok": False, "message": auth.message or "Login failed"}
 
     # ── JS bridge helper ───────────────────────────────────────────
 

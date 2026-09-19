@@ -72,14 +72,16 @@ def test_mirror_carries_no_credentials(tmp_path, monkeypatch):
     app.save_state({"archive_dir": str(arch), "creators": CREATOR,
                     "discord_token": "SECRET-TOKEN",
                     "derpibooru_api_key": "SECRET-KEY",
-                    "pawchive_cookies_path": "C:/secret/cookies.txt"})
+                    "pawchive_cookies_path": "C:/secret/cookies.txt",
+                    "iwara_password": "SECRET-IWARA-PW"})
     nas = str(arch / api.NAS_BACKUP_DIRNAME)
     snaps = _wait_for_snapshot(nas)
     raw = open(os.path.join(nas, snaps[0]), encoding="utf-8").read()
     assert "SECRET-TOKEN" not in raw
     assert "SECRET-KEY" not in raw
     assert "cookies.txt" not in raw
-    assert set(json.loads(raw)) == {"creators", "archive_dir", "library_root", "saved_at"}
+    assert "SECRET-IWARA-PW" not in raw
+    assert set(json.loads(raw)) == {"creators", "pmv_creators", "archive_dir", "library_root", "saved_at"}
 
 
 def test_empty_index_is_never_mirrored(tmp_path, monkeypatch):
