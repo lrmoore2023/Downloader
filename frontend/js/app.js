@@ -276,4 +276,7 @@ window.addEventListener('pywebviewready', async function () {
     currentSort = state.creator_sort || 'recent';
     document.getElementById('creatorSort').value = currentSort;
     await refreshCreators(state.last_creator || '');
+    // PMV tab is the default view: load its creator list last so the shared
+    // creator state above is ready for anything it cross-references.
+    if (typeof initPmv === 'function') await initPmv(state);
 });

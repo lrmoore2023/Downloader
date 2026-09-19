@@ -19,7 +19,8 @@
                 <div class="header-divider"></div>
                 <span class="header-subtitle" id="headerSubtitle">Library</span>
                 <div class="segmented header-toggle" id="viewToggle">
-                    <button class="seg active" data-view="creator" onclick="switchView('creator')">Creator</button>
+                    <button class="seg active" data-view="pmv" onclick="switchView('pmv')">PMV</button>
+                    <button class="seg" data-view="creator" onclick="switchView('creator')">Creator</button>
                     <button class="seg" data-view="gallery" onclick="switchView('gallery')">Gallery</button>
                     <button class="seg" data-view="dupes" onclick="switchView('dupes')">Duplicates</button>
                     <button class="seg" data-view="albums" onclick="switchView('albums')">Albums</button>
@@ -40,8 +41,42 @@
                 </div>
             </header>
 
+            <!-- PMV tracker: creators × sites checklist (metadata only — never downloads) -->
+            <div class="tab-content" id="pmvView">
+                <div class="pmv-layout">
+                    <div class="section pmv-left">
+                        <div class="section-title">PMV creators <span id="pmvCreatorCount"></span></div>
+                        <div class="actions-row pmv-toolbar">
+                            <button class="btn btn-primary btn-sm" onclick="openPmvEditor('')">+ Add creator</button>
+                            <button class="btn btn-secondary btn-sm" id="pmvFetchSelBtn" onclick="pmvFetchSelected()"
+                                    title="Look for new videos on every site of the ticked creators">Fetch selected</button>
+                            <button class="btn btn-secondary btn-sm" id="pmvFetchAllBtn" onclick="pmvFetchAll()"
+                                    title="Look for new videos for every creator">Fetch all</button>
+                            <button class="btn btn-danger btn-sm" id="pmvCancelBtn" onclick="pmvCancel()" style="display: none;">Cancel</button>
+                        </div>
+                        <div class="pmv-list-head">
+                            <label class="checkbox-option">
+                                <input type="checkbox" id="pmvSelectAll" onchange="pmvToggleSelectAll(this.checked)">
+                                <span class="checkbox-label">Select all</span>
+                            </label>
+                            <select class="input-field pmv-sort" id="pmvSort" onchange="pmvSetSort(this.value)" title="Sort creators">
+                                <option value="name">Name</option>
+                                <option value="new">Most new</option>
+                                <option value="unreviewed">Most unreviewed</option>
+                                <option value="fetched">Recently fetched</option>
+                            </select>
+                        </div>
+                        <div class="pmv-list" id="pmvList"></div>
+                        <div class="field-hint pmv-status-line" id="pmvStatus"></div>
+                    </div>
+                    <div class="section pmv-right" id="pmvDetail">
+                        <div class="links-empty">Select a creator to see its videos.</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Scrollable content: Creator view -->
-            <div class="tab-content" id="creatorView">
+            <div class="tab-content" id="creatorView" style="display: none;">
 
                 <!-- Creator bar -->
                 <div class="section">
@@ -482,6 +517,49 @@
         </div>
     </div>
 
+    <!-- ── PMV creator editor ──────────────────────────────────── -->
+    <div class="modal-overlay" id="pmvEditorOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <span id="pmvEditorTitle">PMV creator</span>
+                <button class="modal-close" onclick="closePmvEditor()" title="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <span class="form-label">Name</span>
+                    <input type="text" class="input-field" id="pmvEdName" placeholder="Creator name — becomes the filename prefix (e.g. SadBernard)">
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Tags</span>
+                    <input type="text" class="input-field" id="pmvEdTags" placeholder="Optional, comma-separated: 3D, 2D, Furry…">
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Notes</span>
+                    <input type="text" class="input-field" id="pmvEdNotes" placeholder="Optional">
+                </div>
+                <div class="section-title" style="margin-top: 6px;">Sites
+                    <span class="field-hint" style="text-transform: none; letter-spacing: 0; font-weight: 500;">— top = source of truth; ▲▼ to reorder</span>
+                </div>
+                <div class="links-list" id="pmvEdLinks"></div>
+                <div class="form-row" style="margin-top: 12px;">
+                    <input type="text" class="input-field" id="pmvEdNewLink"
+                           placeholder="Paste a rule34video.com/members/…, iwara.tv/profile/…, or pawchive.pw/{service}/user/… URL">
+                    <button class="btn btn-secondary btn-sm" onclick="pmvEdAdd()">Add site</button>
+                </div>
+                <div class="field-hint" id="pmvEdPreview" style="min-height: 16px;"></div>
+                <div class="field-hint" style="margin-top: 10px;">
+                    Nothing is downloaded — the PMV tab only lists each site's videos so you can tick off what you have
+                    and copy a ready-made prefix like <code>SadBernard - R34 - 02 - </code>.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-danger btn-sm" id="pmvEdDeleteBtn" onclick="pmvEdDelete()" style="margin-right: auto;">Delete</button>
+                <button class="btn btn-ghost btn-sm" onclick="closePmvEditor()">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="pmvEdSave()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ── Settings overlay ────────────────────────────────────── -->
     <div class="modal-overlay" id="settingsOverlay">
         <div class="modal">
@@ -587,6 +665,24 @@
                     <span class="field-hint" id="pawCfHint">Pawchive now sits behind a Cloudflare check that blocks the app. Click <b>Connect</b> — a small window opens, clears the check automatically (usually a second or two), and the app remembers it. If a fetch later fails with a Cloudflare message, just click <b>Reconnect</b>.</span>
                 </div>
 
+                <div class="section-title" style="margin-top: 16px;">Iwara (PMV tab)</div>
+                <div class="form-row">
+                    <span class="form-label">Login</span>
+                    <input type="email" class="input-field" id="setIwaraEmail" placeholder="Email"
+                           onchange="setUpdateIwaraCreds()" onblur="setUpdateIwaraCreds()">
+                    <input type="password" class="input-field" id="setIwaraPassword" placeholder="Password"
+                           onchange="setUpdateIwaraCreds()" onblur="setUpdateIwaraCreds()">
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span id="iwaraStatus" class="status-badge status-idle">Not configured</span>
+                    <button class="btn btn-secondary btn-sm" id="iwaraTestBtn" onclick="testIwaraLogin()">Test login</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Optional. iwara lists most videos without an account, but some uploads only show for logged-in users. Saved locally in <code>app_state.json</code> like the Discord token — never copied to the archive folder.</span>
+                </div>
+
                 <div class="section-title" style="margin-top: 16px;">Pawchive Link Filters</div>
                 <div class="field-hint" style="margin-bottom: 10px;">
                     Hide junk from the “Links needing attention” list. Enter a domain
@@ -674,6 +770,7 @@
     <script src="js/media.js"></script>
     <script src="js/dupes.js"></script>
     <script src="js/album.js"></script>
+    <script src="js/pmv.js"></script>
     <script src="js/overlays.js"></script>
     <script src="js/app.js"></script>
 </body>

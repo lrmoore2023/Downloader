@@ -836,7 +836,7 @@ async function cycleCreatorAvatar() {
 // ── View switching (Creator | Gallery) ──────────────────────────
 
 function switchView(name) {
-    const views = { creator: 'creatorView', gallery: 'galleryView', media: 'mediaView',
+    const views = { pmv: 'pmvView', creator: 'creatorView', gallery: 'galleryView', media: 'mediaView',
                     dupes: 'dupesView', albums: 'albumsView' };
     Object.entries(views).forEach(([n, id]) => {
         const el = document.getElementById(id);
@@ -850,6 +850,7 @@ function switchView(name) {
     if (name === 'gallery' && typeof renderGallery === 'function') renderGallery();
     if (name === 'dupes' && typeof renderDupeHeader === 'function') renderDupeHeader();
     if (name === 'albums' && typeof onAlbumViewShown === 'function') onAlbumViewShown();
+    if (name === 'pmv' && typeof onPmvViewShown === 'function') onPmvViewShown();
 }
 
 function persistLastCreator(id) {

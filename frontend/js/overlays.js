@@ -15,6 +15,8 @@ const Settings = {
     derpibooruFilterId: '56027',
     discordToken: '',
     discordTokenType: 'user',
+    iwaraEmail: '',
+    iwaraPassword: '',
 };
 
 function loadSettingsFromState(state) {
@@ -30,6 +32,8 @@ function loadSettingsFromState(state) {
     Settings.derpibooruFilterId = state.derpibooru_filter_id || '56027';
     Settings.discordToken = state.discord_token || '';
     Settings.discordTokenType = state.discord_token_type || 'user';
+    Settings.iwaraEmail = state.iwara_email || '';
+    Settings.iwaraPassword = state.iwara_password || '';
 
     document.getElementById('setArchiveDir').value = Settings.archiveDir;
     document.getElementById('setLibraryRoot').value = Settings.libraryRoot;
@@ -48,6 +52,10 @@ function loadSettingsFromState(state) {
     if (dcTokEl) dcTokEl.value = Settings.discordToken;
     const dcTypeEl = document.getElementById('setDiscordTokenType');
     if (dcTypeEl) dcTypeEl.value = Settings.discordTokenType;
+    const iwEmailEl = document.getElementById('setIwaraEmail');
+    if (iwEmailEl) iwEmailEl.value = Settings.iwaraEmail;
+    const iwPassEl = document.getElementById('setIwaraPassword');
+    if (iwPassEl) iwPassEl.value = Settings.iwaraPassword;
 
     setAuthMethod(Settings.authMethod);
     if (Settings.cookiesPath) {
@@ -76,6 +84,8 @@ function persistSettings() {
         derpibooru_filter_id: Settings.derpibooruFilterId,
         discord_token: Settings.discordToken,
         discord_token_type: Settings.discordTokenType,
+        iwara_email: Settings.iwaraEmail,
+        iwara_password: Settings.iwaraPassword,
     });
 }
 
@@ -99,12 +109,56 @@ function setUpdateDiscordTokenType() {
     persistSettings();
 }
 
+// iwara login (PMV tab) — read both inputs on change and persist; the
+// backend only logs in when a PMV fetch needs it (or on Test login).
+function setUpdateIwaraCreds() {
+    const e = document.getElementById('setIwaraEmail');
+    const p = document.getElementById('setIwaraPassword');
+    const email = (e.value || '').trim(), pass = p.value || '';
+    if (email === Settings.iwaraEmail && pass === Settings.iwaraPassword) return;
+    Settings.iwaraEmail = email;
+    Settings.iwaraPassword = pass;
+    persistSettings();
+    refreshIwaraStatus();
+}
+
+function setIwaraBadge(cls, text) {
+    const badge = document.getElementById('iwaraStatus');
+    if (badge) { badge.textContent = text; badge.className = 'status-badge ' + cls; }
+}
+
+async function refreshIwaraStatus() {
+    try {
+        const s = await pywebview.api.iwara_login_status();
+        if (!s.configured) setIwaraBadge('status-idle', 'Not configured (anonymous listing)');
+        else if (s.token_valid) setIwaraBadge('status-ok', 'Logged in' + (s.expires ? ` · token until ${s.expires.slice(0, 10)}` : ''));
+        else setIwaraBadge('status-warn', 'Credentials saved — not verified yet');
+    } catch (e) { /* ignore */ }
+}
+
+async function testIwaraLogin() {
+    const btn = document.getElementById('iwaraTestBtn');
+    setUpdateIwaraCreds();
+    if (btn) btn.disabled = true;
+    setIwaraBadge('status-idle', 'Logging in…');
+    try {
+        const res = await pywebview.api.iwara_test_login();
+        if (res && res.ok) setIwaraBadge('status-ok', 'Logged in');
+        else setIwaraBadge('status-error', (res && res.message) || 'Login failed');
+    } catch (e) {
+        setIwaraBadge('status-error', 'Login failed');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // ── Settings overlay ────────────────────────────────────────────
 
 async function openSettings() {
     document.getElementById('settingsOverlay').classList.add('visible');
     loadLinkFilters();
     refreshPawCfStatus();
+    refreshIwaraStatus();
     try {
         const roots = await pywebview.api.list_library_roots();
         document.getElementById('setRootsInfo').textContent = roots.length
