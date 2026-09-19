@@ -3052,11 +3052,15 @@ class Api:
             m = pt.load_manifest(pt.manifest_path(root, key), link.get("platform"), link.get("user_id"))
             code = pt.link_site_code(link)
             width = pt.number_width(m["items"])
+            # Same-day uploads share a date, so their prefixes carry the day's
+            # running count ('… - 2026.07.21 02 - ') to keep them in order.
+            seqs = pt.date_seqs(m["items"])
             rows = []
             for it in m["items"].values():
                 row = dict(it)
                 row["prefix"] = pt.format_prefix(rec.get("name") or "", code, it.get("number"), width,
-                                                 date=it.get("date") or "")
+                                                 date=it.get("date") or "",
+                                                 date_seq=seqs.get(str(it.get("id"))))
                 row["shifted"] = pt.is_shifted(it, m.get("numbering"))
                 row["media_post"] = pt.is_media_post(it)
                 rows.append(row)

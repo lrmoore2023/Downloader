@@ -147,6 +147,24 @@ def test_get_items_prefix_and_ordering(app, monkeypatch):
     assert "error" in app.get_pmv_items("pc_nope")
 
 
+def test_get_items_numbers_same_day_uploads(app, monkeypatch):
+    _no_network(monkeypatch)
+    cid = app.save_pmv_creator({"name": "S", "links": [PAW]})["id"]
+    key = pt.link_key(PAW)
+    path = pt.manifest_path(app._pmv_root(cid), key)
+    m = pt.new_manifest("pawchive", "42")
+    pt.merge_chronological(m, [
+        {"id": "3", "title": "c", "url": "u/3", "date": "2026-07-21T19:43:21+00:00", "pos": 0},
+        {"id": "2", "title": "b", "url": "u/2", "date": "2026-07-21T18:20:26+00:00", "pos": 1},
+        {"id": "1", "title": "a", "url": "u/1", "date": "2026-07-20T10:00:00+00:00", "pos": 2},
+    ])
+    pt.save_manifest(path, m)
+    by_id = {it["id"]: it["prefix"] for it in app.get_pmv_items(cid)["sites"][0]["items"]}
+    assert by_id["1"] == "S - Patreon - 2026.07.20 - "          # alone that day → bare date
+    assert by_id["2"] == "S - Patreon - 2026.07.21 01 - "
+    assert by_id["3"] == "S - Patreon - 2026.07.21 02 - "
+
+
 def test_set_status_records_number_at_check_and_counts(app, monkeypatch):
     _no_network(monkeypatch)
     cid = app.save_pmv_creator({"name": "S", "links": [R34]})["id"]

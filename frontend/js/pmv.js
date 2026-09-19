@@ -303,7 +303,7 @@ function renderPmvSite(s, idx, titleMap) {
         s.last_fetch ? `fetched ${pmvFmtWhen(s.last_fetch)}` : 'never fetched',
     ].filter(Boolean).join(' · ');
     const numbering = isPaw
-        ? '<span class="pmv-hint" title="pawchive back-fills old posts, so the # column is only the current chronological rank; prefixes use the upload date (Name - Patreon - 2026.05.04 - ) and never shift.">rank by date</span>'
+        ? '<span class="pmv-hint" title="pawchive back-fills old posts, so the # column is only the current chronological rank; prefixes use the upload date (Name - Patreon - 2026.05.04 - ) and never shift. A day with more than one post adds that day&#39;s count (… - 2026.05.04 02 - ).">rank by date</span>'
         : '';
     const fetchSite = `<button class="btn-tiny pmv-fetch-btn" ${pmvBusy ? 'disabled' : ''} onclick="pmvFetchSite('${s.link_key}')"
              title="Look for new posts on this site only">Fetch latest</button>`;

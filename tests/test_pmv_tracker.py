@@ -299,6 +299,57 @@ def test_dated_prefix_site_first_on_every_site():
     assert pt.format_prefix("X", "R34", None, date=None) == "X - R34 - "
 
 
+def test_same_day_uploads_get_a_day_counter():
+    # Two posts on one day would otherwise share a prefix byte for byte. The
+    # counter runs in upload order (the timestamp on sites that publish one).
+    items = {
+        "10": {"id": "10", "date": "2026-07-21T19:30:37+00:00", "number": 2},
+        "11": {"id": "11", "date": "2026-07-21T18:20:26+00:00", "number": 1},
+        "12": {"id": "12", "date": "2026-07-22T08:00:00+00:00", "number": 3},
+    }
+    seqs = pt.date_seqs(items)
+    assert seqs == {"11": 1, "10": 2}          # the lone 07-22 post gets no counter
+    assert pt.format_prefix("Snuggsmutt", "Patreon", 1, 2, date=items["11"]["date"],
+                            date_seq=seqs["11"]) == "Snuggsmutt - Patreon - 2026.07.21 01 - "
+    assert pt.format_prefix("Snuggsmutt", "Patreon", 3, 2, date=items["12"]["date"],
+                            date_seq=seqs.get("12")) == "Snuggsmutt - Patreon - 2026.07.22 - "
+
+
+def test_day_counter_orders_by_catalogue_number_when_the_site_has_no_time():
+    # rule34video only ever states a bare date; its locked numbers are the
+    # upload order, and its ids ascend with them.
+    items = {
+        "4183868": {"id": "4183868", "date": "2026-01-03", "number": 3},
+        "4183840": {"id": "4183840", "date": "2026-01-03", "number": 2},
+    }
+    assert pt.date_seqs(items) == {"4183840": 1, "4183868": 2}
+    # Ids settle the order when numbers are missing too (numerically, not as text).
+    unnumbered = {"9": {"id": "9", "date": "2026-01-03"},
+                  "10": {"id": "10", "date": "2026-01-03"}}
+    assert pt.date_seqs(unnumbered) == {"9": 1, "10": 2}
+
+
+def test_day_counter_counts_gone_and_excluded_posts():
+    # The counter is a property of the site's own listing, so it does not move
+    # when a post is marked "not a release" or disappears — and the Chrome
+    # extension, which only sees the site, reaches the same number.
+    items = {
+        "1": {"id": "1", "date": "2026-03-01T01:00:00+00:00", "number": 1},
+        "2": {"id": "2", "date": "2026-03-01T02:00:00+00:00", "number": None, "excluded": True},
+        "3": {"id": "3", "date": "2026-03-01T03:00:00+00:00", "number": 2, "gone": True},
+    }
+    assert pt.date_seqs(items) == {"1": 1, "2": 2, "3": 3}
+
+
+def test_day_counter_ignores_undated_items():
+    items = {"1": {"id": "1", "date": None, "number": 1},
+             "2": {"id": "2", "date": "", "number": 2}}
+    assert pt.date_seqs(items) == {}
+    assert pt.prefix_date("2026-05-04", 2) == "2026.05.04 02"
+    assert pt.prefix_date("2026-05-04", 0) == "2026.05.04"      # 0/None → bare date
+    assert pt.prefix_date("2026-05-04", 12) == "2026.05.04 12"
+
+
 def test_site_codes_pawchive_uses_origin_service():
     assert pt.default_site_code("pawchive", "patreon") == "Patreon"
     assert pt.default_site_code("pawchive", "fanbox") == "Fanbox"

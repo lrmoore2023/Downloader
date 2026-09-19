@@ -64,10 +64,13 @@ def main():
     print(f"\n{len(fetched)} videos, complete={complete}, merge={res}\n")
     width = pt.number_width(manifest["items"])
     code = info.get("site_code") or pt.default_site_code(info["platform"])
+    seqs = pt.date_seqs(manifest["items"])
     for it in sorted(manifest["items"].values(), key=lambda i: i.get("number") or 0):
         q = f"  {it['quality']}p" if it.get("quality") else ""
         d = f"  {it['date'][:10]}" if it.get("date") else ""
-        print(f"{pt.format_prefix(args.name, code, it['number'], width)}{it['title']}{d}{q}")
+        prefix = pt.format_prefix(args.name, code, it["number"], width,
+                                  date=it.get("date") or "", date_seq=seqs.get(str(it["id"])))
+        print(f"{prefix}{it['title']}{d}{q}")
     return 0
 
 

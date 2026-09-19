@@ -20,6 +20,11 @@ two numbering rules below are the contract that keeps existing filenames valid:
   current number differs from the number it had when checked off, the UI shows a
   "shifted" warning (`number_at_check` vs `number`).
 
+Filename prefixes are date-first ("Snuggsmutt - Patreon - 2026.07.21 - "). When
+a day holds more than one upload the prefix carries that day's running count
+("… - 2026.07.21 02 - ") so same-day videos stay distinct and in upload order —
+see date_seqs.
+
 Manifests are metadata only and are rewritten atomically (temp file + replace).
 """
 
@@ -201,21 +206,68 @@ def number_width(items):
     return 2
 
 
-def prefix_date(iso):
-    """'2026-05-04T12:00:00+00:00' → '2026.05.04' (the date-first filename style)."""
+def prefix_date(iso, seq=None, width=2):
+    """'2026-05-04T12:00:00+00:00' → '2026.05.04' (the date-first filename style).
+
+    `seq` is the video's place among the uploads sharing that day (see
+    date_seqs) and appends ' 02', keeping same-day prefixes distinct and in
+    upload order."""
     if not iso:
         return ""
     d = str(iso)[:10]
-    return d.replace("-", ".") if len(d) == 10 else ""
+    if len(d) != 10:
+        return ""
+    d = d.replace("-", ".")
+    if isinstance(seq, int) and seq > 0:
+        d += f" {seq:0{width}d}"
+    return d
 
 
-def format_prefix(name, code, number, width=2, date=None):
+def _day_order_key(item):
+    """Upload order within one day. A full timestamp settles it wherever the
+    site publishes one (pawchive, iwara, hmvmania, pmvhaven); rule34video only
+    ever states a bare date, so there the catalogue number decides — it is
+    assigned oldest-first and, being locked, never moves. Ids break the last
+    tie, numerically when they are numeric (pawchive post ids, r34 video ids)."""
+    vid = str(item.get("id") or "")
+    n = item.get("number")
+    return (item.get("date") or "",
+            n if isinstance(n, int) else 10 ** 9,
+            (0, int(vid)) if vid.isdigit() else (1, vid))
+
+
+def date_seqs(items):
+    """{item id: its 1-based place among that day's uploads} — days holding a
+    single video are left out.
+
+    Two videos posted on the same day would otherwise get byte-identical
+    prefixes and lose their order. The counter is derived from the site's own
+    listing alone: every dated item counts, including ones now gone or left out
+    of the catalogue, so it does not move when a post is excluded and the
+    Chrome extension can reach the same number from a video page."""
+    by_day = {}
+    for it in items.values():
+        day = str(it.get("date") or "")[:10]
+        if len(day) == 10:
+            by_day.setdefault(day, []).append(it)
+    seqs = {}
+    for group in by_day.values():
+        if len(group) < 2:
+            continue
+        for n, it in enumerate(sorted(group, key=_day_order_key), 1):
+            seqs[str(it.get("id"))] = n
+    return seqs
+
+
+def format_prefix(name, code, number, width=2, date=None, date_seq=None):
     """The filename prefix: 'Name - R34 - 2026.05.04 - ' (site first, then the
     upload date — user's convention, so a folder sorted by name groups by site
     and reads chronologically within it). Dates never shift, so the prefix
-    stays valid however the site's listing changes. A video whose date is not
-    known yet (r34 detail fetch pending) falls back to its catalogue number."""
-    d = prefix_date(date) if date else ""
+    stays valid however the site's listing changes. A second video from the
+    same day carries its place in that day ('… - 2026.05.04 02 - '). A video
+    whose date is not known yet (r34 detail fetch pending) falls back to its
+    catalogue number."""
+    d = prefix_date(date, date_seq, width) if date else ""
     if d:
         return f"{name} - {code} - {d} - "
     if not isinstance(number, int) or number <= 0:
