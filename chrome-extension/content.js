@@ -55,7 +55,10 @@
         const r = await fetchJson(`https://api.iwara.tv/video/${m[1]}`);
         return r && r.createdAt;
       },
-      anchors: ['.page-video__details h1', '.page-video__details .text', '.page-video h1', 'h1'],
+      // The title is a Text component rendered with size "h1" and class "mb-1"
+      // as the first child of .page-video__details (from the app's own bundle).
+      anchors: ['.page-video__details h1', '.page-video__details .text--h1', '.page-video__details .mb-1',
+                '.page-video__details > :first-child', '.page-video__details', 'h1'],
     },
     {
       host: /(^|\.)hmvmania\.com$/,
