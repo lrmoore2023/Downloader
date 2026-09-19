@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "PMV Prefix",
-  "version": "1.0.0",
-  "description": "On a video page, one click copies the filename prefix \"SITE - YYYY.MM.DD - \" (R34, Iwara, HMVMania, PMVHaven, Patreon via pawchive).",
+  "version": "1.1.0",
+  "description": "On a video page, one click copies the filename prefix \"SITE - YYYY.MM.DD - \" (R34, Iwara, HMVMania, PMVHaven, Patreon via pawchive), numbering same-day uploads.",
   "permissions": ["clipboardWrite"],
   "host_permissions": [
     "https://api.iwara.tv/*",

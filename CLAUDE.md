@@ -42,8 +42,9 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   `backend/hmvmania_scraper.py`, `backend/pmvhaven_scraper.py` (pawchive reuses
   `pawchive_scraper`), `frontend/js/pmv.js`. Api methods are the `*_pmv_*` group.
   `chrome-extension/` is a standalone MV3 extension (load unpacked) that copies
-  `SITE - YYYY.MM.DD - ` from a video page; `node tools/pmvx_check.js <dir>` checks
-  its extractors against saved pages.
+  `SITE - YYYY.MM.DD - ` from a video page, resolving the same-day count from the
+  uploader's listing on click; `node tools/pmvx_check.js` runs its offline checks
+  (pass a dir of saved video pages to also check the date extractors).
 - `frontend/js/` — `app.js` (shell/stats), `creators.js` (creator panel + URL panel +
   `switchView`), `overlays.js` (Configure/Settings dialogs), `album.js`, `dupes.js`,
   `pmv.js`. The PMV tab is the first and default view; Creator is second.
@@ -73,7 +74,10 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   marked "not counted" / `excluded`). **Prefixes are dated and site-first on every
   site**: `Name - R34 - 2026.06.20 - ` (pawchive's code = origin service, Patreon /
   Fanbox, never "Pawchive"); the number is only a rank and only stands in for a
-  video whose date isn't known yet. `iwara_email/iwara_password/iwara_token` are credentials — never in
+  video whose date isn't known yet. Two or more uploads on the same day take
+  that day's running count (`… - 2026.06.20 02 - `, oldest first) so their order
+  survives; the count includes every dated item, gone or excluded, so it doesn't
+  move and the extension derives the same number. `iwara_email/iwara_password/iwara_token` are credentials — never in
   the NAS payload. Probe numbering read-only with `tools/pmv_probe.py <url>`.
 - **The creator index is also mirrored off-machine** to
   `<archive_dir>/.state-backups/` on every index change (last 20, written on a
