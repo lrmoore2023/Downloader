@@ -3052,12 +3052,11 @@ class Api:
             m = pt.load_manifest(pt.manifest_path(root, key), link.get("platform"), link.get("user_id"))
             code = pt.link_site_code(link)
             width = pt.number_width(m["items"])
-            dated = m.get("numbering") == pt.CHRONOLOGICAL
             rows = []
             for it in m["items"].values():
                 row = dict(it)
                 row["prefix"] = pt.format_prefix(rec.get("name") or "", code, it.get("number"), width,
-                                                 date=(it.get("date") or "") if dated else None)
+                                                 date=it.get("date") or "")
                 row["shifted"] = pt.is_shifted(it, m.get("numbering"))
                 row["media_post"] = pt.is_media_post(it)
                 rows.append(row)
@@ -3066,7 +3065,7 @@ class Api:
                 "link_key": key, "platform": link.get("platform"), "site_code": code,
                 "username": link.get("username") or "", "display_name": link.get("display_name") or "",
                 "url": link.get("url") or "", "numbering": m.get("numbering"), "width": width,
-                "prefix_style": "date" if dated else "number",
+                "prefix_style": "date",
                 "last_fetch": m.get("last_fetch") or "", "last_full_scan": m.get("last_full_scan") or "",
                 "last_error": m.get("last_error") or "", "initial_complete": bool(m.get("initial_complete")),
                 "counts": pt.counts(m), "items": rows,

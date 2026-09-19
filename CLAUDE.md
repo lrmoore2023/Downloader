@@ -41,6 +41,9 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   `backend/r34video_scraper.py`, `backend/iwara_scraper.py`,
   `backend/hmvmania_scraper.py`, `backend/pmvhaven_scraper.py` (pawchive reuses
   `pawchive_scraper`), `frontend/js/pmv.js`. Api methods are the `*_pmv_*` group.
+  `chrome-extension/` is a standalone MV3 extension (load unpacked) that copies
+  `SITE - YYYY.MM.DD - ` from a video page; `node tools/pmvx_check.js <dir>` checks
+  its extractors against saved pages.
 - `frontend/js/` — `app.js` (shell/stats), `creators.js` (creator panel + URL panel +
   `switchView`), `overlays.js` (Configure/Settings dialogs), `album.js`, `dupes.js`,
   `pmv.js`. The PMV tab is the first and default view; Creator is second.
@@ -65,11 +68,12 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   (`pawchive_<service>_<id>` for pawchive; `<app>/.pmv/` when no archive dir) holding
   every listed video, its catalogue number and the ✓/✗ status. Numbers are the
   user's filename contract: rule34video/iwara/hmvmania/pmvhaven are **locked**
-  (append-only, a deleted video keeps its slot; prefix `Name - R34 - 02 - `, always
-  2-digit padding, 103 prints as 103), pawchive is **chronological** (recomputed by
-  date every walk because it back-fills old posts) and its prefix is **dated**
-  (`Name - 2026.05.04 - Patreon - `; site code = origin service, never "Pawchive");
-  pawchive posts can be marked "not counted" (`excluded`). `iwara_email/iwara_password/iwara_token` are credentials — never in
+  (append-only, a deleted video keeps its slot), pawchive is **chronological**
+  (recomputed by date every walk because it back-fills old posts; posts can be
+  marked "not counted" / `excluded`). **Prefixes are dated and site-first on every
+  site**: `Name - R34 - 2026.06.20 - ` (pawchive's code = origin service, Patreon /
+  Fanbox, never "Pawchive"); the number is only a rank and only stands in for a
+  video whose date isn't known yet. `iwara_email/iwara_password/iwara_token` are credentials — never in
   the NAS payload. Probe numbering read-only with `tools/pmv_probe.py <url>`.
 - **The creator index is also mirrored off-machine** to
   `<archive_dir>/.state-backups/` on every index change (last 20, written on a

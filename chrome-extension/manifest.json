@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "PMV Prefix",
+  "version": "1.0.0",
+  "description": "On a video page, one click copies the filename prefix \"SITE - YYYY.MM.DD - \" (R34, Iwara, HMVMania, PMVHaven, Patreon via pawchive).",
+  "permissions": ["clipboardWrite"],
+  "host_permissions": [
+    "https://api.iwara.tv/*",
+    "https://pmvhaven.com/*",
+    "https://pawchive.pw/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://rule34video.com/*",
+        "https://*.rule34video.com/*",
+        "https://*.iwara.tv/*",
+        "https://iwara.tv/*",
+        "https://hmvmania.com/*",
+        "https://*.hmvmania.com/*",
+        "https://pmvhaven.com/*",
+        "https://*.pmvhaven.com/*",
+        "https://pawchive.pw/*",
+        "https://pawchive.st/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

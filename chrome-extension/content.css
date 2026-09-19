@@ -1,0 +1,25 @@
+.pmvx-btn {
+  all: initial;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #3fb6a8;
+  background: rgba(63, 182, 168, 0.14);
+  color: #56d3c3;
+  font: 600 12px/1.4 ui-monospace, "JetBrains Mono", Consolas, monospace;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  z-index: 2147483000;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.pmvx-btn::before { content: "⧉"; font-size: 13px; line-height: 1; }
+.pmvx-btn:hover { background: #3fb6a8; color: #0b0e13; }
+.pmvx-btn.pmvx-flash { background: #46c08a; border-color: #46c08a; color: #0b0e13; }
+.pmvx-btn.pmvx-nodate { border-style: dashed; color: #e0a64b; border-color: #e0a64b; background: rgba(224, 166, 75, 0.12); }
+.pmvx-btn.pmvx-inline { margin: 6px 0 6px 10px; vertical-align: middle; }
+.pmvx-btn.pmvx-floating { position: fixed; right: 18px; bottom: 18px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); }

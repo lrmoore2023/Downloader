@@ -210,12 +210,14 @@ def prefix_date(iso):
 
 
 def format_prefix(name, code, number, width=2, date=None):
-    """Locked sites: 'Name - R34 - 02 - '. Chronological (pawchive) sites pass
-    `date` and get 'Name - 2026.05.04 - Patreon - ' — dated prefixes stay valid
-    however many older posts the archive back-fills later."""
-    if date is not None:
-        d = prefix_date(date)
-        return f"{name} - {d} - {code} - " if d else f"{name} - {code} - "
+    """The filename prefix: 'Name - R34 - 2026.05.04 - ' (site first, then the
+    upload date — user's convention, so a folder sorted by name groups by site
+    and reads chronologically within it). Dates never shift, so the prefix
+    stays valid however the site's listing changes. A video whose date is not
+    known yet (r34 detail fetch pending) falls back to its catalogue number."""
+    d = prefix_date(date) if date else ""
+    if d:
+        return f"{name} - {code} - {d} - "
     if not isinstance(number, int) or number <= 0:
         return f"{name} - {code} - "
     return f"{name} - {code} - {number:0{width}d} - "

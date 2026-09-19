@@ -190,8 +190,8 @@ def test_set_pmv_excluded_bulk_is_pawchive_only_and_renumbers(app, monkeypatch):
     site = app.get_pmv_items(cid)["sites"][0]
     assert site["prefix_style"] == "date" and site["site_code"] == "Patreon"
     by_id = {it["id"]: it["prefix"] for it in site["items"]}
-    assert by_id["3"] == "S - 2026.03.01 - Patreon - "
-    assert by_id["2"] == "S - 2026.02.01 - Patreon - "          # excluded posts still get a dated prefix
+    assert by_id["3"] == "S - Patreon - 2026.03.01 - "
+    assert by_id["2"] == "S - Patreon - 2026.02.01 - "          # excluded posts still get a dated prefix
     assert app.set_pmv_excluded_bulk(cid, key, ["2"], True)["updated"] == 0        # already excluded
     assert app.set_pmv_excluded_bulk(cid, key, ["2"], False)["updated"] == 1
     rows = {it["id"]: it["number"] for it in app.get_pmv_items(cid)["sites"][0]["items"]}

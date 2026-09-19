@@ -287,13 +287,16 @@ def test_number_width_and_prefix():
     assert pt.format_prefix("X", "R34", 2).endswith(" - ")             # trailing space kept
 
 
-def test_dated_prefix_for_chronological_sites():
+def test_dated_prefix_site_first_on_every_site():
     assert pt.prefix_date("2026-05-04T12:00:00+00:00") == "2026.05.04"
     assert pt.prefix_date("2026-05-04") == "2026.05.04"
     assert pt.prefix_date(None) == "" and pt.prefix_date("bogus") == ""
     assert pt.format_prefix("Snuggsmutt", "Patreon", 3, 2, date="2026-05-04T12:00:00+00:00") \
-        == "Snuggsmutt - 2026.05.04 - Patreon - "
-    assert pt.format_prefix("Snuggsmutt", "Patreon", 3, 2, date="") == "Snuggsmutt - Patreon - "
+        == "Snuggsmutt - Patreon - 2026.05.04 - "
+    assert pt.format_prefix("SadBernard", "R34", 2, 2, date="2026-06-20") == "SadBernard - R34 - 2026.06.20 - "
+    # No date known yet (r34 detail fetch pending) → the catalogue number stands in.
+    assert pt.format_prefix("SadBernard", "R34", 2, 2, date="") == "SadBernard - R34 - 02 - "
+    assert pt.format_prefix("X", "R34", None, date=None) == "X - R34 - "
 
 
 def test_site_codes_pawchive_uses_origin_service():
