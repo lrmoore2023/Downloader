@@ -162,6 +162,10 @@ function pmvRescanSite(linkKey) {
     if (pmvCurrentId) pmvFetch([pmvCurrentId], 'full', linkKey);
 }
 
+function pmvFetchSite(linkKey) {
+    if (pmvCurrentId) pmvFetch([pmvCurrentId], 'latest', linkKey);
+}
+
 async function pmvCancel() {
     try { await pywebview.api.cancel_pmv_fetch(); } catch (e) { /* ignore */ }
     pmvStatusText('Cancelling — finishing the current page…');
@@ -269,7 +273,7 @@ function renderPmvDetail(keepScroll) {
             <div class="pmv-detail-title"><span class="pmv-detail-name">${escapeHtml(c.name)}</span>${tags}</div>
             <div class="actions-row">
                 <button class="btn btn-secondary btn-sm pmv-fetch-btn" ${pmvBusy ? 'disabled' : ''} onclick="pmvFetchCurrent()"
-                        title="Fetch new videos on every site of this creator">Fetch latest</button>
+                        title="Fetch new videos on every site of this creator (each site header has its own Fetch latest for one site)">Fetch latest (all sites)</button>
                 <button class="btn btn-ghost btn-sm" onclick="openPmvEditor('${c.id}')">Edit</button>
             </div>
         </div>
@@ -299,8 +303,10 @@ function renderPmvSite(s, idx, titleMap) {
         s.last_fetch ? `fetched ${pmvFmtWhen(s.last_fetch)}` : 'never fetched',
     ].filter(Boolean).join(' · ');
     const numbering = isPaw
-        ? '<span class="pmv-hint" title="pawchive back-fills old posts, so numbers are recomputed by date on every fetch. A ✓ post whose number moved shows a red “shifted” badge.">chronological numbering</span>'
+        ? '<span class="pmv-hint" title="pawchive back-fills old posts, so its prefixes use the upload date instead of a number: Name - 2026.05.04 - Patreon - . The # column is only the current chronological rank.">dated prefixes</span>'
         : '';
+    const fetchSite = `<button class="btn-tiny pmv-fetch-btn" ${pmvBusy ? 'disabled' : ''} onclick="pmvFetchSite('${s.link_key}')"
+             title="Look for new posts on this site only">Fetch latest</button>`;
     const todo = items.filter(it => it.status === 'unreviewed' && !it.excluded);
     const done = items.filter(it => it.status !== 'unreviewed' || it.excluded);
     const markAll = todo.length
@@ -344,7 +350,7 @@ function renderPmvSite(s, idx, titleMap) {
             <span class="link-badge pmv-code">${escapeHtml(s.site_code)}</span>${rank}
             <span class="pmv-site-who" title="${escapeHtml(s.url)}">${escapeHtml(who)}</span>
             <span class="pmv-site-meta">${meta}</span>${numbering}
-            <span class="pmv-site-actions">${excludeNonMedia}${markAll}${rescan}${renumber}${profile}</span>
+            <span class="pmv-site-actions">${excludeNonMedia}${markAll}${fetchSite}${rescan}${renumber}${profile}</span>
         </div>
         ${warn}${body}
     </div>`;
@@ -605,7 +611,9 @@ function closePmvEditor() {
 
 function pmvPlatformLabel(l) {
     return { rule34video: { badge: 'rule34video', cls: '' }, iwara: { badge: 'iwara', cls: 'badge-twitter' },
-             pawchive: { badge: (l.service || 'pawchive'), cls: 'badge-pawchive' } }[l.platform]
+             pawchive: { badge: (l.service || 'pawchive'), cls: 'badge-pawchive' },
+             hmvmania: { badge: 'hmvmania', cls: 'badge-derpibooru' },
+             pmvhaven: { badge: 'pmvhaven', cls: 'badge-discord' } }[l.platform]
         || { badge: l.platform || '?', cls: '' };
 }
 
@@ -656,7 +664,8 @@ function pmvEdRemove(i) {
 
 function pmvEdDescribe(info) {
     const who = info.display_name || info.username || info.user_id || '?';
-    const site = { rule34video: 'rule34video', iwara: 'iwara', pawchive: `pawchive (${info.service || '?'})` }[info.platform] || info.platform;
+    const site = { rule34video: 'rule34video', iwara: 'iwara', pawchive: `pawchive (${info.service || '?'})`,
+                   hmvmania: 'HMVMania', pmvhaven: 'PMVHaven' }[info.platform] || info.platform;
     return `Detected: ${site} — ${who}` + (info.note ? ` (${info.note})` : '');
 }
 
@@ -675,7 +684,7 @@ async function pmvEdPreview() {
     if (document.getElementById('pmvEdNewLink').value.trim() !== url) return;   // typed more since
     preview.textContent = info && info.valid
         ? pmvEdDescribe(info) + '  ·  click Add site'
-        : 'Unrecognized URL — expected rule34video.com/members/…, iwara.tv/profile/…, or pawchive.pw/{service}/user/…';
+        : 'Unrecognized URL — expected rule34video.com/members/…, iwara.tv/profile/…, pawchive.pw/{service}/user/…, hmvmania.com/author/…, or pmvhaven.com/profile/…';
     if (info && info.valid && info.platform === 'iwara') {
         try {
             const st = await pywebview.api.iwara_login_status();
@@ -689,7 +698,7 @@ async function pmvEdPreview() {
 function pmvEdSameSite(a, b) {
     if (a.platform !== b.platform) return false;
     if (a.platform === 'pawchive') return a.service === b.service && a.user_id === b.user_id;
-    if (a.platform === 'iwara') return (a.user_id && a.user_id === b.user_id)
+    if (a.platform === 'iwara' || a.platform === 'pmvhaven') return (a.user_id && a.user_id === b.user_id)
         || (a.username || '').toLowerCase() === (b.username || '').toLowerCase();
     return a.user_id === b.user_id;
 }

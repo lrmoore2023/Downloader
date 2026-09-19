@@ -36,13 +36,16 @@ VERSION = 1
 
 LOCKED = "locked"
 CHRONOLOGICAL = "chronological"
-PLATFORMS = ("rule34video", "iwara", "pawchive")
+PLATFORMS = ("rule34video", "iwara", "pawchive", "hmvmania", "pmvhaven")
 NUMBERING_FOR_PLATFORM = {
     "rule34video": LOCKED,
     "iwara": LOCKED,
     "pawchive": CHRONOLOGICAL,
+    "hmvmania": LOCKED,
+    "pmvhaven": LOCKED,
 }
-DEFAULT_SITE_CODES = {"rule34video": "R34", "iwara": "Iwara", "pawchive": "Pawchive"}
+DEFAULT_SITE_CODES = {"rule34video": "R34", "iwara": "Iwara", "pawchive": "Pawchive",
+                      "hmvmania": "HMVMania", "pmvhaven": "PMVHaven"}
 STATUSES = ("unreviewed", "downloaded", "skipped")
 
 # Attachment kinds that make a pawchive post worth showing by default (the user
@@ -95,8 +98,23 @@ def numbering_for(platform):
     return NUMBERING_FOR_PLATFORM.get(platform, LOCKED)
 
 
-def default_site_code(platform):
+def default_site_code(platform, service=None):
+    """The code that goes in the filename. pawchive is only an archive, so its
+    code is the *origin* service (Patreon / Fanbox), matching the downloader."""
+    if platform == "pawchive" and service:
+        return (service or "").strip().title() or "Pawchive"
     return DEFAULT_SITE_CODES.get(platform, (platform or "?").title())
+
+
+def link_site_code(link):
+    """A link's effective site code. A pawchive link saved with the old generic
+    default ('Pawchive') is read as its service so existing creators follow the
+    'Name - Patreon - …' convention without re-saving."""
+    link = link or {}
+    code = (link.get("site_code") or "").strip()
+    if link.get("platform") == "pawchive" and code in ("", "Pawchive"):
+        return default_site_code("pawchive", link.get("service"))
+    return code or default_site_code(link.get("platform"))
 
 
 # ── manifest IO ─────────────────────────────────────────────────────
@@ -178,17 +196,26 @@ def save_manifest(path, data):
 # ── prefixes ────────────────────────────────────────────────────────
 
 def number_width(items):
-    """2 digits until the catalogue reaches 100, then 3. Rendering-only: numbers
-    themselves never change, so old 2-digit filenames stay valid."""
-    mx = 0
-    for it in (items.values() if isinstance(items, dict) else items or []):
-        n = it.get("number") if isinstance(it, dict) else it
-        if isinstance(n, int) and n > mx:
-            mx = n
-    return 3 if mx >= 100 else 2
+    """Always 2: the user's filenames pad to two digits (03) and a three-digit
+    number simply prints as itself (103) — never 003 or a 3-wide pad."""
+    return 2
 
 
-def format_prefix(name, code, number, width=2):
+def prefix_date(iso):
+    """'2026-05-04T12:00:00+00:00' → '2026.05.04' (the date-first filename style)."""
+    if not iso:
+        return ""
+    d = str(iso)[:10]
+    return d.replace("-", ".") if len(d) == 10 else ""
+
+
+def format_prefix(name, code, number, width=2, date=None):
+    """Locked sites: 'Name - R34 - 02 - '. Chronological (pawchive) sites pass
+    `date` and get 'Name - 2026.05.04 - Patreon - ' — dated prefixes stay valid
+    however many older posts the archive back-fills later."""
+    if date is not None:
+        d = prefix_date(date)
+        return f"{name} - {d} - {code} - " if d else f"{name} - {code} - "
     if not isinstance(number, int) or number <= 0:
         return f"{name} - {code} - "
     return f"{name} - {code} - {number:0{width}d} - "
@@ -437,7 +464,10 @@ def set_status(item, status, now=None):
     return item
 
 
-def is_shifted(item):
+def is_shifted(item, numbering=LOCKED):
+    # Chronological sites name files by date, so a moved rank is harmless there.
+    if numbering == CHRONOLOGICAL:
+        return False
     return (item.get("status") == "downloaded"
             and not item.get("excluded")
             and isinstance(item.get("number_at_check"), int)
@@ -474,6 +504,6 @@ def counts(manifest):
             c["unreviewed"] += 1
             if not it.get("initial"):
                 c["new"] += 1
-        if is_shifted(it):
+        if is_shifted(it, manifest.get("numbering")):
             c["shifted"] += 1
     return c

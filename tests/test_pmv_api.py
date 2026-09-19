@@ -61,7 +61,7 @@ def test_save_and_list_pmv_creator_preserves_order_and_defaults(app, monkeypatch
     rec = app.get_pmv_creator(cid)
     assert rec["name"] == "SadBernard" and rec["tags"] == ["3D", "Furry"]
     assert [l["platform"] for l in rec["links"]] == ["pawchive", "rule34video", "iwara"]
-    assert rec["links"][0]["site_code"] == "Pawchive"
+    assert rec["links"][0]["site_code"] == "Patreon"            # pawchive → origin service
     assert rec["created"]
     lst = app.list_pmv_creators()
     assert len(lst) == 1 and lst[0]["id"] == cid
@@ -187,6 +187,11 @@ def test_set_pmv_excluded_bulk_is_pawchive_only_and_renumbers(app, monkeypatch):
     assert app.set_pmv_excluded_bulk(cid, key, ["2", "nope"], True) == {"ok": True, "updated": 1}
     rows = {it["id"]: (it["number"], it["excluded"]) for it in app.get_pmv_items(cid)["sites"][0]["items"]}
     assert rows == {"1": (1, False), "2": (None, True), "3": (2, False)}
+    site = app.get_pmv_items(cid)["sites"][0]
+    assert site["prefix_style"] == "date" and site["site_code"] == "Patreon"
+    by_id = {it["id"]: it["prefix"] for it in site["items"]}
+    assert by_id["3"] == "S - 2026.03.01 - Patreon - "
+    assert by_id["2"] == "S - 2026.02.01 - Patreon - "          # excluded posts still get a dated prefix
     assert app.set_pmv_excluded_bulk(cid, key, ["2"], True)["updated"] == 0        # already excluded
     assert app.set_pmv_excluded_bulk(cid, key, ["2"], False)["updated"] == 1
     rows = {it["id"]: it["number"] for it in app.get_pmv_items(cid)["sites"][0]["items"]}

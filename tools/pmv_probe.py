@@ -57,7 +57,8 @@ def main():
     job = {"creator": {"id": "probe", "name": args.name}, "link": info, "mode": "full"}
     manifest = pt.new_manifest(info["platform"], info.get("user_id"))
     fetcher = {"rule34video": runner._fetch_r34, "iwara": runner._fetch_iwara,
-               "pawchive": runner._fetch_pawchive}[info["platform"]]
+               "pawchive": runner._fetch_pawchive, "hmvmania": runner._fetch_hmvmania,
+               "pmvhaven": runner._fetch_pmvhaven}[info["platform"]]
     fetched, full, complete = fetcher(job, manifest)
     res = pt.merge(manifest, fetched, full=full, complete=complete)
     print(f"\n{len(fetched)} videos, complete={complete}, merge={res}\n")

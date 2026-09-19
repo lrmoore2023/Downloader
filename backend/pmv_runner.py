@@ -26,6 +26,8 @@ from backend import pmv_tracker as pt
 from backend import r34video_scraper as r34
 from backend import iwara_scraper as iw
 from backend import pawchive_scraper as pw
+from backend import hmvmania_scraper as hmv
+from backend import pmvhaven_scraper as pmvh
 from backend.pawchive_links import post_media_kinds
 from backend.rate_limit import AdaptiveThrottle
 
@@ -43,6 +45,8 @@ class PmvRunner:
         "rule34video": (1.0, 0.5, 30.0),
         "iwara": (0.7, 0.3, 30.0),
         "pawchive": (1.5, 1.0, 60.0),
+        "hmvmania": (1.5, 1.0, 60.0),      # WordPress feed behind Cloudflare: be gentle
+        "pmvhaven": (0.7, 0.3, 30.0),
     }
 
     def __init__(self, *, manifest_root_for, state, cancel=None,
@@ -73,6 +77,10 @@ class PmvRunner:
                 s = r34.make_session()
             elif platform == "iwara":
                 s = iw.make_session()
+            elif platform == "hmvmania":
+                s = hmv.make_session()
+            elif platform == "pmvhaven":
+                s = pmvh.make_session()
             else:
                 s = pw.make_session(user_agent=self._state.get("pawchive_user_agent") or None,
                                     cookies_path=self._state.get("pawchive_cookies_path") or None)
@@ -96,7 +104,7 @@ class PmvRunner:
             "creator_name": job["creator"].get("name", ""),
             "link_key": pt.link_key(job["link"]),
             "platform": job["link"].get("platform", ""),
-            "site_code": job["link"].get("site_code") or pt.default_site_code(job["link"].get("platform")),
+            "site_code": pt.link_site_code(job["link"]),
             "message": message,
         }
         d.update(extra)
@@ -125,11 +133,12 @@ class PmvRunner:
                 platform = link.get("platform")
                 key = pt.link_key(link)
                 path = pt.manifest_path(self._root_for(cid), key)
-                label = f"{creator.get('name', '?')} · {link.get('site_code') or pt.default_site_code(platform)}"
+                label = f"{creator.get('name', '?')} · {pt.link_site_code(link)}"
                 self._emit("start", job, f"{label}: fetching…")
                 try:
                     fetcher = {"rule34video": self._fetch_r34, "iwara": self._fetch_iwara,
-                               "pawchive": self._fetch_pawchive}.get(platform)
+                               "pawchive": self._fetch_pawchive, "hmvmania": self._fetch_hmvmania,
+                               "pmvhaven": self._fetch_pmvhaven}.get(platform)
                     if fetcher is None:
                         raise LinkError(f"unsupported platform {platform!r}")
                     with pt.manifest_lock(path):
@@ -315,6 +324,70 @@ class PmvRunner:
         if not fetched and known:
             raise LinkError("iwara: listing came back empty — nothing changed")
         return fetched, (not incremental), (not stopped_early)
+
+    # ── generic locked-site walk (hmvmania, pmvhaven) ───────────────
+
+    def _walk_locked(self, job, manifest, pages, page_label):
+        """Fold a newest-first (page, [parsed items]) iterator into (fetched, full,
+        complete) under the locked rules: incremental mode stops after the first
+        page whose ids are all known; a full walk goes to the end."""
+        mode = job.get("mode", "latest")
+        known = manifest.get("items", {})
+        incremental = (mode == "latest") and self._is_numbered(manifest)
+        fetched, pos, stopped_early = [], 0, False
+        for page, items in pages:
+            all_known = True
+            for it in items:
+                it = dict(it)
+                if not it.get("id"):
+                    continue
+                it["pos"] = pos
+                pos += 1
+                fetched.append(it)
+                if it["id"] not in known:
+                    all_known = False
+            self._emit("page", job, f"page {page}: {len(items)} {page_label}", page=page, count=len(fetched))
+            if incremental and all_known:
+                stopped_early = True
+                break
+        if self._cancelled():
+            return fetched, False, False
+        if not fetched and known:
+            raise LinkError("listing came back empty — nothing changed")
+        return fetched, (not incremental), (not stopped_early)
+
+    def _fetch_hmvmania(self, job, manifest):
+        link = job["link"]
+        session = self._session("hmvmania")
+        throttle = self._throttles["hmvmania"]
+        try:
+            pages = hmv.iter_feed_pages(session, link["user_id"], throttle, self._cancelled)
+            return self._walk_locked(job, manifest, pages, "videos")
+        except hmv.SiteError as e:
+            raise LinkError(f"hmvmania: {e}")
+        except LinkError as e:
+            raise LinkError(f"hmvmania: {e}")
+
+    def _fetch_pmvhaven(self, job, manifest):
+        link = job["link"]
+        session = self._session("pmvhaven")
+        throttle = self._throttles["pmvhaven"]
+        uid = link.get("user_id") or ""
+        try:
+            if not uid:
+                uid = pmvh.resolve_username(session, link.get("username", ""), throttle, self._cancelled)
+                if not uid:
+                    raise LinkError("pmvhaven: could not resolve the username to a user id")
+
+            def pages():
+                for page, raws, _pg in pmvh.iter_videos(session, uid, throttle, self._cancelled):
+                    yield page, [pmvh.parse_video(r) for r in raws]
+            return self._walk_locked(job, manifest, pages(), "videos")
+        except pmvh.SiteError as e:
+            raise LinkError(f"pmvhaven: {e}")
+        except LinkError as e:
+            msg = str(e)
+            raise LinkError(msg if msg.startswith("pmvhaven") else f"pmvhaven: {msg}")
 
     # ── pawchive ────────────────────────────────────────────────────
 

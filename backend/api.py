@@ -45,6 +45,8 @@ from backend import pmv_tracker as pt
 from backend.pmv_runner import PmvRunner
 from backend import r34video_scraper as r34
 from backend import iwara_scraper as iw
+from backend import hmvmania_scraper as hmv
+from backend import pmvhaven_scraper as pmvh
 from backend.library_import import scan_library
 from backend.media_library import scan_creator_media
 from backend.media_server import MediaServer
@@ -2861,6 +2863,40 @@ class Api:
                     "display_name": name, "url": iw.profile_url(username),
                     "site_code": pt.default_site_code("iwara"),
                     "note": "" if uuid else "profile lookup failed — will retry on fetch"}
+        if "hmvmania.com" in low:
+            m = hmv.parse_author_url(url)
+            if not m:
+                return {"valid": False}
+            slug, name = m["slug"], ""
+            try:
+                name = hmv.fetch_author(hmv.make_session(), slug).get("name") or ""
+            except Exception:
+                pass
+            return {"valid": True, "platform": "hmvmania", "user_id": slug, "username": slug,
+                    "display_name": name, "url": hmv.author_url(slug),
+                    "site_code": pt.default_site_code("hmvmania")}
+        if "pmvhaven.com" in low:
+            m = pmvh.parse_profile_url(url)
+            if not m:
+                return {"valid": False}
+            uid, username, name = m["user_id"], m["username"], ""
+            try:
+                sess = pmvh.make_session()
+                if not uid:
+                    uid = pmvh.resolve_username(sess, username)
+                if uid:
+                    p = pmvh.fetch_profile(sess, uid)
+                    name = p.get("name") or ""
+                    username = username or p.get("username") or ""
+            except Exception:
+                pass
+            if not uid and not username:
+                return {"valid": False}
+            return {"valid": True, "platform": "pmvhaven", "user_id": uid, "username": username,
+                    "display_name": name or username,
+                    "url": pmvh.profile_url(uid or username),
+                    "site_code": pt.default_site_code("pmvhaven"),
+                    "note": "" if uid else "profile lookup failed — will retry on fetch"}
         if "pawchive" in low:
             pw = pw_parse_creator_url(url)
             if not pw:
@@ -2876,7 +2912,7 @@ class Api:
             return {"valid": True, "platform": "pawchive", "service": pw["service"],
                     "user_id": pw["user_id"], "username": name, "display_name": name,
                     "url": pw_creator_url(pw["service"], pw["user_id"]),
-                    "site_code": pt.default_site_code("pawchive")}
+                    "site_code": pt.default_site_code("pawchive", pw["service"])}
         return {"valid": False}
 
     def _pmv_clean_link(self, raw):
@@ -2884,7 +2920,7 @@ class Api:
         if not isinstance(raw, dict):
             return None
         link = dict(raw)
-        if not link.get("platform") or (link["platform"] != "iwara" and not link.get("user_id")):
+        if not link.get("platform") or (link["platform"] not in ("iwara", "pmvhaven") and not link.get("user_id")):
             info = self.resolve_pmv_link(link.get("url", ""))
             if not info.get("valid"):
                 return None
@@ -2900,13 +2936,15 @@ class Api:
             "user_id": str(link.get("user_id") or ""),
             "username": link.get("username") or "",
             "display_name": link.get("display_name") or "",
-            "site_code": (link.get("site_code") or "").strip() or pt.default_site_code(link["platform"]),
+            "site_code": (link.get("site_code") or "").strip() or pt.default_site_code(link["platform"], link.get("service")),
         }
         if link["platform"] == "pawchive":
             out["service"] = (link.get("service") or "").lower()
             if not out["service"] or not out["user_id"]:
                 return None
-        elif link["platform"] == "iwara":
+            if out["site_code"] == "Pawchive":          # old generic default → origin service
+                out["site_code"] = pt.default_site_code("pawchive", out["service"])
+        elif link["platform"] in ("iwara", "pmvhaven"):
             if not out["username"] and not out["user_id"]:
                 return None
         elif not out["user_id"]:
@@ -2931,7 +2969,7 @@ class Api:
                 for k in total:
                     total[k] += c.get(k, 0)
                 sites.append({"link_key": key, "platform": link.get("platform"),
-                              "site_code": link.get("site_code") or pt.default_site_code(link.get("platform")),
+                              "site_code": pt.link_site_code(link),
                               "username": link.get("username") or "",
                               "display_name": link.get("display_name") or "",
                               "url": link.get("url") or "", "counts": c,
@@ -2961,8 +2999,8 @@ class Api:
             if link is None:
                 bad = raw.get("url", "?") if isinstance(raw, dict) else raw
                 return {"error": f"Unrecognized link: {bad}"}
-            key = pt.link_key(link) if (link.get("user_id") or link["platform"] != "iwara") \
-                else f"iwara_@{link['username'].lower()}"
+            key = pt.link_key(link) if (link.get("user_id") or link["platform"] not in ("iwara", "pmvhaven")) \
+                else f"{link['platform']}_@{link['username'].lower()}"
             if key in seen:
                 continue
             seen.add(key)
@@ -3012,13 +3050,15 @@ class Api:
         for link in rec.get("links") or []:
             key = pt.link_key(link)
             m = pt.load_manifest(pt.manifest_path(root, key), link.get("platform"), link.get("user_id"))
-            code = link.get("site_code") or pt.default_site_code(link.get("platform"))
+            code = pt.link_site_code(link)
             width = pt.number_width(m["items"])
+            dated = m.get("numbering") == pt.CHRONOLOGICAL
             rows = []
             for it in m["items"].values():
                 row = dict(it)
-                row["prefix"] = pt.format_prefix(rec.get("name") or "", code, it.get("number"), width)
-                row["shifted"] = pt.is_shifted(it)
+                row["prefix"] = pt.format_prefix(rec.get("name") or "", code, it.get("number"), width,
+                                                 date=(it.get("date") or "") if dated else None)
+                row["shifted"] = pt.is_shifted(it, m.get("numbering"))
                 row["media_post"] = pt.is_media_post(it)
                 rows.append(row)
             rows.sort(key=lambda r: -(r.get("number") or 0))
@@ -3026,6 +3066,7 @@ class Api:
                 "link_key": key, "platform": link.get("platform"), "site_code": code,
                 "username": link.get("username") or "", "display_name": link.get("display_name") or "",
                 "url": link.get("url") or "", "numbering": m.get("numbering"), "width": width,
+                "prefix_style": "date" if dated else "number",
                 "last_fetch": m.get("last_fetch") or "", "last_full_scan": m.get("last_full_scan") or "",
                 "last_error": m.get("last_error") or "", "initial_complete": bool(m.get("initial_complete")),
                 "counts": pt.counts(m), "items": rows,

@@ -277,12 +277,44 @@ def test_counts():
 
 
 def test_number_width_and_prefix():
+    # Always two digits: 03, and 103 prints as itself — never 003 / 3-wide padding.
     assert pt.number_width({"a": {"number": 99}}) == 2
-    assert pt.number_width({"a": {"number": 100}}) == 3
+    assert pt.number_width({"a": {"number": 100}}) == 2
     assert pt.number_width({}) == 2
     assert pt.format_prefix("SadBernard", "R34", 2, 2) == "SadBernard - R34 - 02 - "
-    assert pt.format_prefix("X", "Iwara", 7, 3) == "X - Iwara - 007 - "
+    assert pt.format_prefix("X", "Iwara", 103, 2) == "X - Iwara - 103 - "
     assert pt.format_prefix("X", "R34", None) == "X - R34 - "
+    assert pt.format_prefix("X", "R34", 2).endswith(" - ")             # trailing space kept
+
+
+def test_dated_prefix_for_chronological_sites():
+    assert pt.prefix_date("2026-05-04T12:00:00+00:00") == "2026.05.04"
+    assert pt.prefix_date("2026-05-04") == "2026.05.04"
+    assert pt.prefix_date(None) == "" and pt.prefix_date("bogus") == ""
+    assert pt.format_prefix("Snuggsmutt", "Patreon", 3, 2, date="2026-05-04T12:00:00+00:00") \
+        == "Snuggsmutt - 2026.05.04 - Patreon - "
+    assert pt.format_prefix("Snuggsmutt", "Patreon", 3, 2, date="") == "Snuggsmutt - Patreon - "
+
+
+def test_site_codes_pawchive_uses_origin_service():
+    assert pt.default_site_code("pawchive", "patreon") == "Patreon"
+    assert pt.default_site_code("pawchive", "fanbox") == "Fanbox"
+    assert pt.default_site_code("pawchive") == "Pawchive"
+    assert pt.default_site_code("rule34video") == "R34"
+    paw = {"platform": "pawchive", "service": "patreon", "user_id": "1"}
+    assert pt.link_site_code(paw) == "Patreon"
+    assert pt.link_site_code(dict(paw, site_code="Pawchive")) == "Patreon"     # old default migrates
+    assert pt.link_site_code(dict(paw, site_code="PTR")) == "PTR"              # explicit code wins
+    assert pt.link_site_code({"platform": "iwara", "site_code": ""}) == "Iwara"
+
+
+def test_shifted_is_ignored_on_chronological_sites():
+    it = {"status": "downloaded", "number": 5, "number_at_check": 3}
+    assert pt.is_shifted(it)
+    assert not pt.is_shifted(it, pt.CHRONOLOGICAL)
+    m = pt.new_manifest("pawchive", "42")
+    m["items"]["1"] = dict(it, id="1")
+    assert pt.counts(m)["shifted"] == 0
 
 
 def test_is_media_post():
