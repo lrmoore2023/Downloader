@@ -301,10 +301,14 @@ function renderPmvSite(s, idx, titleMap) {
     const numbering = isPaw
         ? '<span class="pmv-hint" title="pawchive back-fills old posts, so numbers are recomputed by date on every fetch. A ✓ post whose number moved shows a red “shifted” badge.">chronological numbering</span>'
         : '';
-    const todo = items.filter(it => it.status === 'unreviewed');
-    const done = items.filter(it => it.status !== 'unreviewed');
+    const todo = items.filter(it => it.status === 'unreviewed' && !it.excluded);
+    const done = items.filter(it => it.status !== 'unreviewed' || it.excluded);
     const markAll = todo.length
         ? `<button class="btn-tiny" onclick="pmvMarkVisible('${s.link_key}')" title="Mark every visible unreviewed video ✗ (not wanted)">Mark visible ✗</button>` : '';
+    const nonMedia = isPaw ? (s.items || []).filter(it => !it.media_post && !it.excluded && it.status === 'unreviewed').length : 0;
+    const excludeNonMedia = nonMedia
+        ? `<button class="btn-tiny" onclick="pmvExcludeNonMedia('${s.link_key}')"
+             title="Take every image/text-only post (no video, archive or external link) out of the catalogue count. Numbers close up immediately.">Don't count image/text-only (${nonMedia})</button>` : '';
     const rescan = isPaw ? ''
         : `<button class="btn-tiny pmv-fetch-btn" ${pmvBusy ? 'disabled' : ''} onclick="pmvRescanSite('${s.link_key}')"
              title="Walk the whole listing again to spot deleted (gone) videos. Numbers never change — unless older videos turn up and nothing is ✓ yet, in which case the catalogue is re-sorted by date.">Full rescan</button>`;
@@ -325,13 +329,14 @@ function renderPmvSite(s, idx, titleMap) {
         body = `<div class="links-empty" style="padding: 10px 12px;">${(s.items || []).length ? 'Nothing matches the current filters.' : 'No videos recorded yet.'}</div>`;
     } else {
         const open = pmvExpanded.has(s.link_key);
-        const nOk = done.filter(it => it.status === 'downloaded').length;
-        const nX = done.length - nOk;
+        const nOk = done.filter(it => it.status === 'downloaded' && !it.excluded).length;
+        const nEx = done.filter(it => it.excluded).length;
+        const nX = done.length - nOk - nEx;
         body = `<div class="pmv-table">${todo.map(it => renderPmvRow(it, s, titleMap)).join('')}</div>`
             + (todo.length ? '' : '<div class="links-empty" style="padding: 8px 12px;">Nothing left to review here.</div>')
             + (done.length ? `<div class="pmv-reviewed-toggle" onclick="pmvToggleReviewed('${s.link_key}')" title="${open ? 'Hide' : 'Show'} the videos you have already reviewed">
                     <span class="pmv-caret">${open ? '▾' : '▸'}</span>
-                    Reviewed ${done.length} <span class="badge pmv-primary">✓ ${nOk}</span> <span class="badge badge-skipped">✗ ${nX}</span>
+                    Reviewed ${done.length} <span class="badge pmv-primary">✓ ${nOk}</span> <span class="badge badge-skipped">✗ ${nX}</span>${nEx ? ` <span class="badge badge-skipped" title="Not counted toward the catalogue numbers">∅ ${nEx} not counted</span>` : ''}
                 </div>` + (open ? `<div class="pmv-table">${done.map(it => renderPmvRow(it, s, titleMap)).join('')}</div>` : '') : '');
     }
     return `<div class="pmv-site">
@@ -339,10 +344,36 @@ function renderPmvSite(s, idx, titleMap) {
             <span class="link-badge pmv-code">${escapeHtml(s.site_code)}</span>${rank}
             <span class="pmv-site-who" title="${escapeHtml(s.url)}">${escapeHtml(who)}</span>
             <span class="pmv-site-meta">${meta}</span>${numbering}
-            <span class="pmv-site-actions">${markAll}${rescan}${renumber}${profile}</span>
+            <span class="pmv-site-actions">${excludeNonMedia}${markAll}${rescan}${renumber}${profile}</span>
         </div>
         ${warn}${body}
     </div>`;
+}
+
+async function pmvSetExcluded(linkKey, ids, excluded) {
+    let res;
+    try { res = await pywebview.api.set_pmv_excluded_bulk(pmvCurrentId, linkKey, ids, excluded); }
+    catch (e) { res = { error: String(e) }; }
+    if (!res || res.error) { showToast((res && res.error) || 'Could not save', 'error'); return; }
+    // Numbers changed server-side for the whole site: reload rather than patch.
+    await openPmvCreator(pmvCurrentId, true);
+    refreshPmvCreators();
+    return res;
+}
+
+function pmvToggleExcluded(linkKey, id) {
+    const { it } = pmvFindItem(linkKey, id);
+    if (it) pmvSetExcluded(linkKey, [id], !it.excluded);
+}
+
+async function pmvExcludeNonMedia(linkKey) {
+    const s = pmvDetail && (pmvDetail.sites || []).find(x => x.link_key === linkKey);
+    if (!s) return;
+    const ids = (s.items || []).filter(it => !it.media_post && !it.excluded && it.status === 'unreviewed').map(it => it.id);
+    if (!ids.length) return;
+    if (!confirm(`Leave ${ids.length} image/text-only post${ids.length === 1 ? '' : 's'} out of ${s.site_code}'s catalogue count?\n\nThey stay listed under Reviewed and can be counted again with one click.`)) return;
+    const res = await pmvSetExcluded(linkKey, ids, true);
+    if (res) showToast(`${res.updated} post${res.updated === 1 ? '' : 's'} no longer counted`, 'info');
 }
 
 function pmvToggleReviewed(linkKey) {
@@ -372,8 +403,9 @@ function pmvPad(n, w) {
 }
 
 function renderPmvRow(it, s, titleMap) {
-    const cls = ['pmv-item', 'is-' + it.status, it.gone ? 'is-gone' : ''].join(' ');
+    const cls = ['pmv-item', 'is-' + it.status, it.gone ? 'is-gone' : '', it.excluded ? 'is-excluded' : ''].join(' ');
     const b = [];
+    if (it.excluded) b.push('<span class="badge badge-skipped" title="Not a release — holds no catalogue number">not counted</span>');
     if (it.quality) b.push(`<span class="badge badge-q${it.quality >= 2160 ? ' badge-4k' : ''}" title="Best quality offered">${it.quality >= 2160 ? '4K' : it.quality + 'p'}</span>`);
     else if (s.platform === 'iwara' && !it.gone) b.push('<span class="badge badge-q" style="opacity:.45" title="iwara only records dimensions for newer uploads; the API returns nothing for this one">? p</span>');
     if (it.gone) b.push('<span class="badge badge-gone" title="No longer listed on the site — its number is kept">gone</span>');
@@ -399,6 +431,9 @@ function renderPmvRow(it, s, titleMap) {
                     onclick="pmvSetStatus('${s.link_key}', '${it.id}', 'downloaded')">✓</button>
             <button class="pmv-st x${it.status === 'skipped' ? ' on' : ''}" title="Not downloading this one — click again to clear"
                     onclick="pmvSetStatus('${s.link_key}', '${it.id}', 'skipped')">✗</button>
+            ${s.platform === 'pawchive' ? `<button class="pmv-st ex${it.excluded ? ' on' : ''}"
+                    title="${it.excluded ? 'Count this post again' : 'Not a release — leave it out of the catalogue count (numbers close up immediately)'}"
+                    onclick="pmvToggleExcluded('${s.link_key}', '${it.id}')">∅</button>` : ''}
         </span>
         <span class="pmv-title">
             <a href="#" onclick="openLink('${encUrl}'); return false;" title="Open the post in your browser">${escapeHtml(it.title || it.id)}</a>${dup}

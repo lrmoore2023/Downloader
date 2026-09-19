@@ -175,6 +175,26 @@ def test_ack_shift(app, monkeypatch):
     assert not any(it["shifted"] for it in app.get_pmv_items(cid)["sites"][0]["items"])
 
 
+def test_set_pmv_excluded_bulk_is_pawchive_only_and_renumbers(app, monkeypatch):
+    _no_network(monkeypatch)
+    cid = app.save_pmv_creator({"name": "S", "links": [PAW, R34]})["id"]
+    key = pt.link_key(PAW)
+    path = pt.manifest_path(app._pmv_root(cid), key)
+    m = pt.new_manifest("pawchive", "42")
+    pt.merge_chronological(m, [{"id": str(i), "title": f"p{i}", "url": f"u/{i}", "date": f"2026-0{i}-01", "pos": 0}
+                               for i in (3, 2, 1)])
+    pt.save_manifest(path, m)
+    assert app.set_pmv_excluded_bulk(cid, key, ["2", "nope"], True) == {"ok": True, "updated": 1}
+    rows = {it["id"]: (it["number"], it["excluded"]) for it in app.get_pmv_items(cid)["sites"][0]["items"]}
+    assert rows == {"1": (1, False), "2": (None, True), "3": (2, False)}
+    assert app.set_pmv_excluded_bulk(cid, key, ["2"], True)["updated"] == 0        # already excluded
+    assert app.set_pmv_excluded_bulk(cid, key, ["2"], False)["updated"] == 1
+    rows = {it["id"]: it["number"] for it in app.get_pmv_items(cid)["sites"][0]["items"]}
+    assert rows == {"1": 1, "2": 2, "3": 3}
+    r34key, _ = _seed(app, cid, R34, [30, 20, 10])
+    assert "error" in app.set_pmv_excluded_bulk(cid, r34key, ["10"], True)
+
+
 def test_renumber_pmv_site(app, monkeypatch):
     _no_network(monkeypatch)
     cid = app.save_pmv_creator({"name": "S", "links": [R34, PAW]})["id"]

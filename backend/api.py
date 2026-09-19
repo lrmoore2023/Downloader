@@ -3083,6 +3083,35 @@ class Api:
             pt.save_manifest(path, m)
         return {"ok": True, "number": it.get("number")}
 
+    def set_pmv_excluded_bulk(self, creator_id, link_key, item_ids, excluded=True):
+        """pawchive only: take posts out of (or back into) the catalogue count —
+        previews, polls, text updates are listed but hold no number. The site is
+        renumbered immediately so the remaining numbers close up."""
+        state = self.load_state()
+        rec = self._pmv_creators(state).get(creator_id)
+        link = self._pmv_link(rec, link_key)
+        if not link:
+            return {"error": "Site link not found"}
+        path = pt.manifest_path(self._pmv_root(creator_id, state), link_key)
+        updated = 0
+        try:
+            with pt.manifest_lock(path):
+                m = pt.load_manifest(path, link.get("platform"), link.get("user_id"))
+                if m.get("numbering") != pt.CHRONOLOGICAL:
+                    return {"error": "Only pawchive posts can be left out of the count — "
+                                     "rule34video / iwara numbers are locked to the site's listing"}
+                for vid in item_ids or []:
+                    it = m["items"].get(str(vid))
+                    if it is not None and bool(it.get("excluded")) != bool(excluded):
+                        pt.set_excluded(it, excluded)
+                        updated += 1
+                if updated:
+                    pt.renumber_chronological(m)
+                    pt.save_manifest(path, m)
+        except OSError as e:
+            return {"error": f"Could not write the manifest: {e}"}
+        return {"ok": True, "updated": updated}
+
     def renumber_pmv_site(self, creator_id, link_key):
         """Rebuild one locked site's catalogue chronologically (for a first scan
         that missed videos, e.g. iwara before logging in). ✓ videos whose number

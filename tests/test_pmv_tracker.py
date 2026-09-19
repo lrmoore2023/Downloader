@@ -216,6 +216,29 @@ def test_chronological_gone_posts_keep_their_slot():
     assert not pt.is_shifted(m["items"]["3"])
 
 
+def test_chronological_excluded_posts_hold_no_number_and_numbers_close_up():
+    m = pt.new_manifest("pawchive", "42")
+    pt.merge_chronological(m, _posts([(3, "2026-03-01"), (2, "2026-02-01"), (1, "2026-01-01")]))
+    pt.set_status(m["items"]["3"], "downloaded")               # #3 at check time
+    pt.set_excluded(m["items"]["2"], True)                     # clears its number itself
+    assert pt.renumber_chronological(m) == 1                   # only 3 → 2 moves
+    assert m["items"]["1"]["number"] == 1 and m["items"]["2"]["number"] is None
+    assert m["items"]["3"]["number"] == 2 and pt.is_shifted(m["items"]["3"])
+    assert m["next_number"] == 3
+    # Excluded posts survive a fresh walk and stay out of the count.
+    pt.merge_chronological(m, _posts([(4, "2026-04-01"), (3, "2026-03-01"),
+                                      (2, "2026-02-01"), (1, "2026-01-01")]))
+    assert m["items"]["2"]["excluded"] and m["items"]["2"]["number"] is None
+    assert m["items"]["4"]["number"] == 3
+    c = pt.counts(m)
+    assert c["excluded"] == 1 and c["total"] == 4 and c["unreviewed"] == 2
+    # Counting it again slots it back in.
+    pt.set_excluded(m["items"]["2"], False)
+    pt.renumber_chronological(m)
+    assert [m["items"][i]["number"] for i in ("1", "2", "3", "4")] == [1, 2, 3, 4]
+    assert pt.renumber_chronological(m) == 0
+
+
 def test_chronological_new_post_without_date_sorts_first():
     m = pt.new_manifest("pawchive", "42")
     pt.merge_chronological(m, _posts([(2, None), (1, "2026-01-01")]))

@@ -2015,7 +2015,7 @@
 .pmv-item {
     /* The title column has a floor so a narrow window scrolls sideways instead of
        squeezing the title to nothing while the fixed columns stay visible. */
-    display: grid; grid-template-columns: 44px 58px minmax(180px, 1fr) 84px 48px minmax(150px, auto) auto;
+    display: grid; grid-template-columns: 44px 88px minmax(180px, 1fr) 84px 48px minmax(150px, auto) auto;
     min-width: 720px;
     align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 12px;
 }
@@ -2036,6 +2036,11 @@
 .pmv-st.x:hover { border-color: var(--danger); color: var(--danger); }
 .pmv-st.on { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
 .pmv-st.x.on { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+/* pawchive "not counted" toggle: the post stays listed but holds no number. */
+.pmv-st.ex:hover { border-color: var(--warn); color: var(--warn); }
+.pmv-st.ex.on { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.pmv-item.is-excluded { opacity: 0.6; }
+.pmv-item.is-excluded .pmv-num { color: var(--text-muted); }
 .pmv-title { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .pmv-title a { color: var(--text-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pmv-title a:hover { color: var(--accent-bright); text-decoration: underline; }

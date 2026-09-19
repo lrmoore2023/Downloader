@@ -132,7 +132,7 @@ def _normalize(data, platform, user_id):
         it.setdefault("status", "unreviewed")
         if it.get("status") not in STATUSES:
             it["status"] = "unreviewed"
-        for k in ("gone", "backfilled", "detail_pending", "initial"):
+        for k in ("gone", "backfilled", "detail_pending", "initial", "excluded"):
             it[k] = bool(it.get(k))
     return data
 
@@ -218,6 +218,9 @@ def _new_item(f, now, initial=False):
         "gone_since": None,
         "backfilled": False,
         "detail_pending": bool(f.get("detail_pending")),
+        # chronological sites only: a post the user says is not a release (a
+        # preview, a poll, a text update…) — listed, but holds no number.
+        "excluded": False,
     }
     for k in ("media_kinds", "link_hosts", "preview_state", "private", "unlisted"):
         if k in f:
@@ -381,13 +384,39 @@ def merge_chronological(manifest, fetched, *, now=None):
         else:
             _refresh_item(it, f)
     gone = _mark_gone(manifest, fetched_ids, now)
-    for n, it in enumerate(sorted(items.values(), key=_chrono_key), 1):
-        it["number"] = n
-    manifest["next_number"] = len(items) + 1
+    renumber_chronological(manifest)
     if first_walk:
         manifest["initial_at"] = now
     manifest["initial_complete"] = True
     return {"new": new, "gone": gone, "numbered": True}
+
+
+def renumber_chronological(manifest):
+    """Number every counted post 1..N by (date, id); excluded posts get None.
+    Returns the number of posts whose number changed."""
+    items = manifest["items"]
+    changed = 0
+    counted = sorted((it for it in items.values() if not it.get("excluded")), key=_chrono_key)
+    for n, it in enumerate(counted, 1):
+        if it.get("number") != n:
+            changed += 1
+        it["number"] = n
+    for it in items.values():
+        if it.get("excluded") and it.get("number") is not None:
+            it["number"] = None
+            changed += 1
+    manifest["next_number"] = len(counted) + 1
+    return changed
+
+
+def set_excluded(item, excluded):
+    """Flip a post in or out of the catalogue count. Only meaningful on a
+    chronological site; the caller renumbers afterwards."""
+    item["excluded"] = bool(excluded)
+    if item["excluded"]:
+        item["number"] = None
+        item["number_at_check"] = None
+    return item
 
 
 def merge(manifest, fetched, *, full, complete, now=None):
@@ -410,6 +439,7 @@ def set_status(item, status, now=None):
 
 def is_shifted(item):
     return (item.get("status") == "downloaded"
+            and not item.get("excluded")
             and isinstance(item.get("number_at_check"), int)
             and item.get("number_at_check") != item.get("number"))
 
@@ -425,9 +455,14 @@ def is_media_post(item):
 
 def counts(manifest):
     c = {"total": 0, "unreviewed": 0, "new": 0, "downloaded": 0,
-         "skipped": 0, "shifted": 0, "gone": 0}
+         "skipped": 0, "shifted": 0, "gone": 0, "excluded": 0}
     for it in manifest.get("items", {}).values():
         c["total"] += 1
+        if it.get("excluded"):
+            c["excluded"] += 1
+            if it.get("gone"):
+                c["gone"] += 1
+            continue                       # not a release: never a to-do
         st = it.get("status")
         if it.get("gone"):
             c["gone"] += 1
