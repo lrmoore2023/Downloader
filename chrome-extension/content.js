@@ -52,7 +52,12 @@
       match: (p) => /^\/videos?\/([A-Za-z0-9]+)/.exec(p),
       code: () => 'Iwara',
       dateFromApi: async (m) => {
-        const r = await fetchJson(`https://api.iwara.tv/video/${m[1]}`);
+        // Login-only videos 404 anonymously. The site keeps the signed-in user's
+        // token in localStorage("token"); the background swaps it for an access
+        // token exactly like iwara's own app does, so those videos resolve too.
+        let userToken = '';
+        try { userToken = localStorage.getItem('token') || ''; } catch (e) { /* ignore */ }
+        const r = await fetchJson(`https://api.iwara.tv/video/${m[1]}`, { iwaraUserToken: userToken });
         return r && r.createdAt;
       },
       // The title is a Text component rendered with size "h1" and class "mb-1"
@@ -96,10 +101,10 @@
     },
   ];
 
-  function fetchJson(url) {
+  function fetchJson(url, extra) {
     return new Promise((resolve) => {
       try {
-        chrome.runtime.sendMessage({ type: 'fetchJson', url }, (res) => {
+        chrome.runtime.sendMessage(Object.assign({ type: 'fetchJson', url }, extra || {}), (res) => {
           resolve(res && res.ok ? res.data : null);
         });
       } catch (e) {

@@ -38,3 +38,10 @@ extension's card.
 
 The day is the UTC calendar day of that timestamp, matching the PMV tab. If a
 page has no date the button turns amber and copies just `SITE - `.
+
+**iwara and login-only videos.** Many iwara uploads are hidden from guests and
+the API answers 404 for them anonymously. When you are logged in to iwara in
+this browser, the extension reuses the site's own login token (it reads the
+same `token` entry iwara keeps in the page's local storage and exchanges it for
+an access token the way the site does), so those videos resolve too. Logged
+out, only public videos get a date.
