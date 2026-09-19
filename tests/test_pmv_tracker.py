@@ -1,0 +1,257 @@
+"""PMV tracker manifests + catalogue numbering.
+
+Locked numbering (rule34video / iwara): first complete walk numbers oldest→newest,
+later walks only append, gone items keep their slot. Chronological numbering
+(pawchive): renumber by date on every walk, flag back-fills and shifted ✓ posts.
+
+    python -m pytest tests/test_pmv_tracker.py -q
+"""
+import json
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import backend.pmv_tracker as pt
+
+
+def _fetched(ids, dates=None):
+    """Newest-first listing: ids[0] is the newest (pos 0)."""
+    out = []
+    for i, vid in enumerate(ids):
+        f = {"id": str(vid), "title": f"t{vid}", "url": f"u/{vid}", "pos": i}
+        if dates:
+            f["date"] = dates[i]
+        out.append(f)
+    return out
+
+
+# ── locked ──────────────────────────────────────────────────────────
+
+def test_locked_initial_numbers_oldest_first():
+    m = pt.new_manifest("rule34video", "1")
+    res = pt.merge_locked(m, _fetched([30, 20, 10]), full=True, complete=True, now="T1")
+    assert res == {"new": 3, "gone": 0, "numbered": True}
+    assert m["items"]["10"]["number"] == 1
+    assert m["items"]["20"]["number"] == 2
+    assert m["items"]["30"]["number"] == 3
+    assert m["next_number"] == 4
+    assert m["initial_complete"] is True
+    assert all(it["initial"] for it in m["items"].values())
+
+
+def test_locked_initial_requires_complete_walk():
+    m = pt.new_manifest("rule34video", "1")
+    res = pt.merge_locked(m, _fetched([30, 20]), full=False, complete=False)
+    assert res["new"] == 0 and res["numbered"] is False
+    assert m["items"] == {}
+    assert m["initial_complete"] is False
+
+
+def test_locked_incremental_appends_in_chronological_order():
+    m = pt.new_manifest("iwara", "u")
+    pt.merge_locked(m, _fetched([30, 20, 10]), full=True, complete=True, now="T1")
+    # Two new uploads on top; 50 is newer than 40.
+    res = pt.merge_locked(m, _fetched([50, 40, 30]), full=False, complete=False, now="T2")
+    assert res["new"] == 2
+    assert m["items"]["40"]["number"] == 4
+    assert m["items"]["50"]["number"] == 5
+    assert m["next_number"] == 6
+    assert not m["items"]["40"]["initial"]
+    assert m["items"]["40"]["first_seen"] == "T2"
+    # Incremental walks never touch `gone`.
+    assert not any(it["gone"] for it in m["items"].values())
+
+
+def test_locked_known_numbers_never_change():
+    m = pt.new_manifest("rule34video", "1")
+    pt.merge_locked(m, _fetched([30, 20, 10]), full=True, complete=True)
+    before = {k: v["number"] for k, v in m["items"].items()}
+    pt.merge_locked(m, _fetched([40, 30, 20, 10]), full=True, complete=True)
+    pt.merge_locked(m, _fetched([40, 30, 20, 10]), full=True, complete=True)
+    for k, n in before.items():
+        assert m["items"][k]["number"] == n
+    assert m["items"]["40"]["number"] == 4
+
+
+def test_locked_gone_only_on_full_walk_and_cleared_when_back():
+    m = pt.new_manifest("rule34video", "1")
+    pt.merge_locked(m, _fetched([30, 20, 10]), full=True, complete=True)
+    res = pt.merge_locked(m, _fetched([30, 10]), full=True, complete=True, now="T2")
+    assert res["gone"] == 1
+    assert m["items"]["20"]["gone"] is True and m["items"]["20"]["gone_since"] == "T2"
+    assert m["items"]["20"]["number"] == 2          # slot kept
+    # Reappears → not gone, same number, and the next upload continues from 4.
+    pt.merge_locked(m, _fetched([40, 30, 20, 10]), full=False, complete=False)
+    assert m["items"]["20"]["gone"] is False
+    assert m["items"]["40"]["number"] == 4
+
+
+def test_locked_refresh_keeps_learned_detail_when_listing_lacks_it():
+    m = pt.new_manifest("rule34video", "1")
+    pt.merge_locked(m, [{"id": "1", "title": "a", "url": "u", "pos": 0,
+                         "date": "2026-01-01", "quality": 2160}], full=True, complete=True)
+    pt.merge_locked(m, [{"id": "1", "title": "a2", "url": "u", "pos": 0,
+                         "date": None, "quality": None}], full=False, complete=False)
+    it = m["items"]["1"]
+    assert it["title"] == "a2" and it["date"] == "2026-01-01" and it["quality"] == 2160
+
+
+def test_locked_backfilled_flag_for_older_new_item():
+    m = pt.new_manifest("iwara", "u")
+    pt.merge_locked(m, _fetched([2, 1], ["2026-02-01", "2026-01-01"]), full=True, complete=True)
+    pt.merge_locked(m, _fetched([2, 9, 1], ["2026-02-01", "2025-06-01", "2026-01-01"]),
+                    full=False, complete=False)
+    assert m["items"]["9"]["number"] == 3
+    assert m["items"]["9"]["backfilled"] is True
+
+
+# ── chronological ───────────────────────────────────────────────────
+
+def _posts(spec):
+    """spec: [(id, date)] in any order."""
+    return [{"id": str(i), "title": f"p{i}", "url": f"u/{i}", "date": d, "pos": n}
+            for n, (i, d) in enumerate(spec)]
+
+
+def test_chronological_numbers_by_date_then_id():
+    m = pt.new_manifest("pawchive", "42")
+    res = pt.merge_chronological(m, _posts([(3, "2026-03-01"), (1, "2026-01-01"),
+                                            (2, "2026-01-01")]), now="T1")
+    assert res == {"new": 3, "gone": 0, "numbered": True}
+    assert m["items"]["1"]["number"] == 1
+    assert m["items"]["2"]["number"] == 2
+    assert m["items"]["3"]["number"] == 3
+    assert all(it["initial"] for it in m["items"].values())
+
+
+def test_chronological_backfill_renumbers_and_flags():
+    m = pt.new_manifest("pawchive", "42")
+    pt.merge_chronological(m, _posts([(3, "2026-03-01"), (1, "2026-01-01")]))
+    pt.set_status(m["items"]["3"], "downloaded", now="T1")
+    assert m["items"]["3"]["number_at_check"] == 2
+    res = pt.merge_chronological(m, _posts([(3, "2026-03-01"), (2, "2026-02-01"),
+                                            (1, "2026-01-01")]), now="T2")
+    assert res["new"] == 1
+    assert m["items"]["2"]["backfilled"] is True
+    assert m["items"]["2"]["number"] == 2
+    assert m["items"]["3"]["number"] == 3
+    assert pt.is_shifted(m["items"]["3"])
+    assert not pt.is_shifted(m["items"]["1"])
+    assert not m["items"]["2"]["initial"]
+
+
+def test_chronological_gone_posts_keep_their_slot():
+    m = pt.new_manifest("pawchive", "42")
+    pt.merge_chronological(m, _posts([(3, "2026-03-01"), (2, "2026-02-01"), (1, "2026-01-01")]))
+    pt.set_status(m["items"]["3"], "downloaded")
+    res = pt.merge_chronological(m, _posts([(3, "2026-03-01"), (1, "2026-01-01")]), now="T2")
+    assert res["gone"] == 1
+    assert m["items"]["2"]["gone"] is True
+    assert m["items"]["3"]["number"] == 3
+    assert not pt.is_shifted(m["items"]["3"])
+
+
+def test_chronological_new_post_without_date_sorts_first():
+    m = pt.new_manifest("pawchive", "42")
+    pt.merge_chronological(m, _posts([(2, None), (1, "2026-01-01")]))
+    assert m["items"]["2"]["number"] == 1
+
+
+# ── status / counts / prefix ────────────────────────────────────────
+
+def test_set_status_and_number_at_check():
+    it = {"id": "1", "number": 7, "status": "unreviewed"}
+    pt.set_status(it, "downloaded", now="T")
+    assert it["status_at"] == "T" and it["number_at_check"] == 7
+    pt.set_status(it, "skipped", now="T2")
+    assert it["number_at_check"] is None
+    pt.set_status(it, "unreviewed")
+    assert it["status_at"] is None
+    with pytest.raises(ValueError):
+        pt.set_status(it, "bogus")
+
+
+def test_counts():
+    m = pt.new_manifest("rule34video", "1")
+    pt.merge_locked(m, _fetched([3, 2, 1]), full=True, complete=True)
+    pt.merge_locked(m, _fetched([5, 4, 3]), full=False, complete=False)
+    pt.set_status(m["items"]["1"], "downloaded")
+    pt.set_status(m["items"]["2"], "skipped")
+    pt.set_status(m["items"]["4"], "downloaded")
+    m["items"]["4"]["number"] = 99                 # simulate a shift
+    m["items"]["3"]["gone"] = True
+    c = pt.counts(m)
+    assert c["total"] == 5
+    assert c["downloaded"] == 2 and c["skipped"] == 1
+    assert c["unreviewed"] == 1                    # only #5 (3 is gone)
+    assert c["new"] == 1                           # #5: unreviewed and not initial
+    assert c["shifted"] == 1 and c["gone"] == 1
+
+
+def test_number_width_and_prefix():
+    assert pt.number_width({"a": {"number": 99}}) == 2
+    assert pt.number_width({"a": {"number": 100}}) == 3
+    assert pt.number_width({}) == 2
+    assert pt.format_prefix("SadBernard", "R34", 2, 2) == "SadBernard - R34 - 02 - "
+    assert pt.format_prefix("X", "Iwara", 7, 3) == "X - Iwara - 007 - "
+    assert pt.format_prefix("X", "R34", None) == "X - R34 - "
+
+
+def test_is_media_post():
+    assert pt.is_media_post({"id": "1"})                                   # non-pawchive
+    assert pt.is_media_post({"media_kinds": ["video"], "link_hosts": []})
+    assert pt.is_media_post({"media_kinds": [], "link_hosts": ["mega.nz"]})
+    assert not pt.is_media_post({"media_kinds": ["image"], "link_hosts": []})
+
+
+# ── IO ──────────────────────────────────────────────────────────────
+
+def test_link_key_and_paths():
+    assert pt.link_key({"platform": "rule34video", "user_id": "2472537"}) == "rule34video_2472537"
+    assert pt.link_key({"platform": "pawchive", "service": "Patreon", "user_id": "42"}) == "pawchive_patreon_42"
+    assert pt.link_key({"platform": "iwara", "user_id": "af0f/../x"}) == "iwara_af0f_.._x"
+    assert pt.manifest_path("R", "k").replace("\\", "/") == "R/k.json"
+
+
+def test_save_and_load_roundtrip(tmp_path):
+    p = str(tmp_path / "pmv" / "pc_1" / "rule34video_1.json")
+    m = pt.new_manifest("rule34video", "1")
+    pt.merge_locked(m, _fetched([2, 1]), full=True, complete=True)
+    pt.save_manifest(p, m)
+    back = pt.load_manifest(p, "rule34video", "1")
+    assert back["items"]["1"]["number"] == 1
+    assert back["next_number"] == 3
+    assert not [n for n in os.listdir(os.path.dirname(p)) if n.endswith(".tmp")]
+
+
+def test_load_missing_is_fresh(tmp_path):
+    m = pt.load_manifest(str(tmp_path / "nope.json"), "pawchive", "42")
+    assert m["numbering"] == pt.CHRONOLOGICAL and m["items"] == {}
+
+
+def test_load_corrupt_is_renamed_not_deleted(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text("{not json", encoding="utf-8")
+    m = pt.load_manifest(str(p), "iwara", "u")
+    assert m["items"] == {} and "unreadable" in m["last_error"]
+    assert not p.exists()
+    assert [n for n in os.listdir(tmp_path) if n.startswith("bad.json.corrupt-")]
+
+
+def test_load_normalizes_partial_records(tmp_path):
+    p = tmp_path / "m.json"
+    p.write_text(json.dumps({"items": {"1": {"number": 1, "status": "weird"}, "2": "junk"}}),
+                 encoding="utf-8")
+    m = pt.load_manifest(str(p), "rule34video", "1")
+    assert m["items"]["1"]["status"] == "unreviewed" and m["items"]["1"]["id"] == "1"
+    assert "2" not in m["items"]
+    assert m["numbering"] == pt.LOCKED
+
+
+def test_manifest_lock_is_per_path():
+    a = pt.manifest_lock("X/a.json")
+    assert a is pt.manifest_lock("X/a.json")
+    assert a is not pt.manifest_lock("X/b.json")
