@@ -9,8 +9,10 @@ let pmvCurrentId = '';
 let pmvDetail = null;              // get_pmv_items() for the open creator
 let pmvBusy = false;
 let pmvSort = 'name';
-let pmvSearch = '';
-const pmvFilters = { unreviewedOnly: false, hideNonMedia: true, hideGone: false };
+let pmvSearch = '';                // title filter inside the open creator
+let pmvListSearch = '';            // creator-list filter (name / tag / site)
+const pmvFilters = { hideNonMedia: true, hideGone: false };
+const pmvExpanded = new Set();     // link_keys whose reviewed (✓/✗) group is unfolded
 
 // ── boot / list ─────────────────────────────────────────────────
 
@@ -53,6 +55,19 @@ function pmvSetSort(v) {
     renderPmvList();
 }
 
+function pmvSetListSearch(v) {
+    pmvListSearch = (v || '').trim().toLowerCase();
+    renderPmvList();
+}
+
+function pmvCreatorMatches(c) {
+    if (!pmvListSearch) return true;
+    const hay = [c.name, ...(c.tags || []),
+                 ...(c.links || []).flatMap(l => [l.site_code, l.username, l.display_name, l.platform])]
+        .filter(Boolean).join(' ').toLowerCase();
+    return pmvListSearch.split(/\s+/).every(w => hay.includes(w));
+}
+
 function renderPmvList() {
     const el = document.getElementById('pmvList');
     const cnt = document.getElementById('pmvCreatorCount');
@@ -63,7 +78,13 @@ function renderPmvList() {
         syncPmvSelectAll();
         return;
     }
-    el.innerHTML = pmvSorted().map(c => {
+    const rows = pmvSorted().filter(pmvCreatorMatches);
+    if (!rows.length) {
+        el.innerHTML = '<div class="links-empty">No creator matches the filter.</div>';
+        syncPmvSelectAll();
+        return;
+    }
+    el.innerHTML = rows.map(c => {
         const k = c.counts || {};
         const badges = [];
         if (k.new) badges.push(`<span class="badge pmv-new" title="Posted since you started tracking and not yet reviewed">${k.new} new</span>`);
@@ -224,7 +245,6 @@ function pmvSetSearch(v) {
 }
 
 function pmvItemVisible(it, s) {
-    if (pmvFilters.unreviewedOnly && it.status !== 'unreviewed') return false;
     if (pmvFilters.hideGone && it.gone) return false;
     if (pmvFilters.hideNonMedia && s.platform === 'pawchive' && !it.media_post) return false;
     if (pmvSearch && !(it.title || '').toLowerCase().includes(pmvSearch.toLowerCase())) return false;
@@ -255,7 +275,6 @@ function renderPmvDetail(keepScroll) {
         </div>
         ${c.notes ? `<div class="field-hint pmv-notes">${escapeHtml(c.notes)}</div>` : ''}
         <div class="pmv-filters">
-            <label class="checkbox-option"><input type="checkbox" ${pmvFilters.unreviewedOnly ? 'checked' : ''} onchange="pmvSetFilter('unreviewedOnly', this.checked)"><span class="checkbox-label">Unreviewed only</span></label>
             <label class="checkbox-option" title="pawchive posts with no video / archive attachment and no external link"><input type="checkbox" ${pmvFilters.hideNonMedia ? 'checked' : ''} onchange="pmvSetFilter('hideNonMedia', this.checked)"><span class="checkbox-label">Hide image/text-only posts</span></label>
             <label class="checkbox-option"><input type="checkbox" ${pmvFilters.hideGone ? 'checked' : ''} onchange="pmvSetFilter('hideGone', this.checked)"><span class="checkbox-label">Hide gone</span></label>
             <input type="search" class="input-field pmv-search" placeholder="Filter titles…" value="${escapeHtml(pmvSearch)}" oninput="pmvSetSearch(this.value)">
@@ -282,28 +301,70 @@ function renderPmvSite(s, idx, titleMap) {
     const numbering = isPaw
         ? '<span class="pmv-hint" title="pawchive back-fills old posts, so numbers are recomputed by date on every fetch. A ✓ post whose number moved shows a red “shifted” badge.">chronological numbering</span>'
         : '';
-    const markAll = items.some(it => it.status === 'unreviewed')
+    const todo = items.filter(it => it.status === 'unreviewed');
+    const done = items.filter(it => it.status !== 'unreviewed');
+    const markAll = todo.length
         ? `<button class="btn-tiny" onclick="pmvMarkVisible('${s.link_key}')" title="Mark every visible unreviewed video ✗ (not wanted)">Mark visible ✗</button>` : '';
     const rescan = isPaw ? ''
         : `<button class="btn-tiny pmv-fetch-btn" ${pmvBusy ? 'disabled' : ''} onclick="pmvRescanSite('${s.link_key}')"
-             title="Walk the whole listing again to spot deleted (gone) videos. Numbers never change.">Full rescan</button>`;
+             title="Walk the whole listing again to spot deleted (gone) videos. Numbers never change — unless older videos turn up and nothing is ✓ yet, in which case the catalogue is re-sorted by date.">Full rescan</button>`;
+    const renumber = (isPaw || !(s.items || []).length) ? ''
+        : `<button class="btn-tiny" onclick="pmvRenumber('${s.link_key}')"
+             title="Re-sort the whole catalogue by upload date (for a first scan that missed videos, e.g. iwara before logging in). ✓ videos whose number moves will show a red “was NN” badge.">Renumber</button>`;
     const profile = s.url
         ? `<button class="btn-tiny" onclick="openLink('${encodeURIComponent(s.url)}')" title="${escapeHtml(s.url)}">Open profile ↗</button>` : '';
     let warn = '';
     if (s.last_error) warn = `<div class="pmv-warn pmv-warn-error">${escapeHtml(s.last_error)}</div>`;
     else if (!isPaw && !s.initial_complete) warn = '<div class="pmv-warn">Not numbered yet — run <b>Fetch latest</b> once to walk the whole catalogue.</div>';
-    const body = items.length
-        ? `<div class="pmv-table">${items.map(it => renderPmvRow(it, s, titleMap)).join('')}</div>`
-        : `<div class="links-empty" style="padding: 10px 12px;">${(s.items || []).length ? 'Nothing matches the current filters.' : 'No videos recorded yet.'}</div>`;
+    if (s.platform === 'iwara' && pmvDetail && pmvDetail.iwara_configured === false) {
+        warn += '<div class="pmv-warn">Not logged in to iwara — videos hidden from guests are missing. Add your login under Settings ▸ Iwara, then <b>Full rescan</b>' +
+                (s.counts && s.counts.downloaded ? ' and <b>Renumber</b>' : '') + '.</div>';
+    }
+    let body;
+    if (!items.length) {
+        body = `<div class="links-empty" style="padding: 10px 12px;">${(s.items || []).length ? 'Nothing matches the current filters.' : 'No videos recorded yet.'}</div>`;
+    } else {
+        const open = pmvExpanded.has(s.link_key);
+        const nOk = done.filter(it => it.status === 'downloaded').length;
+        const nX = done.length - nOk;
+        body = `<div class="pmv-table">${todo.map(it => renderPmvRow(it, s, titleMap)).join('')}</div>`
+            + (todo.length ? '' : '<div class="links-empty" style="padding: 8px 12px;">Nothing left to review here.</div>')
+            + (done.length ? `<div class="pmv-reviewed-toggle" onclick="pmvToggleReviewed('${s.link_key}')" title="${open ? 'Hide' : 'Show'} the videos you have already reviewed">
+                    <span class="pmv-caret">${open ? '▾' : '▸'}</span>
+                    Reviewed ${done.length} <span class="badge pmv-primary">✓ ${nOk}</span> <span class="badge badge-skipped">✗ ${nX}</span>
+                </div>` + (open ? `<div class="pmv-table">${done.map(it => renderPmvRow(it, s, titleMap)).join('')}</div>` : '') : '');
+    }
     return `<div class="pmv-site">
         <div class="pmv-site-head">
             <span class="link-badge pmv-code">${escapeHtml(s.site_code)}</span>${rank}
             <span class="pmv-site-who" title="${escapeHtml(s.url)}">${escapeHtml(who)}</span>
             <span class="pmv-site-meta">${meta}</span>${numbering}
-            <span class="pmv-site-actions">${markAll}${rescan}${profile}</span>
+            <span class="pmv-site-actions">${markAll}${rescan}${renumber}${profile}</span>
         </div>
         ${warn}${body}
     </div>`;
+}
+
+function pmvToggleReviewed(linkKey) {
+    if (pmvExpanded.has(linkKey)) pmvExpanded.delete(linkKey); else pmvExpanded.add(linkKey);
+    renderPmvDetail(true);
+}
+
+async function pmvRenumber(linkKey) {
+    const s = pmvDetail && (pmvDetail.sites || []).find(x => x.link_key === linkKey);
+    if (!s) return;
+    const nOk = (s.counts || {}).downloaded || 0;
+    const msg = `Re-sort ${s.site_code}'s whole catalogue by upload date?\n\n`
+        + (nOk ? `${nOk} video${nOk === 1 ? ' is' : 's are'} marked ✓ — any whose number changes will show a red "was NN" badge so you can rename the file, then click the badge to accept.`
+               : 'Nothing is marked ✓ yet, so no filenames depend on the current numbers.');
+    if (!confirm(msg)) return;
+    let res;
+    try { res = await pywebview.api.renumber_pmv_site(pmvCurrentId, linkKey); }
+    catch (e) { res = { error: String(e) }; }
+    if (!res || res.error) { showToast((res && res.error) || 'Renumber failed', 'error'); return; }
+    showToast(res.changed ? `${res.changed} number${res.changed === 1 ? '' : 's'} changed` + (res.shifted ? `, ${res.shifted} ✓ shifted` : '') : 'Already in order', res.shifted ? 'info' : 'success');
+    await openPmvCreator(pmvCurrentId, true);
+    refreshPmvCreators();
 }
 
 function pmvPad(n, w) {
@@ -314,6 +375,7 @@ function renderPmvRow(it, s, titleMap) {
     const cls = ['pmv-item', 'is-' + it.status, it.gone ? 'is-gone' : ''].join(' ');
     const b = [];
     if (it.quality) b.push(`<span class="badge badge-q${it.quality >= 2160 ? ' badge-4k' : ''}" title="Best quality offered">${it.quality >= 2160 ? '4K' : it.quality + 'p'}</span>`);
+    else if (s.platform === 'iwara' && !it.gone) b.push('<span class="badge badge-q" style="opacity:.45" title="iwara only records dimensions for newer uploads; the API returns nothing for this one">? p</span>');
     if (it.gone) b.push('<span class="badge badge-gone" title="No longer listed on the site — its number is kept">gone</span>');
     if (it.backfilled) b.push('<span class="badge badge-backfilled" title="Appeared after newer posts had already been numbered">backfilled</span>');
     if (it.shifted) b.push(`<span class="badge badge-shifted" onclick="pmvAckShift('${s.link_key}', '${it.id}')"
@@ -579,6 +641,14 @@ async function pmvEdPreview() {
     preview.textContent = info && info.valid
         ? pmvEdDescribe(info) + '  ·  click Add site'
         : 'Unrecognized URL — expected rule34video.com/members/…, iwara.tv/profile/…, or pawchive.pw/{service}/user/…';
+    if (info && info.valid && info.platform === 'iwara') {
+        try {
+            const st = await pywebview.api.iwara_login_status();
+            if (st && !st.configured) {
+                preview.textContent += '   ⚠ Not logged in to iwara: videos hidden from guests would be missed and numbered out of order later. Add your login under Settings ▸ Iwara first.';
+            }
+        } catch (e) { /* ignore */ }
+    }
 }
 
 function pmvEdSameSite(a, b) {

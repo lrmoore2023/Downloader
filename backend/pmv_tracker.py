@@ -316,7 +316,39 @@ def merge_locked(manifest, fetched, *, full, complete, now=None):
     result["new"] = len(new)
     if full:
         result["gone"] = _mark_gone(manifest, fetched_ids, now)
+    # An incomplete first scan (e.g. iwara before logging in) surfaces its
+    # missing videos on the next full walk as back-fills. While nothing is ✓ no
+    # filename depends on the numbers yet, so slot them in properly instead.
+    if (full and complete and any(items[n["id"]].get("backfilled") for n in new)
+            and not any(it.get("status") == "downloaded" for it in items.values())):
+        renumber_locked(manifest)
+        result["renumbered"] = True
     return result
+
+
+def renumber_locked(manifest, now=None):
+    """Rebuild a locked catalogue chronologically: by date, ties by old number;
+    an undated video inherits its predecessor's date so it keeps its place.
+    Existing ✓ items keep number_at_check, so any that move show as shifted.
+    Returns {"changed", "shifted"}."""
+    items = manifest["items"]
+    ordered = sorted(items.values(), key=lambda it: (it.get("number") or 10 ** 9, str(it.get("id"))))
+    keyed, last = [], ""
+    for it in ordered:
+        d = it.get("date") or last
+        last = d
+        keyed.append((d, it.get("number") or 10 ** 9, str(it.get("id")), it))
+    keyed.sort(key=lambda t: (t[0], t[1], t[2]))
+    changed = shifted = 0
+    for n, (_, _, _, it) in enumerate(keyed, 1):
+        if it.get("number") != n:
+            changed += 1
+            if it.get("status") == "downloaded":
+                shifted += 1
+        it["number"] = n
+        it["backfilled"] = False
+    manifest["next_number"] = len(keyed) + 1
+    return {"changed": changed, "shifted": shifted}
 
 
 # ── merge: chronological numbering (pawchive) ───────────────────────

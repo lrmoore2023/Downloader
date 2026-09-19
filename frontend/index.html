@@ -66,6 +66,8 @@
                                 <option value="fetched">Recently fetched</option>
                             </select>
                         </div>
+                        <input type="search" class="input-field pmv-list-search" id="pmvListSearch"
+                               placeholder="Filter creators by name, tag or site…" oninput="pmvSetListSearch(this.value)">
                         <div class="pmv-list" id="pmvList"></div>
                         <div class="field-hint pmv-status-line" id="pmvStatus"></div>
                     </div>

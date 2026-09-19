@@ -108,6 +108,68 @@ def test_locked_backfilled_flag_for_older_new_item():
     assert m["items"]["9"]["backfilled"] is True
 
 
+def test_locked_full_rescan_reslots_backfills_when_nothing_is_checked():
+    # First scan while logged out missed video 2 (private); after login a full
+    # rescan finds it. Nothing is ✓, so the catalogue is re-sorted by date.
+    m = pt.new_manifest("iwara", "u")
+    pt.merge_locked(m, _fetched([3, 1], ["2026-03-01", "2026-01-01"]), full=True, complete=True)
+    res = pt.merge_locked(m, _fetched([3, 2, 1], ["2026-03-01", "2026-02-01", "2026-01-01"]),
+                          full=True, complete=True)
+    assert res["renumbered"] is True and res["new"] == 1
+    assert [m["items"][i]["number"] for i in ("1", "2", "3")] == [1, 2, 3]
+    assert not m["items"]["2"]["backfilled"]
+    assert m["next_number"] == 4
+
+
+def test_locked_full_rescan_keeps_append_when_something_is_checked():
+    m = pt.new_manifest("iwara", "u")
+    pt.merge_locked(m, _fetched([3, 1], ["2026-03-01", "2026-01-01"]), full=True, complete=True)
+    pt.set_status(m["items"]["3"], "downloaded")
+    res = pt.merge_locked(m, _fetched([3, 2, 1], ["2026-03-01", "2026-02-01", "2026-01-01"]),
+                          full=True, complete=True)
+    assert "renumbered" not in res
+    assert m["items"]["2"]["number"] == 3 and m["items"]["2"]["backfilled"]
+    assert m["items"]["3"]["number"] == 2
+
+
+def test_locked_incremental_never_auto_renumbers():
+    m = pt.new_manifest("iwara", "u")
+    pt.merge_locked(m, _fetched([3, 1], ["2026-03-01", "2026-01-01"]), full=True, complete=True)
+    res = pt.merge_locked(m, _fetched([3, 2, 1], ["2026-03-01", "2026-02-01", "2026-01-01"]),
+                          full=False, complete=False)
+    assert "renumbered" not in res and m["items"]["2"]["number"] == 3
+
+
+def test_renumber_locked_by_date_with_shift_tracking():
+    m = pt.new_manifest("iwara", "u")
+    pt.merge_locked(m, _fetched([3, 1], ["2026-03-01", "2026-01-01"]), full=True, complete=True)
+    pt.set_status(m["items"]["3"], "downloaded")               # #2 at check time
+    pt.merge_locked(m, _fetched([3, 2, 1], ["2026-03-01", "2026-02-01", "2026-01-01"]),
+                    full=True, complete=True)                  # appended as #3
+    res = pt.renumber_locked(m)
+    assert res == {"changed": 2, "shifted": 1}
+    assert [m["items"][i]["number"] for i in ("1", "2", "3")] == [1, 2, 3]
+    assert pt.is_shifted(m["items"]["3"]) and m["items"]["3"]["number_at_check"] == 2
+    assert pt.renumber_locked(m) == {"changed": 0, "shifted": 0}
+
+
+def test_renumber_locked_undated_item_stays_behind_its_predecessor():
+    # Video 2 has no date (r34 detail fetch failed). It inherits the date of the
+    # video numbered just before it, so a renumber never moves it ahead.
+    m = pt.new_manifest("rule34video", "1")
+    pt.merge_locked(m, _fetched([3, 2, 1], ["2026-03-01", None, "2026-01-01"]), full=True, complete=True)
+    assert [m["items"][i]["number"] for i in ("1", "2", "3")] == [1, 2, 3]
+    assert pt.renumber_locked(m) == {"changed": 0, "shifted": 0}
+    assert [m["items"][i]["number"] for i in ("1", "2", "3")] == [1, 2, 3]
+    # A dated video appended out of order still gets sorted in; the undated one
+    # follows whatever now precedes it.
+    pt.merge_locked(m, _fetched([4, 3, 2, 1], ["2025-12-01", "2026-03-01", None, "2026-01-01"]),
+                    full=False, complete=False)
+    assert m["items"]["4"]["number"] == 4                          # appended (incremental)
+    pt.renumber_locked(m)
+    assert [m["items"][i]["number"] for i in ("4", "1", "2", "3")] == [1, 2, 3, 4]
+
+
 # ── chronological ───────────────────────────────────────────────────
 
 def _posts(spec):

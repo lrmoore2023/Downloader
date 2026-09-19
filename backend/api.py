@@ -3031,7 +3031,9 @@ class Api:
                 "counts": pt.counts(m), "items": rows,
             })
         return {"creator": rec, "sites": sites,
-                "last_fetch": (state.get("pmv_last_fetch") or {}).get(creator_id) or ""}
+                "last_fetch": (state.get("pmv_last_fetch") or {}).get(creator_id) or "",
+                "iwara_configured": bool((state.get("iwara_email") or "").strip()
+                                         and state.get("iwara_password"))}
 
     def set_pmv_status(self, creator_id, link_key, item_id, status):
         return self.set_pmv_status_bulk(creator_id, link_key, [item_id], status)
@@ -3080,6 +3082,27 @@ class Api:
             it["number_at_check"] = it.get("number")
             pt.save_manifest(path, m)
         return {"ok": True, "number": it.get("number")}
+
+    def renumber_pmv_site(self, creator_id, link_key):
+        """Rebuild one locked site's catalogue chronologically (for a first scan
+        that missed videos, e.g. iwara before logging in). ✓ videos whose number
+        moves show as shifted until acknowledged. Returns {changed, shifted}."""
+        state = self.load_state()
+        rec = self._pmv_creators(state).get(creator_id)
+        link = self._pmv_link(rec, link_key)
+        if not link:
+            return {"error": "Site link not found"}
+        path = pt.manifest_path(self._pmv_root(creator_id, state), link_key)
+        with pt.manifest_lock(path):
+            m = pt.load_manifest(path, link.get("platform"), link.get("user_id"))
+            if m.get("numbering") != pt.LOCKED:
+                return {"error": "This site is renumbered by date on every fetch already"}
+            if not m["items"]:
+                return {"error": "Nothing to renumber yet"}
+            res = pt.renumber_locked(m)
+            pt.save_manifest(path, m)
+        res["ok"] = True
+        return res
 
     def start_pmv_fetch(self, creator_ids=None, mode="latest", link_key=None):
         """Fetch new listings for the given creators (None / [] = all). mode

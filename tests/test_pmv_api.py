@@ -175,6 +175,24 @@ def test_ack_shift(app, monkeypatch):
     assert not any(it["shifted"] for it in app.get_pmv_items(cid)["sites"][0]["items"])
 
 
+def test_renumber_pmv_site(app, monkeypatch):
+    _no_network(monkeypatch)
+    cid = app.save_pmv_creator({"name": "S", "links": [R34, PAW]})["id"]
+    key, path = _seed(app, cid, R34, [30, 20, 10])
+    m = pt.load_manifest(path, "rule34video", "2472537")
+    for vid, d in (("10", "2026-01-01"), ("20", "2026-02-01"), ("30", "2026-03-01")):
+        m["items"][vid]["date"] = d
+    m["items"]["20"]["number"], m["items"]["30"]["number"] = 3, 2      # out of order
+    pt.save_manifest(path, m)
+    res = app.renumber_pmv_site(cid, key)
+    assert res == {"ok": True, "changed": 2, "shifted": 0}
+    rows = {it["id"]: it["number"] for it in app.get_pmv_items(cid)["sites"][0]["items"]}
+    assert rows == {"10": 1, "20": 2, "30": 3}
+    assert "error" in app.renumber_pmv_site(cid, "pawchive_patreon_42")      # chronological already
+    assert "error" in app.renumber_pmv_site(cid, "nope")
+    assert app.get_pmv_items(cid)["iwara_configured"] is False
+
+
 # ── fetch job ───────────────────────────────────────────────────────
 
 def test_start_pmv_fetch_builds_jobs_and_gates(app, monkeypatch):

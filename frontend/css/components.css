@@ -1961,6 +1961,16 @@
 .pmv-sort { max-width: 160px; padding: 4px 8px; font-size: 12px; }
 .pmv-list { flex: 1 1 0; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .pmv-status-line { min-height: 16px; margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmv-list-search { flex: 0 0 auto; margin-bottom: 8px; padding: 5px 8px; font-size: 12px; }
+/* Reviewed (✓/✗) videos fold away under one row per site so the list reads as a to-do. */
+.pmv-reviewed-toggle {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 11.5px;
+    color: var(--text-secondary); background: var(--bg-raised); border-top: 1px solid var(--border);
+    cursor: pointer; user-select: none;
+}
+.pmv-reviewed-toggle:hover { color: var(--text-primary); }
+.pmv-reviewed-toggle .pmv-caret { font-family: var(--font-mono); width: 12px; color: var(--text-muted); }
+.pmv-reviewed-toggle .badge { text-transform: none; }
 
 .pmv-row {
     display: flex; align-items: center; gap: 8px; padding: 7px 10px;
