@@ -2807,6 +2807,22 @@ class Api:
             return os.path.join(base, "pmv", creator_id or "unknown")
         return os.path.join(APP_DIR, ".pmv", creator_id or "unknown")
 
+    @staticmethod
+    def _pmv_read_manifest(root, link):
+        """Read one site's manifest for display. Holds the manifest lock so a
+        read never lands mid-save (each ∅/✓ click saves then reloads, and a fast
+        clicker overlaps the two). A file that stays busy comes back as an empty
+        placeholder carrying the error — safe only because display paths never
+        save it."""
+        path = pt.manifest_path(root, pt.link_key(link))
+        try:
+            with pt.manifest_lock(path):
+                return pt.load_manifest(path, link.get("platform"), link.get("user_id"))
+        except pt.ManifestUnavailable as e:
+            m = pt.new_manifest(link.get("platform"), link.get("user_id"))
+            m["last_error"] = f"{e} — try again in a moment"
+            return m
+
     def _pmv_creators(self, state=None):
         state = state if state is not None else self.load_state()
         pcs = state.get("pmv_creators")
@@ -2964,7 +2980,7 @@ class Api:
             sites = []
             for link in rec.get("links") or []:
                 key = pt.link_key(link)
-                m = pt.load_manifest(pt.manifest_path(root, key), link.get("platform"), link.get("user_id"))
+                m = self._pmv_read_manifest(root, link)
                 c = pt.counts(m)
                 for k in total:
                     total[k] += c.get(k, 0)
@@ -3049,7 +3065,7 @@ class Api:
         sites = []
         for link in rec.get("links") or []:
             key = pt.link_key(link)
-            m = pt.load_manifest(pt.manifest_path(root, key), link.get("platform"), link.get("user_id"))
+            m = self._pmv_read_manifest(root, link)
             code = pt.link_site_code(link)
             width = pt.number_width(m["items"])
             # Same-day uploads share a date, so their prefixes carry the day's

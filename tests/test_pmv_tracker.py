@@ -406,10 +406,55 @@ def test_load_missing_is_fresh(tmp_path):
 def test_load_corrupt_is_renamed_not_deleted(tmp_path):
     p = tmp_path / "bad.json"
     p.write_text("{not json", encoding="utf-8")
-    m = pt.load_manifest(str(p), "iwara", "u")
+    m = pt.load_manifest(str(p), "iwara", "u", delay=0)
     assert m["items"] == {} and "unreadable" in m["last_error"]
     assert not p.exists()
     assert [n for n in os.listdir(tmp_path) if n.startswith("bad.json.corrupt-")]
+
+
+def _good_manifest(tmp_path):
+    p = str(tmp_path / "pawchive_patreon_1.json")
+    m = pt.new_manifest("pawchive", "1")
+    pt.merge_chronological(m, [{"id": "7", "title": "t", "date": "2026-01-01"}])
+    pt.save_manifest(p, m)
+    return p
+
+
+def test_load_busy_file_raises_and_never_sets_aside(tmp_path, monkeypatch):
+    # A sharing violation mid-replace is not corruption: the real manifest must
+    # stay put and no blank manifest may be handed back (a save would clobber it).
+    p = _good_manifest(tmp_path)
+    real_open = open
+
+    def busy(path, *a, **k):
+        if str(path) == p:
+            raise PermissionError(13, "The process cannot access the file")
+        return real_open(path, *a, **k)
+    monkeypatch.setattr("builtins.open", busy)
+    with pytest.raises(pt.ManifestUnavailable):
+        pt.load_manifest(p, "pawchive", "1", delay=0)
+    monkeypatch.undo()
+    assert os.listdir(tmp_path) == ["pawchive_patreon_1.json"]
+
+
+def test_load_retries_through_a_transient_error(tmp_path, monkeypatch):
+    p = _good_manifest(tmp_path)
+    real_open, calls = open, []
+
+    def flaky(path, *a, **k):
+        if str(path) == p:
+            calls.append(1)
+            if len(calls) == 1:
+                raise PermissionError(13, "busy")
+            if len(calls) == 2:
+                import io
+                return io.StringIO('{"items": {"7": ')     # caught mid-write
+        return real_open(path, *a, **k)
+    monkeypatch.setattr("builtins.open", flaky)
+    m = pt.load_manifest(p, "pawchive", "1", delay=0)
+    monkeypatch.undo()
+    assert m["items"]["7"]["number"] == 1 and not m.get("last_error")
+    assert os.listdir(tmp_path) == ["pawchive_patreon_1.json"]
 
 
 def test_load_normalizes_partial_records(tmp_path):

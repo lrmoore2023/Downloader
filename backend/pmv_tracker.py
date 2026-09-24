@@ -33,6 +33,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 
 from backend.pawchive_links import _replace_with_retry
@@ -160,26 +161,48 @@ def _normalize(data, platform, user_id):
     return data
 
 
-def load_manifest(path, platform, user_id):
-    """Read a manifest, or start a fresh one. A genuinely unparsable file is
-    renamed aside (never deleted) so nothing the user checked off is lost."""
-    if not os.path.isfile(path):
-        return new_manifest(platform, user_id)
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        if not isinstance(data, dict):
-            raise ValueError("manifest is not an object")
-        return _normalize(data, platform, user_id)
-    except (OSError, ValueError) as e:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+class ManifestUnavailable(OSError):
+    """The manifest exists but could not be opened (file in use, NAS hiccup).
+    Never treated as corruption: the caller must not carry on with a blank
+    manifest, or its next save would overwrite the real one."""
+
+
+def load_manifest(path, platform, user_id, attempts=8, delay=0.15):
+    """Read a manifest, or start a fresh one when there is none yet.
+
+    A read can transiently fail while another save's os.replace is swapping the
+    file (a Windows / SMB sharing violation), so both open errors and parse
+    errors are retried before anything is concluded. An open error that never
+    clears raises ManifestUnavailable. Only a file that opens every time yet
+    never parses is corrupt — it is renamed aside (never deleted) and a fresh
+    manifest returned. Treating a busy file as corrupt once wiped a creator's
+    whole checklist mid-click."""
+    err = None
+    for i in range(max(1, attempts)):
+        if i:
+            time.sleep(delay)
+        if not os.path.isfile(path):
+            if err is None:
+                return new_manifest(platform, user_id)
+            continue                       # mid-replace: the name briefly absent
         try:
-            os.replace(path, f"{path}.corrupt-{stamp}")
-        except OSError:
-            pass
-        m = new_manifest(platform, user_id)
-        m["last_error"] = f"Manifest unreadable ({e.__class__.__name__}); started fresh"
-        return m
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                raise ValueError("manifest is not an object")
+            return _normalize(data, platform, user_id)
+        except (OSError, ValueError) as e:
+            err = e
+    if not isinstance(err, ValueError):
+        raise ManifestUnavailable(f"Could not read {os.path.basename(path)}: {err}")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    try:
+        os.replace(path, f"{path}.corrupt-{stamp}")
+    except OSError:
+        raise ManifestUnavailable(f"Manifest unreadable and could not be set aside: {err}")
+    m = new_manifest(platform, user_id)
+    m["last_error"] = f"Manifest unreadable ({err.__class__.__name__}); started fresh"
+    return m
 
 
 def save_manifest(path, data):
