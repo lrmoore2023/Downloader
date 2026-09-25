@@ -45,6 +45,17 @@ class Archive:
         for col, decl in (("expected_size", "INTEGER"), ("path_key", "TEXT")):
             if col not in existing:
                 self._conn.execute(f"ALTER TABLE archive ADD COLUMN {col} {decl}")
+        # What each auto-extracted archive put on disk (paths relative to the
+        # creator root), so a later run can tell whether its contents still exist.
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extracted_outputs (
+                entry   TEXT,
+                relpath TEXT,
+                PRIMARY KEY (entry, relpath)
+            )
+            """
+        )
         self._conn.commit()
 
     # ── lookups ──────────────────────────────────────────────
@@ -90,15 +101,31 @@ class Archive:
             )
             self._conn.commit()
 
-    def set_extracted(self, entry):
-        """Mark an archive entry as already unpacked (pawchive auto-extract), so
-        re-runs never re-download or re-extract it — even after the original
-        .zip/.rar has been deleted. Stored in the otherwise-unused path_key column."""
+    def set_extracted(self, entry, outputs=None):
+        """Mark an archive entry as already unpacked (pawchive auto-extract) —
+        stored in the otherwise-unused path_key column — and, when given, record
+        the files it produced (replacing any earlier record). The original
+        .zip/.rar is deleted on success, so these outputs are the only way a
+        later run can tell the unpacked contents are still on disk."""
         with self._lock:
             self._conn.execute(
                 "UPDATE archive SET path_key = 'extracted' WHERE entry = ?", (entry,)
             )
+            if outputs is not None:
+                self._conn.execute("DELETE FROM extracted_outputs WHERE entry = ?", (entry,))
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO extracted_outputs (entry, relpath) VALUES (?, ?)",
+                    [(entry, r) for r in outputs])
             self._conn.commit()
+
+    def get_extracted_outputs(self, entry):
+        """Relative paths an extracted archive produced, or None when none were
+        recorded (it was extracted before outputs were tracked)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT relpath FROM extracted_outputs WHERE entry = ?", (entry,)
+            ).fetchall()
+        return [r[0] for r in rows] or None
 
     def is_extracted(self, entry):
         with self._lock:
@@ -132,6 +159,10 @@ class Archive:
 
     def remove_post(self, post_id):
         with self._lock:
+            self._conn.execute(
+                "DELETE FROM extracted_outputs WHERE entry IN "
+                "(SELECT entry FROM archive WHERE post_id = ?)", (str(post_id),)
+            )
             self._conn.execute(
                 "DELETE FROM archive WHERE post_id = ?", (str(post_id),)
             )

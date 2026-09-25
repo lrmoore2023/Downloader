@@ -229,6 +229,145 @@ def t_extract():
     r._archive.close()
 
 
+def t_extract_restore():
+    """An 'extracted' archive whose contents are gone from disk is fetched again
+    (a re-added creator got every image back but none of its zips); contents
+    still on disk — including a pack unpacked by hand — are never duplicated."""
+    import io
+    import tarfile
+    import zipfile
+    from datetime import datetime
+    from backend.pawchive_runner import PawchiveRunner
+    from backend.pawchive_archive import Archive, entry_key
+    from backend import pawchive_extract as px
+
+    dest = tempfile.mkdtemp(prefix="pawr_")
+    r = PawchiveRunner(workers=1, extract=True)
+    r._destination = r._write_root = dest
+    r._service = "fanbox"
+    r._archive = Archive(os.path.join(dest, "arc.db"))
+    fetched = []
+    r._download_stream = lambda url, path, entry, job, fn, is_video, bounded=False: \
+        fetched.append((fn, bool(job.get("verify_extracted"))))
+    dt = datetime(2023, 7, 28)
+
+    def make_zip(name, members):
+        p = os.path.join(dest, "2023", name)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with zipfile.ZipFile(p, "w") as z:
+            for m in members:
+                z.writestr(m, b"x")
+        return p
+
+    def job_for(pid, fname):
+        e = entry_key(pid, 2)
+        r._archive.record(e, pid, fname, "archive", "2023")
+        return {"dt": dt, "media_kind": "archive", "post_id": pid, "name": fname,
+                "entry": e, "url": f"https://file.example/{pid}.zip"}
+
+    # 1. Recorded outputs: all gone → fetched again; one left → skipped.
+    zname = "2023.07.28 - Fanbox - Req - 20230728.zip"
+    j1 = job_for("p1", zname)
+    r._extract_archive(make_zip(zname, ["20230728/a_1.jpg", "20230728/a_2.jpg"]), j1, j1["entry"])
+    outs = r._archive.get_extracted_outputs(j1["entry"])
+    check("extraction records its outputs", outs and len(outs) == 2, outs)
+    for o in outs:
+        os.remove(os.path.join(dest, o))
+    r._process_media(j1)
+    check("contents gone -> archive fetched again", fetched == [(zname, False)], fetched)
+    check("reconcile sees it missing too", not r._job_present(j1))
+    r._extract_archive(make_zip(zname, ["20230728/a_1.jpg", "20230728/a_2.jpg"]), j1, j1["entry"])
+    os.remove(os.path.join(dest, r._archive.get_extracted_outputs(j1["entry"])[0]))
+    fetched.clear(); r.skipped_count = 0
+    r._process_media(j1)
+    check("some contents left -> skipped (deliberate deletes stay deleted)",
+          not fetched and r.skipped_count == 1)
+
+    # 2. Legacy entry (extracted before outputs were tracked): listed remotely.
+    real_list = px.list_zip_remote
+    try:
+        px.list_zip_remote = lambda sess, url, timeout=30: ["pack/b_1.jpg", "pack/b_2.jpg"]
+        j2 = job_for("p2", "2023.07.28 - Fanbox - Other - pack.zip")
+        r._archive.set_extracted(j2["entry"])
+        fetched.clear()
+        r._process_media(j2)
+        check("legacy zip, contents absent -> fetched", len(fetched) == 1 and not fetched[0][1], fetched)
+        # The same pack unpacked by hand, named without the folder part.
+        os.makedirs(os.path.join(dest, "Images", "2023"), exist_ok=True)
+        open(os.path.join(dest, "Images", "2023", "2023.07.28 - Fanbox - b_1.jpg"), "wb").close()
+        r._archive.set_extracted(j2["entry"])
+        fetched.clear(); r.skipped_count = 0
+        r._process_media(j2)
+        check("legacy zip unpacked by hand -> skipped", not fetched and r.skipped_count == 1)
+        check("the match is recorded for next time",
+              r._archive.get_extracted_outputs(j2["entry"])
+              == [os.path.join("Images", "2023", "2023.07.28 - Fanbox - b_1.jpg")])
+        px.list_zip_remote = lambda sess, url, timeout=30: None
+        j3 = job_for("p3", "2023.07.28 - Fanbox - Unlistable - c.zip")
+        r._archive.set_extracted(j3["entry"])
+        fetched.clear()
+        r._process_media(j3)
+        check("unlistable -> fetched with verify flag", fetched and fetched[0][1], fetched)
+        # The pack's video is also a separate attachment of the post, already
+        # downloaded on its own: that alone must not count as "unpacked".
+        px.list_zip_remote = lambda sess, url, timeout=30: ["m/m_1.jpg", "m/voice.mp4"]
+        vid = "2023.07.28 - Fanbox - voice.mp4"
+        r._archive.record(entry_key("p5", 1), "p5", vid, "video", "2023")
+        open(os.path.join(dest, "2023", vid), "wb").close()
+        j5 = job_for("p5", "2023.07.28 - Fanbox - Pack - m.zip")
+        r._archive.set_extracted(j5["entry"])
+        fetched.clear()
+        r._process_media(j5)
+        check("separately-downloaded attachment is no evidence -> fetched", len(fetched) == 1, fetched)
+    finally:
+        px.list_zip_remote = real_list
+
+    # 3. Verify-on-extract: contents already there → nothing duplicated.
+    open(os.path.join(dest, "Images", "2023", "2023.07.28 - Fanbox - d - d_1.jpg"), "wb").close()
+    zv = make_zip("2023.07.28 - Fanbox - V - d.zip", ["d/d_1.jpg", "d/d_2.jpg"])
+    jv = dict(job_for("p4", os.path.basename(zv)), verify_extracted=True)
+    r._extract_archive(zv, jv, jv["entry"])
+    imgs = sorted(os.listdir(os.path.join(dest, "Images", "2023")))
+    check("verify: nothing re-placed", not any("d_2" in n for n in imgs), imgs)
+    check("verify: archive discarded + marked", not os.path.exists(zv) and r._archive.is_extracted(jv["entry"]))
+    r._archive.close()
+
+    # 4. Remote listing over HTTP ranges (fake session serving a real zip's bytes).
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("dir/", b"")
+        z.writestr("dir/v.mp4", b"0" * 5000)
+    blob = buf.getvalue()
+
+    class Resp:
+        def __init__(self, code, content=b"", headers=None):
+            self.status_code, self.content, self.headers = code, content, headers or {}
+
+    class Sess:
+        reads = 0
+        def head(self, url, **k):
+            return Resp(200, headers={"accept-ranges": "bytes", "content-length": str(len(blob))})
+        def get(self, url, headers=None, **k):
+            a, b = headers["Range"][6:].split("-")
+            Sess.reads += 1
+            return Resp(206, blob[int(a):int(b) + 1])
+    check("list_zip_remote reads the directory", px.list_zip_remote(Sess(), "u") == ["dir/v.mp4"])
+    check("list_zip_remote: no range support -> None",
+          px.list_zip_remote(type("S", (), {"head": lambda s, u, **k: Resp(200, headers={})})(), "u") is None)
+
+    # 5. bsdtar with a Japanese archive name (argv is ANSI on Windows).
+    if __import__("shutil").which("tar"):
+        tdir = tempfile.mkdtemp(prefix="pawt_")
+        tpath = os.path.join(tdir, "2023.07.28 - Fanbox - リクエスト絵.tar")
+        with tarfile.open(tpath, "w") as t:
+            data = b"hello"
+            ti = tarfile.TarInfo("sub/x.txt"); ti.size = len(data)
+            t.addfile(ti, io.BytesIO(data))
+        out = os.path.join(tdir, "out"); os.makedirs(out)
+        check("tar extracts a Japanese-named archive", px._extract_tar(tpath, out)
+              and os.path.isfile(os.path.join(out, "sub", "x.txt")))
+
+
 def t_resolved_and_skip():
     """Item 2: runner saves don't clobber user 'resolved' flags. Item 6: skip &
     remember marks a file so it's never re-fetched."""
@@ -605,7 +744,7 @@ def t_zip_encoding():
 def main():
     print("Running pawchive offline tests...")
     for t in (t_urls, t_parse_media, t_links_classify, t_filenames, t_manifest_merge,
-              t_extract, t_resolved_and_skip, t_preview_state, t_zip_encoding,
+              t_extract, t_extract_restore, t_resolved_and_skip, t_preview_state, t_zip_encoding,
               t_resolved_ext_skipped, t_dismissed_not_refetched,
               t_deferred_attachment, t_deferred_dismissed):
         try:

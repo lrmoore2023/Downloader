@@ -1026,12 +1026,22 @@ class PawchiveRunner:
         if self._is_dismissed(entry):
             self._bump("skip")
             return
-        # An archive we already unpacked (its .zip/.rar was deleted on success) —
-        # nothing to re-download or re-extract.
-        if is_archive and self._archive and self._archive.is_extracted(entry):
-            self._bump("skip")
-            return
         recorded = self._archive.get_filename(entry) if self._archive else None
+        # An archive we already unpacked (its .zip/.rar was deleted on success):
+        # skip it while its contents are on disk. Contents that are gone are
+        # re-fetched like any other file missing from disk. When that can't be
+        # told up front, download it anyway and let extraction check against
+        # what's actually inside before placing anything.
+        if is_archive and self._archive and self._archive.is_extracted(entry):
+            present = self._extracted_present(job, recorded)
+            if present:
+                self._bump("skip")
+                return
+            if present is None:
+                job["verify_extracted"] = True
+            else:
+                self._info(f"{recorded}: unpacked before, but its contents are no "
+                           f"longer on disk — downloading it again")
         if recorded:
             found = self._find_on_disk(job["media_kind"], job["dt"], recorded)
             if found:
@@ -1605,30 +1615,47 @@ class PawchiveRunner:
                 self._info(f"Could not extract {os.path.basename(archive_path)} "
                            f"(unsupported/failed) — left in place")
                 return
+            members = []
             for root, _dirs, files in os.walk(tmp):
                 for fn in files:
-                    if self._cancelled():
-                        return
                     src = os.path.join(root, fn)
-                    rel = os.path.relpath(src, tmp)
-                    parts = rel.replace("\\", "/").split("/")
-                    folder_parts, name = parts[:-1], parts[-1]
-                    kind = pawchive_extract.classify(name)
-                    if kind in ("image", "video"):
-                        display = " - ".join(
-                            [self._sanitize_part(p) for p in folder_parts] + [name])
-                        dest, _fname = self._assign_path(job["dt"], kind, display,
-                                                         post_title=None)
-                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    members.append((src, os.path.relpath(src, tmp).replace("\\", "/")))
+            if job.get("verify_extracted"):
+                # Unpacked on an earlier run, and its contents couldn't be checked
+                # without the archive: now that we have it, don't lay down a second
+                # copy of anything that is still there.
+                present = self._members_present(job["dt"], stem, [m for _src, m in members])
+                if present:
+                    self._discard(archive_path)
+                    if self._archive:
+                        self._archive.set_extracted(entry, present)
+                    self._info(f"{os.path.basename(archive_path)}: contents already on disk")
+                    return
+            outputs = []
+            for src, rel in members:
+                if self._cancelled():
+                    return
+                parts = rel.split("/")
+                folder_parts, name = parts[:-1], parts[-1]
+                kind = pawchive_extract.classify(name)
+                if kind in ("image", "video"):
+                    display = " - ".join(
+                        [self._sanitize_part(p) for p in folder_parts] + [name])
+                    dest, _fname = self._assign_path(job["dt"], kind, display,
+                                                     post_title=None)
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    shutil.move(src, dest)
+                    outputs.append(os.path.relpath(dest, self._write_root))
+                    media_n += 1
+                else:
+                    dest = os.path.join(leftover_root, *[self._sanitize_part(p)
+                                                         for p in folder_parts], name)
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    if not os.path.exists(dest):
                         shutil.move(src, dest)
-                        media_n += 1
-                    else:
-                        dest = os.path.join(leftover_root, *[self._sanitize_part(p)
-                                                             for p in folder_parts], name)
-                        os.makedirs(os.path.dirname(dest), exist_ok=True)
-                        if not os.path.exists(dest):
-                            shutil.move(src, dest)
-                        other_n += 1
+                    other_n += 1
+            if other_n:
+                outputs.append(os.path.relpath(leftover_root, self._write_root))
             # Full success → mark it done. If the pack had non-media "leftovers" a
             # <stem>/ folder was created for them; keep the original archive by moving
             # it INTO that folder (a game/asset project stays complete + re-extractable).
@@ -1643,7 +1670,7 @@ class PawchiveRunner:
             else:
                 self._discard(archive_path)
             if self._archive:
-                self._archive.set_extracted(entry)
+                self._archive.set_extracted(entry, outputs)
             with self._count_lock:
                 self._extracted_count += media_n
             self._info(f"Extracted {media_n} media + {other_n} other file(s) from "
@@ -1653,6 +1680,63 @@ class PawchiveRunner:
             self._info(f"extract failed for {os.path.basename(archive_path)}: {e}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def _member_outputs(self, dt, stem, member):
+        """Where extracting one archive member (its path inside the archive) puts
+        it, as candidate paths relative to the creator root. A media file lands
+        as '<date> - SITE - <folders> - <name>'; the folder-less '<date> - SITE -
+        <name>' is accepted too because that is how a pack unpacked by hand gets
+        named. Anything else lives under the archive-named leftover folder."""
+        parts = member.replace("\\", "/").split("/")
+        folder_parts, name = parts[:-1], parts[-1]
+        kind = pawchive_extract.classify(name)
+        if kind not in ("image", "video"):
+            return [target_path("", "archive", dt, stem)]
+        display = " - ".join([self._sanitize_part(p) for p in folder_parts] + [name])
+        names = {self._natural_name(dt, kind, display), self._natural_name(dt, kind, name)}
+        return [target_path("", kind, dt, n) for n in sorted(names)]
+
+    def _present_outputs(self, relpaths):
+        """The subset of creator-relative paths that exist under the staging root
+        or the library (a file the user moved out of _latest still counts)."""
+        roots = [r for r in dict.fromkeys((self._write_root, self._destination)) if r]
+        return [rel for rel in relpaths
+                if any(os.path.exists(os.path.join(root, rel)) for root in roots)]
+
+    def _members_present(self, dt, stem, members):
+        """Which of an archive's would-be outputs are on disk. A file the archive
+        DB records as a download of its own is no evidence the pack was unpacked:
+        posts often attach the pack's video separately too, and matching on that
+        alone left the pack's images missing for good."""
+        own = self._archive.filenames_in_year(f"{dt:%Y}" if dt else "unknown") if self._archive else set()
+        rels = [rel for m in members for rel in self._member_outputs(dt, stem, m)
+                if os.path.basename(rel) not in own]
+        return self._present_outputs(rels)
+
+    def _extracted_present(self, job, recorded):
+        """Is an already-extracted archive's content still on disk?
+
+        True/False when that is known; None when it can't be told without the
+        archive in hand. Outputs recorded at extraction time answer it exactly.
+        An archive extracted before those were recorded is listed on the server
+        instead (a zip's directory is a few range reads); the matches found are
+        recorded so the next run doesn't ask again. Without this, re-adding a
+        creator whose folder had been lost restored every image and video but
+        silently skipped every zip, because 'extracted' meant 'never look again'."""
+        entry = job["entry"]
+        outs = self._archive.get_extracted_outputs(entry)
+        if outs:
+            return bool(self._present_outputs(outs))
+        if os.path.splitext(recorded or "")[1].lower() != ".zip":
+            return None
+        members = pawchive_extract.list_zip_remote(self._dl_session(), self._url(job["url"]))
+        if not members:
+            return None
+        present = self._members_present(job["dt"], os.path.splitext(recorded)[0], members)
+        if present:
+            self._archive.set_extracted(entry, present)
+            return True
+        return False
 
     @staticmethod
     def _sanitize_part(part):
@@ -1862,7 +1946,10 @@ class PawchiveRunner:
             return True
         if (job.get("media_kind") == "archive" and self._archive
                 and self._archive.is_extracted(job["entry"])):
-            return True
+            # Recorded outputs are checked on disk; an archive extracted before
+            # those were tracked was already weighed by the main pass.
+            outs = self._archive.get_extracted_outputs(job["entry"])
+            return not outs or bool(self._present_outputs(outs))
         fn = self._archive.get_filename(job["entry"]) if self._archive else None
         if not fn:
             return False

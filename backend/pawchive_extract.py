@@ -12,6 +12,7 @@ What's usable on this machine (see the exploration notes):
 Anything we can't unpack leaves the archive in place (the runner never deletes it).
 """
 
+import io
 import os
 import shutil
 import subprocess
@@ -179,10 +180,73 @@ def _extract_rar(path, dest):
 
 
 def _extract_tar(path, dest):
+    """Windows' bsdtar reads its argv in the ANSI codepage, so a Japanese archive
+    name arrives as '??????' and fails to open. Feed the archive on stdin and set
+    the target as the working directory (both Unicode-safe) instead of naming
+    either on the command line."""
     exe = shutil.which("tar")
     if not exe:
         return False
-    return _run([exe, "-xf", path, "-C", dest])
+    try:
+        with open(path, "rb") as fh:
+            r = subprocess.run([exe, "-xf", "-"], stdin=fh, cwd=dest,
+                               capture_output=True, timeout=_EXTRACT_TIMEOUT)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+class _RangeReader(io.RawIOBase):
+    """Just enough of a seekable file over HTTP Range requests for ``zipfile``
+    to read a remote zip's central directory: a listing costs ~3 small requests
+    however big the archive is (a 273 MB pack lists in 119 bytes)."""
+
+    def __init__(self, session, url, timeout):
+        super().__init__()
+        self._s, self._url, self._timeout, self._pos = session, url, timeout, 0
+        r = session.head(url, timeout=timeout, allow_redirects=True)
+        if r.status_code != 200 or "bytes" not in (r.headers.get("accept-ranges") or ""):
+            raise OSError(f"no range support (HTTP {r.status_code})")
+        self._size = int(r.headers["content-length"])
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self._pos
+
+    def seek(self, off, whence=0):
+        base = {0: 0, 1: self._pos, 2: self._size}[whence]
+        self._pos = max(0, base + off)
+        return self._pos
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = self._size - self._pos
+        if n <= 0 or self._pos >= self._size:
+            return b""
+        end = min(self._pos + n, self._size) - 1
+        r = self._s.get(self._url, headers={"Range": f"bytes={self._pos}-{end}"},
+                        timeout=self._timeout)
+        if r.status_code != 206:
+            raise OSError(f"range read failed (HTTP {r.status_code})")
+        self._pos += len(r.content)
+        return r.content
+
+
+def list_zip_remote(session, url, timeout=30):
+    """Member file names (decoded exactly as extraction names them) of a zip on
+    the server, without downloading it — or None if it can't be listed (not a
+    zip, no range support, network error). Directories are omitted."""
+    try:
+        with zipfile.ZipFile(_RangeReader(session, url, timeout)) as zf:
+            return [_zip_member_name(zi) for zi in zf.infolist()
+                    if not zi.is_dir() and not _is_unsafe_member(_zip_member_name(zi))]
+    except Exception:
+        return None
 
 
 def extract_to_temp(archive_path, dest_dir):
