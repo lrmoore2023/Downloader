@@ -2815,15 +2815,16 @@ class Api:
 
     @staticmethod
     def _pmv_read_manifest(root, link):
-        """Read one site's manifest for display. Holds the manifest lock so a
-        read never lands mid-save (each ∅/✓ click saves then reloads, and a fast
-        clicker overlaps the two). A file that stays busy comes back as an empty
-        placeholder carrying the error — safe only because display paths never
-        save it."""
+        """Read one site's manifest for display. Deliberately NOT under the
+        manifest lock: the fetch job holds that lock for a site's whole network
+        walk, so a display read waiting on it hung the detail pane mid-fetch (and
+        let a later reload overtake it). Saves are atomic replaces and
+        load_manifest retries a file caught busy, so an unlocked read is safe. A
+        file that stays busy comes back as an empty placeholder carrying the
+        error — fine only because display paths never save it."""
         path = pt.manifest_path(root, pt.link_key(link))
         try:
-            with pt.manifest_lock(path):
-                return pt.load_manifest(path, link.get("platform"), link.get("user_id"))
+            return pt.load_manifest(path, link.get("platform"), link.get("user_id"))
         except pt.ManifestUnavailable as e:
             m = pt.new_manifest(link.get("platform"), link.get("user_id"))
             m["last_error"] = f"{e} — try again in a moment"

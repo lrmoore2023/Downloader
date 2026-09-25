@@ -396,3 +396,28 @@ def test_resolve_pmv_link_offline_paths(app, monkeypatch):
     assert p["valid"] and p["service"] == "patreon" and p["user_id"] == "147694273"
     assert app.resolve_pmv_link("https://youtube.com/@x") == {"valid": False}
     assert app.resolve_pmv_link("https://rule34video.com/tags/pmv/") == {"valid": False}
+
+
+def test_display_reads_do_not_wait_on_a_running_fetch(app, monkeypatch):
+    # The fetch job holds a site's manifest lock for its whole network walk; a
+    # display read that waited on it hung the detail pane mid-fetch.
+    _no_network(monkeypatch)
+    cid = app.save_pmv_creator({"name": "X", "links": [R34]})["id"]
+    path = pt.manifest_path(app._pmv_root(cid), pt.link_key(R34))
+    held, release = threading.Event(), threading.Event()
+
+    def walk():
+        with pt.manifest_lock(path):
+            held.set()
+            release.wait(10)
+    t = threading.Thread(target=walk)
+    t.start()
+    held.wait(5)
+    try:
+        t0 = time.monotonic()
+        assert app.get_pmv_items(cid)["sites"]
+        assert app.list_pmv_creators()
+        assert time.monotonic() - t0 < 2
+    finally:
+        release.set()
+        t.join()

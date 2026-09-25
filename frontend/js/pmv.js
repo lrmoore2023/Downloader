@@ -33,9 +33,15 @@ function onPmvViewShown() {
     refreshPmvCreators();
 }
 
+let pmvListSeq = 0;
+
 async function refreshPmvCreators() {
-    try { pmvCreators = await pywebview.api.list_pmv_creators(); }
+    const seq = ++pmvListSeq;       // replies can arrive out of order (see openPmvCreator)
+    let list;
+    try { list = await pywebview.api.list_pmv_creators(); }
     catch (e) { return; }
+    if (seq !== pmvListSeq) return;
+    pmvCreators = list;
     renderPmvList();
 }
 
@@ -223,13 +229,20 @@ window.onPmvComplete = async function (r) {
 
 // ── detail panel ────────────────────────────────────────────────
 
+let pmvOpenSeq = 0;                // newest openPmvCreator request
+
 async function openPmvCreator(id, keepScroll) {
     if (!id) return;
     pmvCurrentId = id;
     pywebview.api.save_state({ last_pmv_creator: id });
+    // Each pywebview call runs on its own Python thread, so replies can land out
+    // of order: only the newest request may paint, or an older (pre-fetch) reply
+    // overwrites the fresh one and the pane shows a list that is already stale.
+    const seq = ++pmvOpenSeq;
     let data;
     try { data = await pywebview.api.get_pmv_items(id); }
     catch (e) { return; }
+    if (seq !== pmvOpenSeq) return;
     if (!data || data.error) { showToast((data && data.error) || 'Could not load', 'error'); return; }
     pmvDetail = data;
     renderPmvList();
