@@ -1232,6 +1232,11 @@ class Api:
             return {"reachable": False, "items": [], "counts": {}, "pawchive": True}
         try:
             filters = self._link_filters()
+            # A post's video/archive is only worth flagging for a hand download
+            # when this creator doesn't fetch them ('videos' covers archives too).
+            # A creator that does downloads those files itself; flagging them
+            # filled the panel with link-less posts that needed nothing.
+            flag = not fetch_prefs(c)["videos"]
             items, flagged = [], []
             for p in paths:
                 if not os.path.isfile(p):
@@ -1239,7 +1244,8 @@ class Api:
                 links = PawchiveLinks(p)
                 items.extend(i for i in links.pending()
                              if not link_is_filtered(i.get("url", ""), filters))
-                flagged.extend(links.flagged())
+                if flag:
+                    flagged.extend(links.flagged())
             # Posts holding a video/archive that have no outstanding links of
             # their own would never appear via pending() — the panel renders
             # these as their own group so the post page link is still reachable.

@@ -199,3 +199,20 @@ def test_api_ignores_image_only_posts(app, tmp_path):
     m.upsert_post(_post(media=("image",), links=[MANUAL]))
     out = app.list_pending_links(cid)
     assert out["linkless"] == [] and out["counts"]["flagged"] == 0
+
+
+def test_api_does_not_flag_posts_for_a_creator_that_downloads_them(app, tmp_path):
+    # A creator fetching videos/archives downloads those files itself: its
+    # link-less video/zip posts must not pile up in "Links needing attention".
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    app.save_state({"creators": {}, "archive_dir": str(tmp_path)})
+    cid = app.save_creator({"name": "Dl", "destination": str(dest),
+                            "fetch": {"images": True, "videos": True, "links": True},
+                            "links": [{"url": PW_URL}]})["id"]
+    m = PawchiveLinks(str(dest / "_pawchive_links.json"))
+    m.upsert_post(_post(pid="1", media=("archive", "image"), links=()))
+    m.upsert_post(_post(pid="2", media=("video",), links=[MANUAL]))
+    out = app.list_pending_links(cid)
+    assert out["linkless"] == [] and out["counts"]["flagged"] == 0
+    assert len(out["items"]) == 1                   # real outstanding links still shown
