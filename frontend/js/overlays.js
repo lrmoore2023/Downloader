@@ -158,6 +158,7 @@ async function openSettings() {
     document.getElementById('settingsOverlay').classList.add('visible');
     loadLinkFilters();
     refreshPawCfStatus();
+    refreshTeraboxStatus();
     refreshIwaraStatus();
     try {
         const roots = await pywebview.api.list_library_roots();
@@ -391,6 +392,54 @@ async function connectPawchive() {
     } finally {
         if (btn) btn.disabled = false;
     }
+}
+
+// ── Terabox sign-in ─────────────────────────────────────────────
+
+window.onTeraboxConnectStatus = function (data) {
+    const badge = document.getElementById('teraboxStatus');
+    if (badge && data && data.message) {
+        badge.textContent = data.message;
+        badge.className = 'status-badge status-idle';
+    }
+};
+
+function setTeraboxBadge(connected, message) {
+    const badge = document.getElementById('teraboxStatus');
+    if (badge) {
+        badge.textContent = message || (connected ? 'Signed in' : 'Not connected');
+        badge.className = 'status-badge ' + (connected ? 'status-ok' : 'status-warn');
+    }
+    const btn = document.getElementById('teraboxConnectBtn');
+    if (btn) btn.textContent = connected ? 'Reconnect' : 'Connect';
+    const off = document.getElementById('teraboxDisconnectBtn');
+    if (off) off.style.display = connected ? '' : 'none';
+}
+
+async function refreshTeraboxStatus() {
+    try {
+        const s = await pywebview.api.terabox_status();
+        setTeraboxBadge(!!(s && s.connected), s && s.connected ? 'Signed in' : 'Not connected');
+    } catch (e) { /* ignore */ }
+}
+
+async function connectTerabox() {
+    const btn = document.getElementById('teraboxConnectBtn');
+    if (btn) btn.disabled = true;
+    setTeraboxBadge(false, 'Opening sign-in…');
+    try {
+        const res = await pywebview.api.connect_terabox();
+        setTeraboxBadge(!!(res && res.ok), res && res.ok ? 'Signed in' : ((res && res.message) || 'Sign-in failed'));
+    } catch (e) {
+        setTeraboxBadge(false, 'Sign-in failed');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function disconnectTerabox() {
+    try { await pywebview.api.disconnect_terabox(); } catch (e) { /* ignore */ }
+    setTeraboxBadge(false, 'Not connected');
 }
 
 // ── Configure Links overlay ─────────────────────────────────────

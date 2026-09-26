@@ -70,6 +70,17 @@ SITES = [
         "extractor": "gofile",
         "title_field": "folder_name",
     },
+    {
+        "key": "terabox",
+        # Native downloader (TeraboxRunner). Every share domain (terabox.app/.com,
+        # 1024terabox, terasharelink, teraboxapp…) resolves to the same surl.
+        # Downloading needs the user's signed-in session (Settings ▸ Terabox).
+        "host_re": r"(?:^|\.)(?:\d*tera(?:box|share)\w*|terasharelink|teraboxlink|"
+                   r"freeterabox|1024tera|4funbox|mirrobox|nephobox|momerybox|tibibox)\.",
+        "engine": "terabox",
+        "extractor": "terabox",
+        "title_field": "folder_name",
+    },
 ]
 
 _COMPILED = [(re.compile(s["host_re"], re.IGNORECASE), s) for s in SITES]

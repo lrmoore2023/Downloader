@@ -30,6 +30,7 @@ from backend.download_errors import FailureStore
 from backend.filester_downloader import FilesterRunner
 from backend.gallery_dl_runner import GalleryDlRunner
 from backend.gofile_downloader import GofileRunner
+from backend.terabox_downloader import TeraboxRunner, parse_surl, archive_path_for as terabox_archive_path
 
 
 def album_state_dir(app_root, destination):
@@ -47,8 +48,12 @@ def album_archive_db(state_dir):
 
 
 class AlbumRunner:
-    def __init__(self, app_root, cookies_path=None, cookies_browser=None):
+    def __init__(self, app_root, cookies_path=None, cookies_browser=None, terabox=None):
         self._app_root = app_root
+        # {cookies, user_agent, archive_dir}: the signed-in Terabox session and
+        # where tracked shares keep their download record.
+        self._terabox = terabox or {}
+        self.needs_terabox_auth = False
         self._cookies_path = cookies_path
         self._cookies_browser = cookies_browser
         self._cancel_event = threading.Event()
@@ -72,7 +77,7 @@ class AlbumRunner:
                 pass
 
     def run(self, destination, links, on_progress, on_complete, on_error,
-            retry=False, force_urls=None):
+            retry=False, force_urls=None, track_urls=None):
         """Download each link's album. `force_urls` is the subset to re-download
         whole (ignore download history); everything else runs incrementally
         (skip what the engine's persistent history already has = "scan for new").
@@ -81,6 +86,10 @@ class AlbumRunner:
         self._cancel_event.clear()
         self.downloaded_count = self.skipped_count = self.error_count = 0
         force_set = {self._norm(u) for u in (force_urls or [])}
+        # Links whose downloads are recorded so deleted files never come back
+        # (Terabox; the other engines keep their own history regardless).
+        track_set = {self._norm(u) for u in (track_urls or [])}
+        self.needs_terabox_auth = False
 
         state_dir = album_state_dir(self._app_root, destination)
         os.makedirs(state_dir, exist_ok=True)
@@ -118,17 +127,18 @@ class AlbumRunner:
                 force = self._norm(url) in force_set
                 results.append(self._run_link(
                     url, password, site, destination, state_dir, errors_path,
-                    prog, err, retry, force))
+                    prog, err, retry, force, self._norm(url) in track_set))
         finally:
             self._current = None
             self._running = False
 
         summary = self._summary(unsupported, results)
         summary["cancelled"] = self._cancel_event.is_set()
+        summary["needs_terabox_auth"] = self.needs_terabox_auth
         on_complete(summary)
 
     def _run_link(self, url, password, site, destination, state_dir, errors_path,
-                  on_progress, on_error, retry, force):
+                  on_progress, on_error, retry, force, track=False):
         # Clear THIS album's prior failures so a re-run re-records only what still
         # fails (bunkr's transient 429s otherwise compound across runs).
         try:
@@ -156,6 +166,11 @@ class AlbumRunner:
         elif site["engine"] == "gofile":
             stats = self._run_gofile(url, destination, errors_path,
                                      prog, on_error, password, force)
+            self._merge(agg, stats)
+            subfolder_hint = stats.get("subfolder")
+        elif site["engine"] == "terabox":
+            stats = self._run_terabox(url, destination, state_dir, errors_path,
+                                      prog, on_error, password, force, track)
             self._merge(agg, stats)
             subfolder_hint = stats.get("subfolder")
         elif site["engine"] == "cyberdrop-dl":
@@ -218,6 +233,24 @@ class AlbumRunner:
             errors_path=errors_path,
             force=force,          # "Redownload whole" re-fetches present files
         )
+        self._accumulate(stats)
+        return stats
+
+    def _run_terabox(self, url, destination, state_dir, errors_path,
+                     on_progress, on_error, password, force, track):
+        surl = parse_surl(url) or ""
+        archive = (terabox_archive_path(self._terabox.get("archive_dir"), surl, state_dir)
+                   if track and surl else None)
+        runner = TeraboxRunner(platform="album", cookies=self._terabox.get("cookies"),
+                               user_agent=self._terabox.get("user_agent"),
+                               archive_path=archive)
+        self._current = runner
+        stats = {}
+        runner.run(url, destination, on_progress,
+                   on_complete=lambda s: stats.update(s), on_error=on_error,
+                   password=password, errors_path=errors_path, force=force)
+        if stats.get("needs_terabox_auth"):
+            self.needs_terabox_auth = True
         self._accumulate(stats)
         return stats
 

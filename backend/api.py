@@ -24,7 +24,7 @@ from backend.pawchive_scraper import (
     BASE as PW_BASE, MIRROR_BASE as PW_MIRROR_BASE,
 )
 from backend.pawchive_links import PawchiveLinks
-from backend import pawchive_cf
+from backend import pawchive_cf, terabox_auth
 from backend.derpibooru_scraper import (
     parse_creator_url as db_parse_creator_url, query_label as db_query_label,
     search_url as db_search_url,
@@ -215,6 +215,11 @@ class Api:
             "iwara_email": "",
             "iwara_password": "",
             "iwara_token": "",
+            # Terabox sign-in (Settings ▸ Terabox ▸ Connect): terabox.app cookies
+            # (ndus is the session) + the UA that earned them. Local only.
+            "terabox_cookies": {},
+            "terabox_user_agent": "",
+            "terabox_captured_at": "",
             "window": {},
         }
 
@@ -819,6 +824,50 @@ class Api:
                                             .isoformat(timespec="seconds"),
             })
         return res
+
+    # ── Terabox sign-in ─────────────────────────────────────────────
+
+    @staticmethod
+    def _terabox_config(state):
+        return {"cookies": state.get("terabox_cookies") or {},
+                "user_agent": state.get("terabox_user_agent") or "",
+                "archive_dir": state.get("archive_dir") or ""}
+
+    def terabox_status(self):
+        state = self.load_state()
+        ok = bool((state.get("terabox_cookies") or {}).get(terabox_auth.SESSION_COOKIE))
+        return {"connected": ok, "captured_at": state.get("terabox_captured_at") or "",
+                "message": "Signed in" if ok else "Not connected — Terabox downloads need a (free) account"}
+
+    def connect_terabox(self):
+        """Open Terabox's login page in an embedded window, wait for the user to
+        sign in, and keep the session cookies (see terabox_auth)."""
+        if self._window is None:
+            return {"ok": False, "message": "App window not ready"}
+        try:
+            child = webview.create_window("Sign in to Terabox", url=terabox_auth.LOGIN_URL,
+                                          width=520, height=720)
+        except Exception as e:
+            return {"ok": False, "message": f"Couldn't open browser window: {e}"}
+        try:
+            res = terabox_auth.capture_via_window(
+                child, on_status=lambda m: self._push_js("onTeraboxConnectStatus", {"message": m}))
+        except Exception as e:
+            res = {"ok": False, "message": f"Capture failed: {e}"}
+        finally:
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        if res.get("ok"):
+            self.save_state({"terabox_cookies": res.get("cookies") or {},
+                             "terabox_user_agent": res.get("user_agent") or "",
+                             "terabox_captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        return {k: v for k, v in res.items() if k != "cookies"}
+
+    def disconnect_terabox(self):
+        self.save_state({"terabox_cookies": {}, "terabox_user_agent": "", "terabox_captured_at": ""})
+        return {"ok": True}
 
     # ── Window geometry ─────────────────────────────────────────────
 
@@ -2153,7 +2202,7 @@ class Api:
         return bool(self._album_runner and self._album_runner.is_running)
 
     def start_album_download(self, destination, links, retry=False,
-                             creator_id=None, force_urls=None):
+                             creator_id=None, force_urls=None, track_urls=None):
         """Download whole albums (bunkr/cyberdrop/filester) into `destination`.
 
         `links` is a list of pasted lines; each may carry an optional inline
@@ -2188,21 +2237,24 @@ class Api:
         if not urls:
             return {"error": "Paste at least one album link"}
         forced = [str(x) for x in (force_urls or []) if str(x).strip()]
+        tracked = [str(x) for x in (track_urls or []) if str(x).strip()]
 
         self._album_runner = AlbumRunner(
             APP_DIR,
             cookies_path=state.get("cookies_path") or "",
             cookies_browser=state.get("cookies_browser") or "",
+            terabox=self._terabox_config(state),
         )
         self._album_thread = threading.Thread(
             target=self._run_album_download,
-            args=(destination, urls, bool(retry), creator_id, forced),
+            args=(destination, urls, bool(retry), creator_id, forced, tracked),
             daemon=True,
         )
         self._album_thread.start()
         return {"status": "started"}
 
-    def _run_album_download(self, destination, urls, retry, creator_id, force_urls):
+    def _run_album_download(self, destination, urls, retry, creator_id, force_urls,
+                            track_urls=None):
         def _on_complete(summary):
             # Record per-link results to the album-creator's ledger before the UI
             # is notified, so a refresh shows updated counts/dates immediately.
@@ -2218,6 +2270,7 @@ class Api:
             links=urls,
             retry=retry,
             force_urls=force_urls,
+            track_urls=track_urls,
             on_progress=lambda d: self._push_js("onAlbumProgress", d),
             on_complete=_on_complete,
             on_error=lambda d: self._push_js("onAlbumError", d),
