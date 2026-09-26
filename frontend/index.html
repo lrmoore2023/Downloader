@@ -658,6 +658,17 @@
                     <span class="field-hint">After a pack downloads, sort its images into Images/&lt;year&gt; and videos into &lt;year&gt; (named like your other files); any other files are kept together in a folder named after the archive. The original archive is deleted once extracted.</span>
                 </div>
                 <div class="form-row">
+                    <span class="form-label"></span>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="setPawExtractInto" onchange="setUpdatePawExtractInto()">
+                        <span>Put extracted files straight into the artist's year folders</span>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Unchecked: extracted files go to a separate <b>_extracted</b> folder inside the artist's folder, laid out the same way (_extracted\&lt;year&gt;, _extracted\Images\&lt;year&gt;), so you can see what came out of a zip/rar and drag it into place or delete it. A pack unpacked there is never downloaded again, even if you delete its files.</span>
+                </div>
+                <div class="form-row">
                     <span class="form-label">Cloudflare access</span>
                     <span id="pawCfStatus" class="status-badge status-idle">Checking…</span>
                     <button class="btn btn-secondary btn-sm" id="pawCfConnectBtn" onclick="connectPawchive()">Connect</button>

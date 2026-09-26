@@ -172,7 +172,8 @@ class CreatorRunner:
     """Runs a batch of links for one creator. Mirrors the per-engine public
     contract (run/cancel/is_running + downloaded/skipped/error counters)."""
 
-    def __init__(self, workers=5, pawchive_workers=None, pawchive_extract=True):
+    def __init__(self, workers=5, pawchive_workers=None, pawchive_extract=True,
+                 pawchive_extract_into_library=True):
         self.workers = workers
         # pawchive has its own (lower) concurrency knob because its CDN is behind
         # DDoS-Guard, which rate-limits on connection count; coomerfans tolerates the
@@ -180,6 +181,8 @@ class CreatorRunner:
         self.pawchive_workers = pawchive_workers
         # Auto-extract downloaded archives (zip/rar) into the library.
         self.pawchive_extract = pawchive_extract
+        # ...straight into the year folders, or into <dest>/_extracted/ for review.
+        self.pawchive_extract_into_library = pawchive_extract_into_library
         self.downloaded_count = 0
         self.skipped_count = 0
         self.error_count = 0
@@ -392,7 +395,8 @@ class CreatorRunner:
         # API throttle, so `workers` only sets file-download concurrency against the
         # DDoS-Guarded CDN — use the pawchive-specific (lower) knob when set.
         runner = PawchiveRunner(workers=self.pawchive_workers or self.workers,
-                                extract=self.pawchive_extract)
+                                extract=self.pawchive_extract,
+                                extract_into_library=self.pawchive_extract_into_library)
         self._current = runner
         stats = {}
         runner.run(

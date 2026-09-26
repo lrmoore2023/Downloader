@@ -85,6 +85,12 @@ _MANIFEST_FLUSH_EVERY = 20
 # into place. Named with a leading underscore so it sorts to the top and reads as
 # temporary; file_scanner ignores it (it only reads top-level \d{4} and Images/\d{4}).
 LATEST_DIRNAME = "_latest"
+# With "sort extracted files into the year folders" turned off, an unpacked archive
+# lands in this sibling instead (<artist>/_extracted/<year>/ + _extracted/Images/<year>/
+# + _extracted/<year>/<archive>/ for leftovers), so what came out of a zip/rar is
+# obvious at a glance and can be dragged into place or deleted. Once unpacked there
+# the archive counts as handled: sorting or deleting its contents never re-fetches it.
+EXTRACTED_DIRNAME = "_extracted"
 
 
 # The AIMD pacer now lives in backend.rate_limit so the coomerfans bot-guard
@@ -166,7 +172,7 @@ _DIAG_PATH = os.path.join(
 class PawchiveRunner:
     def __init__(self, workers=6, connect_timeout=30, read_timeout=60,
                  chunk_size=1 << 20, max_download_attempts=10, large_workers=1,
-                 extract=True):
+                 extract=True, extract_into_library=True):
         # read_timeout is the max IDLE gap between received bytes (not total
         # transfer time), so 60s is ample for healthy streams (measured: sub-second
         # gaps even on multi-GB videos). Keeping it tight means a stream that truly
@@ -247,6 +253,8 @@ class PawchiveRunner:
         # Auto-extract downloaded archives (zip/rar/…) into the library, one at a
         # time in a dedicated single worker so it never blocks the download pool.
         self._extract_enabled = bool(extract)
+        # False -> unpack into <root>/_extracted/ rather than the real year folders.
+        self._extract_into_library = bool(extract_into_library)
         self._extract_pool = None
         self._extract_futures = []
         self._extract_lock = threading.Lock()
@@ -1127,7 +1135,7 @@ class PawchiveRunner:
             self._ext_results.setdefault(job["post_id"], {})[job["url"]] = st
 
     def _natural_name(self, dt, media_kind, original_name, ordinal=None,
-                      ord_width=2, include_time=False, post_title=None):
+                      ord_width=2, include_time=False, post_title=None, root=None):
         """The un-suffixed '<date> - SITE - <name>' filename a media item would get
         (before any '_n' collision suffix). Used both to place new files and to
         recognise an already-downloaded file on disk."""
@@ -1136,35 +1144,46 @@ class PawchiveRunner:
             # Measure against _write_root — the file lands there, so that's the path
             # length the Windows limit actually applies to.
             folder = os.path.dirname(
-                target_path(self._write_root, media_kind, dt, "_"))
+                target_path(root or self._write_root, media_kind, dt, "_"))
             max_len = max(40, _WIN_PATH_LIMIT - len(folder) - 1 - _NAME_RESERVE)
         return build_filename(dt, self._service, original_name, ordinal=ordinal,
                               width=ord_width, include_time=include_time,
                               post_title=post_title, max_len=max_len)
 
     def _assign_path(self, dt, media_kind, original_name, ordinal=None,
-                     ord_width=2, include_time=False, post_title=None):
+                     ord_width=2, include_time=False, post_title=None, root=None):
         """Collision-free '<date> - SITE - <name>' path; '_n' before the ext on
         clash so nothing is ever overwritten. ordinal/include_time add the
         page-order decoration for multi-image posts, and post_title adds the post
         name to archives — truncated (title only) to keep the full path within the
-        Windows limit (see build_filename)."""
+        Windows limit (see build_filename).
+
+        `root` places the file somewhere other than _write_root (the _extracted/
+        review folder). The name must then also be free in _write_root's matching
+        year folder, so dragging the file into place never collides."""
+        root = root or self._write_root
         base = self._natural_name(dt, media_kind, original_name, ordinal=ordinal,
                                   ord_width=ord_width, include_time=include_time,
-                                  post_title=post_title)
+                                  post_title=post_title, root=root)
+
+        def free(name):
+            path = target_path(root, media_kind, dt, name)
+            if path in self._claimed or os.path.isfile(path):
+                return None
+            if root != self._write_root and os.path.isfile(
+                    target_path(self._write_root, media_kind, dt, name)):
+                return None
+            return path
+
         with self._fname_lock:
-            path = target_path(self._write_root, media_kind, dt, base)
-            if path not in self._claimed and not os.path.isfile(path):
-                self._claimed.add(path)
-                return path, base
-            n = 1
+            cand, n = base, 0
             while True:
-                cand = add_index_suffix(base, n)
-                cand_path = target_path(self._write_root, media_kind, dt, cand)
-                if cand_path not in self._claimed and not os.path.isfile(cand_path):
-                    self._claimed.add(cand_path)
-                    return cand_path, cand
+                path = free(cand)
+                if path:
+                    self._claimed.add(path)
+                    return path, cand
                 n += 1
+                cand = add_index_suffix(base, n)
 
     def _active_inc(self):
         with self._active_lock:
@@ -1607,7 +1626,11 @@ class PawchiveRunner:
         # Unpack alongside the archive (which itself was written under _write_root in
         # 'latest' mode), so extracted media stage together with everything else.
         tmp = os.path.join(self._write_root, ".pawchive_extract_tmp", uuid.uuid4().hex)
-        leftover_root = target_path(self._write_root, "archive", job["dt"], stem)
+        # Where the contents go: the year folders themselves, or the _extracted/
+        # review folder mirroring them (see EXTRACTED_DIRNAME).
+        place_root = (self._write_root if self._extract_into_library
+                      else os.path.join(self._write_root, EXTRACTED_DIRNAME))
+        leftover_root = target_path(place_root, "archive", job["dt"], stem)
         media_n = other_n = 0
         try:
             os.makedirs(tmp, exist_ok=True)
@@ -1642,7 +1665,7 @@ class PawchiveRunner:
                     display = " - ".join(
                         [self._sanitize_part(p) for p in folder_parts] + [name])
                     dest, _fname = self._assign_path(job["dt"], kind, display,
-                                                     post_title=None)
+                                                     post_title=None, root=place_root)
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
                     shutil.move(src, dest)
                     outputs.append(os.path.relpath(dest, self._write_root))
@@ -1696,12 +1719,37 @@ class PawchiveRunner:
         names = {self._natural_name(dt, kind, display), self._natural_name(dt, kind, name)}
         return [target_path("", kind, dt, n) for n in sorted(names)]
 
+    @staticmethod
+    def _split_review(rel):
+        """(True, rest) for a creator-relative path inside the _extracted/ review
+        folder, else (False, rel)."""
+        parts = rel.replace("\\", "/").split("/", 1)
+        if parts[0] == EXTRACTED_DIRNAME and len(parts) > 1:
+            return True, parts[1]
+        return False, rel
+
     def _present_outputs(self, relpaths):
         """The subset of creator-relative paths that exist under the staging root
-        or the library (a file the user moved out of _latest still counts)."""
+        or the library (a file the user moved out of _latest still counts). A file
+        is found in the _extracted/ review folder or in the year folders alike, so
+        dragging it from one into the other (or switching modes) still counts."""
         roots = [r for r in dict.fromkeys((self._write_root, self._destination)) if r]
+
+        def forms(rel):
+            review, rest = self._split_review(rel)
+            return (rel, rest) if review else (rel, os.path.join(EXTRACTED_DIRNAME, rel))
         return [rel for rel in relpaths
-                if any(os.path.exists(os.path.join(root, rel)) for root in roots)]
+                if any(os.path.exists(os.path.join(root, f))
+                       for root in roots for f in forms(rel))]
+
+    def _outputs_handled(self, outs):
+        """Is an extracted archive with recorded outputs done with? Yes while any
+        output is on disk — and always once it went to the _extracted/ review
+        folder: there, sorting or deleting the contents is the user's call, so a
+        pack whose contents were deleted is not fetched and unpacked again."""
+        if any(self._split_review(o)[0] for o in outs):
+            return True
+        return bool(self._present_outputs(outs))
 
     def _members_present(self, dt, stem, members):
         """Which of an archive's would-be outputs are on disk. A file the archive
@@ -1726,7 +1774,7 @@ class PawchiveRunner:
         entry = job["entry"]
         outs = self._archive.get_extracted_outputs(entry)
         if outs:
-            return bool(self._present_outputs(outs))
+            return self._outputs_handled(outs)
         if os.path.splitext(recorded or "")[1].lower() != ".zip":
             return None
         members = pawchive_extract.list_zip_remote(self._dl_session(), self._url(job["url"]))
@@ -1949,7 +1997,7 @@ class PawchiveRunner:
             # Recorded outputs are checked on disk; an archive extracted before
             # those were tracked was already weighed by the main pass.
             outs = self._archive.get_extracted_outputs(job["entry"])
-            return not outs or bool(self._present_outputs(outs))
+            return not outs or self._outputs_handled(outs)
         fn = self._archive.get_filename(job["entry"]) if self._archive else None
         if not fn:
             return False

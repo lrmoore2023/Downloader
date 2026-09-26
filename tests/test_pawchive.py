@@ -229,6 +229,89 @@ def t_extract():
     r._archive.close()
 
 
+def t_extract_review():
+    """Extract-into-library off: a pack unpacks into <dest>/_extracted/ laid out like
+    the library (year / Images/year / year/<archive> leftovers), never touching the
+    real year folders, and stays 'handled' once its files are sorted or deleted."""
+    import zipfile
+    from datetime import datetime
+    from backend.pawchive_runner import PawchiveRunner, EXTRACTED_DIRNAME
+    from backend.pawchive_archive import Archive, entry_key
+
+    dest = tempfile.mkdtemp(prefix="pawxr_")
+    # A same-named file already in the real year folder: the review copy must not
+    # take a name that would clash when dragged into place.
+    os.makedirs(os.path.join(dest, "2026"))
+    open(os.path.join(dest, "2026", "2026.05.04 - Patreon - b.mp4"), "wb").close()
+
+    def make(name, members):
+        zp = os.path.join(dest, "2026", name)
+        with zipfile.ZipFile(zp, "w") as z:
+            for m, data in members.items():
+                z.writestr(m, data)
+        return zp
+
+    r = PawchiveRunner(workers=1, extract=True, extract_into_library=False)
+    r._destination = r._write_root = dest
+    r._service = "patreon"
+    r._archive = Archive(os.path.join(dest, "arc.db"))
+    zpath = make("2026.05.04 - Patreon - Pack.zip",
+                 {"b.mp4": b"vid", "2.png": b"img", "notes.txt": b"t"})
+    entry = entry_key("p1", 1)
+    r._archive.record(entry, "p1", os.path.basename(zpath), "archive", "2026")
+    job = {"dt": datetime(2026, 5, 4), "media_kind": "archive", "post_id": "p1",
+           "name": "Pack.zip", "entry": entry, "post_title": "Pack"}
+    r._extract_archive(zpath, job, entry)
+
+    def has(p):
+        return os.path.isfile(os.path.join(dest, p))
+    x = EXTRACTED_DIRNAME
+    check("review: video -> _extracted/year (no clash with library copy)",
+          has(f"{x}/2026/2026.05.04 - Patreon - b_1.mp4"))
+    check("review: image -> _extracted/Images/year",
+          has(f"{x}/Images/2026/2026.05.04 - Patreon - 2.png"))
+    check("review: leftovers + archive under _extracted/year/<archive>",
+          has(f"{x}/2026/2026.05.04 - Patreon - Pack/notes.txt")
+          and has(f"{x}/2026/2026.05.04 - Patreon - Pack/2026.05.04 - Patreon - Pack.zip"))
+    check("review: real year folders untouched",
+          sorted(os.listdir(os.path.join(dest, "2026"))) == ["2026.05.04 - Patreon - b.mp4"]
+          and not os.path.isdir(os.path.join(dest, "Images")))
+    check("review: entry marked extracted", r._archive.is_extracted(entry))
+
+    # Dragging the image into the real year folder still counts as present.
+    os.makedirs(os.path.join(dest, "Images", "2026"))
+    os.replace(os.path.join(dest, x, "Images", "2026", "2026.05.04 - Patreon - 2.png"),
+               os.path.join(dest, "Images", "2026", "2026.05.04 - Patreon - 2.png"))
+    check("review: moved-into-place output found",
+          r._present_outputs([f"{x}/Images/2026/2026.05.04 - Patreon - 2.png"]))
+
+    # Deleting the whole review folder is the user's call: nothing is re-fetched.
+    import shutil
+    shutil.rmtree(os.path.join(dest, x))
+    fetched = []
+    r._download_stream = lambda *a, **k: fetched.append(a) or True
+    r.skipped_count = 0
+    r._process_media(job)
+    check("review: deleted contents never re-fetched",
+          not fetched and r.skipped_count == 1 and r._job_present(job))
+
+    # Into-library mode is unchanged: contents gone -> fetched again.
+    r2 = PawchiveRunner(workers=1, extract=True)
+    r2._destination = r2._write_root = dest
+    r2._service = "patreon"
+    r2._archive = r._archive
+    z2 = make("2026.05.04 - Patreon - Lib.zip", {"only.png": b"i"})
+    e2 = entry_key("p2", 1)
+    r2._archive.record(e2, "p2", os.path.basename(z2), "archive", "2026")
+    j2 = dict(job, post_id="p2", name="Lib.zip", entry=e2, post_title="Lib")
+    r2._extract_archive(z2, j2, e2)
+    check("library mode: image in real Images/year",
+          has("Images/2026/2026.05.04 - Patreon - only.png"))
+    os.remove(os.path.join(dest, "Images", "2026", "2026.05.04 - Patreon - only.png"))
+    check("library mode: deleted contents -> not present", not r2._job_present(j2))
+    r._archive.close()
+
+
 def t_extract_restore():
     """An 'extracted' archive whose contents are gone from disk is fetched again
     (a re-added creator got every image back but none of its zips); contents
@@ -744,7 +827,7 @@ def t_zip_encoding():
 def main():
     print("Running pawchive offline tests...")
     for t in (t_urls, t_parse_media, t_links_classify, t_filenames, t_manifest_merge,
-              t_extract, t_extract_restore, t_resolved_and_skip, t_preview_state, t_zip_encoding,
+              t_extract, t_extract_review, t_extract_restore, t_resolved_and_skip, t_preview_state, t_zip_encoding,
               t_resolved_ext_skipped, t_dismissed_not_refetched,
               t_deferred_attachment, t_deferred_dismissed):
         try:

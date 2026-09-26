@@ -8,6 +8,7 @@ const Settings = {
     concurrency: 5,
     pawConcurrency: 6,
     pawExtract: true,
+    pawExtractIntoLibrary: true,
     cookiesPath: '',
     cookiesBrowser: '',
     authMethod: 'file',
@@ -25,6 +26,7 @@ function loadSettingsFromState(state) {
     Settings.concurrency = state.cf_concurrency || 5;
     Settings.pawConcurrency = state.pawchive_concurrency || 6;
     Settings.pawExtract = state.pawchive_extract !== false;
+    Settings.pawExtractIntoLibrary = state.pawchive_extract_into_library !== false;
     Settings.cookiesPath = state.cookies_path || '';
     Settings.cookiesBrowser = state.cookies_browser || '';
     Settings.authMethod = state.auth_method || 'file';
@@ -46,6 +48,9 @@ function loadSettingsFromState(state) {
     }
     const pawExtractEl = document.getElementById('setPawExtract');
     if (pawExtractEl) pawExtractEl.checked = Settings.pawExtract;
+    const pawIntoEl = document.getElementById('setPawExtractInto');
+    if (pawIntoEl) pawIntoEl.checked = Settings.pawExtractIntoLibrary;
+    syncPawExtractInto();
     const dbKeyEl = document.getElementById('setDerpiApiKey');
     if (dbKeyEl) dbKeyEl.value = Settings.derpibooruApiKey;
     const dcTokEl = document.getElementById('setDiscordToken');
@@ -77,6 +82,7 @@ function persistSettings() {
         cf_concurrency: Settings.concurrency,
         pawchive_concurrency: Settings.pawConcurrency,
         pawchive_extract: Settings.pawExtract,
+        pawchive_extract_into_library: Settings.pawExtractIntoLibrary,
         cookies_path: Settings.cookiesPath,
         cookies_browser: Settings.cookiesBrowser,
         auth_method: Settings.authMethod,
@@ -291,7 +297,19 @@ function setUpdatePawConcurrency() {
 
 function setUpdatePawExtract() {
     Settings.pawExtract = document.getElementById('setPawExtract').checked;
+    syncPawExtractInto();
     persistSettings();
+}
+
+function setUpdatePawExtractInto() {
+    Settings.pawExtractIntoLibrary = document.getElementById('setPawExtractInto').checked;
+    persistSettings();
+}
+
+// "Into the year folders" only means something while auto-extract is on.
+function syncPawExtractInto() {
+    const el = document.getElementById('setPawExtractInto');
+    if (el) el.disabled = !Settings.pawExtract;
 }
 
 // ── Twitter auth (cookies) ──────────────────────────────────────

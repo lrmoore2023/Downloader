@@ -21,7 +21,7 @@ from backend.media_library import scan_creator_media
 from backend import media_hash as mh
 
 # Folders we create/manage; never scanned as content.
-MANAGED_DIRS = {"_new", "_deleted", "_latest"}
+MANAGED_DIRS = {"_new", "_deleted", "_latest", "_extracted"}
 
 
 # ── file enumeration ──────────────────────────────────────────────────

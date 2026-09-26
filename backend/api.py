@@ -182,6 +182,8 @@ class Api:
             "cf_concurrency": 5,
             "pawchive_concurrency": 6,
             "pawchive_extract": True,
+            # Off -> unpacked archives go to <dest>/_extracted/ instead of the year folders.
+            "pawchive_extract_into_library": True,
             # Cloudflare access for pawchive.pw: a cookies.txt (with cf_clearance) and
             # the exact UA that earned it, captured by connect_pawchive(). See
             # pawchive_cf / pawchive_scraper.make_session.
@@ -2065,6 +2067,7 @@ class Api:
         except (TypeError, ValueError):
             pawchive_workers = 6
         pawchive_extract = state.get("pawchive_extract", True) is not False
+        pawchive_extract_into_library = state.get("pawchive_extract_into_library", True) is not False
 
         # Only a list of non-empty entry strings; anything else means "recheck all".
         entries = None
@@ -2082,7 +2085,8 @@ class Api:
         self._touch_creator(creator_id)
         self._creator_runner = CreatorRunner(workers=workers,
                                              pawchive_workers=pawchive_workers,
-                                             pawchive_extract=pawchive_extract)
+                                             pawchive_extract=pawchive_extract,
+                                             pawchive_extract_into_library=pawchive_extract_into_library)
         self._creator_thread = threading.Thread(
             target=self._run_creator_download,
             args=(creator_id, c, scope, mode, year, bool(refresh_links), entries,
