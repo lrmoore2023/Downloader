@@ -357,16 +357,11 @@
                         <div class="form-row" style="align-items: stretch;">
                             <span class="form-label">Links</span>
                             <textarea id="albumLinks" class="input-field album-links" rows="5"
-                                      placeholder="https://cyberdrop.cr/a/…&#10;https://bunkr.cr/a/…&#10;https://filester.gg/f/…  (| password if locked)&#10;https://gofile.io/d/…  (| password if locked)&#10;https://www.terabox.app/sharing/link?surl=…"></textarea>
+                                      placeholder="https://cyberdrop.cr/a/…&#10;https://bunkr.cr/a/…&#10;https://filester.gg/f/…  (| password if locked)&#10;https://gofile.io/d/…  (| password if locked)"></textarea>
                         </div>
                         <div class="form-row">
                             <span class="form-label"></span>
                             <button class="btn btn-primary btn-sm" id="albumDownloadBtn" onclick="downloadQuick()">Download all</button>
-                            <label class="checkbox-option" style="margin-left: 12px;"
-                                   title="Record which files these links downloaded, so a file you delete later is never fetched again (Terabox). Untick for a one-off grab that leaves no record.">
-                                <input type="checkbox" id="albumTrack" checked onchange="albumSaveTrackPref(this.checked)">
-                                <span class="checkbox-label">Track downloads</span>
-                            </label>
                         </div>
                     </div>
 
@@ -670,18 +665,6 @@
                 <div class="form-row">
                     <span class="form-label"></span>
                     <span class="field-hint" id="pawCfHint">Pawchive now sits behind a Cloudflare check that blocks the app. Click <b>Connect</b> — a small window opens, clears the check automatically (usually a second or two), and the app remembers it. If a fetch later fails with a Cloudflare message, just click <b>Reconnect</b>.</span>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">Terabox (Albums tab)</div>
-                <div class="form-row">
-                    <span class="form-label">Sign-in</span>
-                    <span id="teraboxStatus" class="status-badge status-idle">Checking…</span>
-                    <button class="btn btn-secondary btn-sm" id="teraboxConnectBtn" onclick="connectTerabox()">Connect</button>
-                    <button class="btn btn-ghost btn-sm" id="teraboxDisconnectBtn" onclick="disconnectTerabox()" style="display:none">Disconnect</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Terabox lists shared folders to anyone but only lets a signed-in (free) account download them. Click <b>Connect</b>, sign in in the window that opens, and it closes by itself once you're in. The sign-in stays on this PC only.</span>
                 </div>
 
                 <div class="section-title" style="margin-top: 16px;">Iwara (PMV tab)</div>

@@ -59,21 +59,8 @@ function downloadQuick() {
     const entries = document.getElementById('albumLinks').value
         .split('\n').map(s => s.trim()).filter(Boolean);
     if (!entries.length) { showToast('Paste at least one album link', 'error'); return; }
-    const track = !!(document.getElementById('albumTrack') || {}).checked;
-    beginDownload(entries, { dest: albumDest, creatorId: null, track });
+    beginDownload(entries, { dest: albumDest, creatorId: null });
 }
-
-// Remembered per PC: a convenience, not state anyone else needs.
-function albumSaveTrackPref(on) {
-    try { localStorage.setItem('albumTrack', on ? '1' : '0'); } catch (e) { /* ignore */ }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    let v = null;
-    try { v = localStorage.getItem('albumTrack'); } catch (e) { /* ignore */ }
-    const box = document.getElementById('albumTrack');
-    if (box && v !== null) box.checked = v === '1';
-});
 
 // ── creator mode ────────────────────────────────────────────────────
 async function refreshAlbumCreators(selectId) {
@@ -196,8 +183,7 @@ function downloadSelectedCreator() {
     const byUrl = {};
     (albumCurrentCreator.links || []).forEach(l => { byUrl[l.url] = l.password; });
     const entries = checked.map(u => byUrl[u] ? `${u} | ${byUrl[u]}` : u);
-    // A saved album creator is a tracked set by definition.
-    beginDownload(entries, { dest: '', creatorId: albumCurrentCreator.id, track: true });
+    beginDownload(entries, { dest: '', creatorId: albumCurrentCreator.id });
 }
 
 // ── dedup pre-check + prompt ────────────────────────────────────────
@@ -290,9 +276,8 @@ async function doStart(entries, forceUrls, ctx) {
     resetAlbumStats();
     setAlbumBusy(true, 'Downloading…');
     albumLog(`Starting ${entries.length} album(s)` + (forceUrls.length ? ` (${forceUrls.length} full redownload)` : ''), 'info');
-    const trackUrls = ctx.track ? entries.map(bareUrl) : [];
     const res = await pywebview.api.start_album_download(
-        ctx.dest || '', entries, false, ctx.creatorId || null, forceUrls, trackUrls);
+        ctx.dest || '', entries, false, ctx.creatorId || null, forceUrls);
     if (res && res.error) { setAlbumBusy(false, ''); showToast(res.error, 'error'); albumLog('Error: ' + res.error, 'error'); }
 }
 
@@ -305,8 +290,7 @@ function retryAlbumFailed() {
     if (albumBusy) return;
     if (!albumLastFailedUrls.length) { showToast('No failed files to retry', 'info'); return; }
     // Retry runs against the same destination; failures re-attempt via the engines.
-    doStart(albumLastFailedUrls.slice(), [], { dest: albumActiveDest, creatorId: null,
-                                               track: !!(document.getElementById('albumTrack') || {}).checked });
+    doStart(albumLastFailedUrls.slice(), [], { dest: albumActiveDest, creatorId: null });
 }
 
 function albumLog(msg, type) {
@@ -353,10 +337,6 @@ window.onAlbumComplete = function (data) {
     document.getElementById('albumStatus').textContent = summary;
     showToast(summary, (data.errors || data.cancelled) ? 'info' : 'success');
     refreshAlbumErrors();
-    if (data.needs_terabox_auth) {
-        showToast('Terabox needs you to sign in — opening Settings…', 'error');
-        if (typeof openSettings === 'function') openSettings();
-    }
     // In creator mode, reload to show updated per-link counts/dates.
     if (albumMode === 'creator' && albumCurrentCreator) {
         pywebview.api.get_album_creator(albumCurrentCreator.id).then(c => {
