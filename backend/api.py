@@ -25,6 +25,7 @@ from backend.pawchive_scraper import (
 )
 from backend.pawchive_links import PawchiveLinks
 from backend import pawchive_cf, terabox_auth
+from backend import extra_links as xl
 from backend.derpibooru_scraper import (
     parse_creator_url as db_parse_creator_url, query_label as db_query_label,
     search_url as db_search_url,
@@ -1063,6 +1064,7 @@ class Api:
             "links": c.get("links", []),
             # Saved 'Fetch Latest' year range (pawchive/coomerfans), or None = all years.
             "latest_range": c.get("latest_range") or None,
+            "extra_links": [xl.view(c, r) for r in c.get("extra_links") or []],
         }
 
     @staticmethod
@@ -1808,6 +1810,9 @@ class Api:
             "latest_range": self._clean_year_range(
                 creator["latest_range"] if "latest_range" in creator
                 else existing.get("latest_range")),
+            # Tracked extra links (Terabox/gofile/MEGA…): managed by their own Api
+            # methods, never by the Configure overlay — always carried forward.
+            "extra_links": existing.get("extra_links") or [],
         }
         # A changed manifest home (folder added, removed, or renamed) moves the
         # links manifests along so resolved checkmarks survive.
@@ -2195,6 +2200,156 @@ class Api:
     def _aux_busy(self):
         return ((self._creator_runner and self._creator_runner.is_running)
                 or (self._creator_aux_thread and self._creator_aux_thread.is_alive()))
+
+    # ── Per-creator tracked links (fetched one at a time, never by Fetch Latest) ──
+
+    def _edit_extra_links(self, creator_id, fn):
+        """Read-modify-save a creator's extra_links. fn(creator, records) edits
+        `records` in place and returns an error string or None."""
+        state = self.load_state()
+        creators = state.get("creators") or {}
+        c = creators.get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        records = list(c.get("extra_links") or [])
+        err = fn(c, records)
+        if err:
+            return {"error": err}
+        c["extra_links"] = records
+        self.save_state({"creators": creators})
+        return {"ok": True, "extra_links": [xl.view(c, r) for r in records]}
+
+    def add_extra_links(self, creator_id, text, folder="", track=True):
+        """Add one or more links (one per line, optional ' | password')."""
+        added = []
+
+        def fn(c, records):
+            for line in str(text or "").splitlines():
+                url, pwd = xl.clean_url(line)
+                if not url or xl.find(records, url):
+                    continue
+                records.append(xl.new_record(url, pwd, folder, track))
+                added.append(url)
+            return None if added else "No new http(s) links to add"
+        res = self._edit_extra_links(creator_id, fn)
+        if res.get("ok"):
+            res["added"] = len(added)
+        return res
+
+    def update_extra_link(self, creator_id, url, patch):
+        """Change a link's download folder / tracking / password."""
+        def fn(c, records):
+            r = xl.find(records, url)
+            if not r:
+                return "Link not found"
+            p = patch or {}
+            if "folder" in p:
+                r["folder"] = str(p["folder"] or "").strip() or r.get("site") or ""
+            if "track" in p:
+                r["track"] = bool(p["track"])
+            if "password" in p:
+                r["password"] = str(p["password"] or "")
+            return None
+        return self._edit_extra_links(creator_id, fn)
+
+    def remove_extra_link(self, creator_id, url):
+        def fn(c, records):
+            r = xl.find(records, url)
+            if not r:
+                return "Link not found"
+            records.remove(r)
+            return None
+        return self._edit_extra_links(creator_id, fn)
+
+    def fetch_extra_links(self, creator_id, urls):
+        """Download the chosen tracked links, each into its own folder, through the
+        Albums tab's engines. Shares the one-download-at-a-time slot with album and
+        creator runs. Pushes onExtraLinkProgress / onExtraLinkComplete."""
+        if self._album_busy():
+            return {"error": "An album or link download is already in progress"}
+        if self._creator_runner and self._creator_runner.is_running:
+            return {"error": "A download is already in progress"}
+        if self._creator_aux_thread and self._creator_aux_thread.is_alive():
+            return {"error": "Another operation (verify/import/duplicates) is in progress"}
+        state = self.load_state()
+        c = (state.get("creators") or {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        jobs, problems = [], []
+        for u in urls or []:
+            r = xl.find(c.get("extra_links"), u)
+            if not r:
+                continue
+            v = xl.view(c, r)
+            if not v["downloadable"]:
+                problems.append(f"{v['site_label']} links can't be downloaded yet — open it in the browser")
+                continue
+            if not v["dest"]:
+                problems.append(v["dest_problem"])
+                continue
+            jobs.append(r)
+        if not jobs:
+            return {"error": problems[0] if problems else "Pick at least one link"}
+        self._album_runner = AlbumRunner(
+            APP_DIR, cookies_path=state.get("cookies_path") or "",
+            cookies_browser=state.get("cookies_browser") or "",
+            terabox=self._terabox_config(state))
+        self._album_thread = threading.Thread(
+            target=self._run_extra_links, args=(creator_id, c, jobs), daemon=True)
+        self._album_thread.start()
+        return {"status": "started", "links": len(jobs), "skipped": problems}
+
+    def _run_extra_links(self, creator_id, creator, jobs):
+        total = {"downloaded": 0, "skipped": 0, "errors": 0, "cancelled": False,
+                 "needs_terabox_auth": False, "links": []}
+        runner = self._album_runner
+
+        def push(kind, tag):
+            def f(d):
+                d = dict(d or {})
+                if kind == "error":
+                    d["type"] = "error"
+                d["message"] = tag + str(d.get("message", ""))
+                self._push_js("onExtraLinkProgress", d)
+            return f
+
+        for i, r in enumerate(jobs, 1):
+            if total["cancelled"]:
+                break
+            dest, _ = xl.resolve_dest(creator, r)
+            tag = f"[{i}/{len(jobs)}] "
+            try:
+                os.makedirs(dest, exist_ok=True)
+            except OSError as e:
+                push("error", tag)({"message": f"can't create {dest}: {e}"})
+                continue
+            entry = r["url"] + (f" | {r['password']}" if r.get("password") else "")
+            done = {}
+            runner.run(destination=dest, links=[entry],
+                       track_urls=[r["url"]] if r.get("track") else [],
+                       on_progress=push("progress", tag),
+                       on_complete=done.update,
+                       on_error=push("error", tag))
+            for k in ("downloaded", "skipped", "errors"):
+                total[k] += done.get(k, 0) or 0
+            total["cancelled"] = bool(done.get("cancelled"))
+            total["needs_terabox_auth"] |= bool(done.get("needs_terabox_auth"))
+            total["links"].append({"url": r["url"], "downloaded": done.get("downloaded", 0),
+                                   "skipped": done.get("skipped", 0), "errors": done.get("errors", 0)})
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        def record(c, records):
+            for res in total["links"]:
+                rec = xl.find(records, res["url"])
+                if rec:
+                    rec["last_run"] = now
+                    rec["last_result"] = {k: res[k] for k in ("downloaded", "skipped", "errors")}
+            return None
+        try:
+            self._edit_extra_links(creator_id, record)
+        except Exception:
+            pass
+        self._push_js("onExtraLinkComplete", {**total, "creator_id": creator_id})
 
     # ── Album downloader (Albums tab) ───────────────────────────────
 

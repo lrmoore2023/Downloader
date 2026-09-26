@@ -247,6 +247,10 @@
                     </div>
                 </div>
 
+                <!-- Tracked links: extra sources (Terabox/gofile/MEGA…) fetched one at a time,
+                     never by Fetch Latest (see extra_links.py) -->
+                <div class="section pending-links" id="extraLinks" style="display: none;"></div>
+
                 <!-- Pawchive: external links needing manual download (below the log) -->
                 <div class="section pending-links" id="pendingLinks" style="display: none;"></div>
 
@@ -785,6 +789,7 @@
 
     <script src="js/logger.js"></script>
     <script src="js/creators.js"></script>
+    <script src="js/extra_links.js"></script>
     <script src="js/gallery.js"></script>
     <script src="js/media.js"></script>
     <script src="js/dupes.js"></script>
