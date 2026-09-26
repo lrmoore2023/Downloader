@@ -183,7 +183,6 @@ async function onCreatorChange() {
     pendingUndo = [];          // undo history is per-creator
     errorsUndo = [];
     lastPendingSig = null;
-    if (typeof renderExtraLinks === 'function') renderExtraLinks();
     renderPendingLinks();
     renderErrorLinks();
     persistLastCreator(currentCreatorId);
