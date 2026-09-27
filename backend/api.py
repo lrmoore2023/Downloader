@@ -36,7 +36,7 @@ from backend.discord_scraper import (
 from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
     pawchive_archive_path, twitter_archive_path, derpibooru_archive_path,
-    discord_archive_path, errors_db_path, fetch_prefs, is_track_only,
+    discord_archive_path, errors_db_path, extract_into_folders, fetch_prefs, is_track_only,
 )
 from backend.download_errors import open_readonly as open_errors_store
 from backend import album_sites
@@ -181,9 +181,6 @@ class Api:
             "library_root": "",
             "cf_concurrency": 5,
             "pawchive_concurrency": 6,
-            "pawchive_extract": True,
-            # Off -> unpacked archives go to <dest>/_extracted/ instead of the year folders.
-            "pawchive_extract_into_library": True,
             # Cloudflare access for pawchive.pw: a cookies.txt (with cf_clearance) and
             # the exact UA that earned it, captured by connect_pawchive(). See
             # pawchive_cf / pawchive_scraper.make_session.
@@ -1013,6 +1010,7 @@ class Api:
             "avatar": c.get("avatar", ""),
             "has_videos": bool(c.get("has_videos")),
             "fetch": fetch_prefs(c),
+            "extract_into_folders": extract_into_folders(c),
             "links": c.get("links", []),
             # Saved 'Fetch Latest' year range (pawchive/coomerfans), or None = all years.
             "latest_range": c.get("latest_range") or None,
@@ -1753,6 +1751,11 @@ class Api:
             "avatar": avatar,
             "has_videos": bool(creator.get("has_videos")),
             "fetch": fetch,
+            # "Put Extracted Files in Artist Folders" (pawchive archives). Carried
+            # forward when the payload omits it, like latest_range below.
+            "extract_into_folders": (bool(creator["extract_into_folders"])
+                                     if "extract_into_folders" in creator
+                                     else extract_into_folders(existing)),
             "links": links,
             "last_used": existing.get("last_used") or datetime.now(timezone.utc).isoformat(),
             # Saved 'Fetch Latest' year range. Take it from the incoming payload when the
@@ -2066,8 +2069,6 @@ class Api:
             pawchive_workers = max(1, min(10, int(state.get("pawchive_concurrency") or 6)))
         except (TypeError, ValueError):
             pawchive_workers = 6
-        pawchive_extract = state.get("pawchive_extract", True) is not False
-        pawchive_extract_into_library = state.get("pawchive_extract_into_library", True) is not False
 
         # Only a list of non-empty entry strings; anything else means "recheck all".
         entries = None
@@ -2084,9 +2085,7 @@ class Api:
 
         self._touch_creator(creator_id)
         self._creator_runner = CreatorRunner(workers=workers,
-                                             pawchive_workers=pawchive_workers,
-                                             pawchive_extract=pawchive_extract,
-                                             pawchive_extract_into_library=pawchive_extract_into_library)
+                                             pawchive_workers=pawchive_workers)
         self._creator_thread = threading.Thread(
             target=self._run_creator_download,
             args=(creator_id, c, scope, mode, year, bool(refresh_links), entries,

@@ -309,7 +309,79 @@ def t_extract_review():
           has("Images/2026/2026.05.04 - Patreon - only.png"))
     os.remove(os.path.join(dest, "Images", "2026", "2026.05.04 - Patreon - only.png"))
     check("library mode: deleted contents -> not present", not r2._job_present(j2))
+
+    # Password-protected: never unpacked or left in the year folders, whatever the
+    # setting — moved whole to _extracted/Password Protected/ and marked handled.
+    from backend.pawchive_runner import PASSWORD_DIRNAME
+    for runner, pid in ((r2, "p3"), (r, "p4")):
+        zp = os.path.join(dest, "2026", f"2026.05.04 - Patreon - Locked {pid}.zip")
+        with zipfile.ZipFile(zp, "w") as z:
+            z.writestr("secret.png", b"x")
+        # zipfile won't write an encrypted member, so set the encryption flag (all
+        # detection reads) in the local + central headers by hand.
+        raw = bytearray(open(zp, "rb").read())
+        for sig, off in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+            i = raw.find(sig)
+            raw[i + off] |= 0x1
+        open(zp, "wb").write(bytes(raw))
+        ep = entry_key(pid, 1)
+        runner._archive.record(ep, pid, os.path.basename(zp), "archive", "2026")
+        jp = dict(job, post_id=pid, name="Locked.zip", entry=ep, post_title="Locked")
+        runner._extract_archive(zp, jp, ep)
+        mode = "library" if runner is r2 else "review"
+        check(f"password ({mode}): archive moved to Password Protected",
+              not os.path.exists(zp)
+              and has(f"{x}/{PASSWORD_DIRNAME}/{os.path.basename(zp)}"))
+        check(f"password ({mode}): nothing unpacked",
+              not has("Images/2026/2026.05.04 - Patreon - secret.png")
+              and not has(f"{x}/Images/2026/2026.05.04 - Patreon - secret.png"))
+        check(f"password ({mode}): handled, not re-fetched",
+              runner._archive.is_extracted(ep) and runner._job_present(jp))
     r._archive.close()
+
+    from backend.creator_runner import extract_into_folders
+    check("creator default: extract into artist folders",
+          extract_into_folders({}) and extract_into_folders({"extract_into_folders": True}))
+    check("creator opt-out: _extracted review folder",
+          not extract_into_folders({"extract_into_folders": False}))
+
+
+def t_password_detect():
+    """Real encrypted archives are recognised: rar with encrypted files (-p) and
+    encrypted headers (-hp) via UnRAR, zip via its member flag. The rar half needs
+    WinRAR's Rar.exe to build the fixtures and is skipped without it."""
+    import subprocess
+    import zipfile
+    from backend import pawchive_extract as px
+    d = tempfile.mkdtemp(prefix="pawpw_")
+    src = os.path.join(d, "a.txt")
+    with open(src, "w") as f:
+        f.write("hi")
+    plain = os.path.join(d, "plain.zip")
+    with zipfile.ZipFile(plain, "w") as z:
+        z.write(src, "a.txt")
+    check("pw: plain zip not protected", px.is_password_protected(plain) is False)
+    check("pw: plain zip extracts", px.extract_to_temp(plain, tempfile.mkdtemp()) is True)
+    rar = next((p for p in (r"C:\Program Files\WinRAR\Rar.exe",
+                            r"C:\Program Files (x86)\WinRAR\Rar.exe") if os.path.isfile(p)), None)
+    if not rar or not px.unrar_available():
+        print("  (skip: WinRAR not installed — rar password checks)")
+        return
+    for flag, label in (("-psecret", "encrypted files"), ("-hpsecret", "encrypted headers"),
+                        (None, "plain")):
+        out = os.path.join(d, f"{label.replace(' ', '_')}.rar")
+        subprocess.run([rar, "a", "-idq", "-ep"] + ([flag] if flag else []) + [out, src],
+                       check=True, stdin=subprocess.DEVNULL)
+        want = flag is not None
+        check(f"pw: rar {label} detected={want}", px.is_password_protected(out) is want)
+        res = px.extract_to_temp(out, tempfile.mkdtemp())
+        check(f"pw: rar {label} extract -> {'PASSWORD' if want else 'True'}",
+              res == (px.PASSWORD if want else True), res)
+        if want:
+            # The extraction path on its own (no pre-check) must also say PASSWORD,
+            # promptly, instead of waiting on a prompt.
+            check(f"pw: unrar -p- reports {label}",
+                  px._extract_rar(out, tempfile.mkdtemp()) == px.PASSWORD)
 
 
 def t_extract_restore():
@@ -827,7 +899,7 @@ def t_zip_encoding():
 def main():
     print("Running pawchive offline tests...")
     for t in (t_urls, t_parse_media, t_links_classify, t_filenames, t_manifest_merge,
-              t_extract, t_extract_review, t_extract_restore, t_resolved_and_skip, t_preview_state, t_zip_encoding,
+              t_extract, t_extract_review, t_password_detect, t_extract_restore, t_resolved_and_skip, t_preview_state, t_zip_encoding,
               t_resolved_ext_skipped, t_dismissed_not_refetched,
               t_deferred_attachment, t_deferred_dismissed):
         try:

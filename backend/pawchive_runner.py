@@ -91,6 +91,10 @@ LATEST_DIRNAME = "_latest"
 # obvious at a glance and can be dragged into place or deleted. Once unpacked there
 # the archive counts as handled: sorting or deleting its contents never re-fetches it.
 EXTRACTED_DIRNAME = "_extracted"
+# Password-protected archives can't be unpacked, whatever the creator's setting:
+# they are moved, whole, into <artist>/_extracted/Password Protected/ to be opened
+# by hand — never left among (or unpacked into) the real year folders.
+PASSWORD_DIRNAME = "Password Protected"
 
 
 # The AIMD pacer now lives in backend.rate_limit so the coomerfans bot-guard
@@ -1634,7 +1638,11 @@ class PawchiveRunner:
         media_n = other_n = 0
         try:
             os.makedirs(tmp, exist_ok=True)
-            if not pawchive_extract.extract_to_temp(archive_path, tmp):
+            result = pawchive_extract.extract_to_temp(archive_path, tmp)
+            if result == pawchive_extract.PASSWORD:
+                self._set_aside_password(archive_path, entry)
+                return
+            if not result:
                 self._info(f"Could not extract {os.path.basename(archive_path)} "
                            f"(unsupported/failed) — left in place")
                 return
@@ -1703,6 +1711,25 @@ class PawchiveRunner:
             self._info(f"extract failed for {os.path.basename(archive_path)}: {e}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def _set_aside_password(self, archive_path, entry):
+        """Move a password-protected archive into _extracted/Password Protected/
+        (collision-safe) and mark it handled, so it is neither retried nor
+        downloaded again — like anything else in the review folder."""
+        folder = os.path.join(self._write_root, EXTRACTED_DIRNAME, PASSWORD_DIRNAME)
+        base = os.path.basename(archive_path)
+        with self._fname_lock:
+            dest, n = os.path.join(folder, base), 0
+            while dest in self._claimed or os.path.exists(dest):
+                n += 1
+                dest = os.path.join(folder, add_index_suffix(base, n))
+            self._claimed.add(dest)
+        os.makedirs(folder, exist_ok=True)
+        shutil.move(archive_path, dest)
+        if self._archive:
+            self._archive.set_extracted(entry, [os.path.relpath(dest, self._write_root)])
+        self._info(f"{base} is password-protected — moved to "
+                   f"{EXTRACTED_DIRNAME}\\{PASSWORD_DIRNAME}\\ to open by hand")
 
     def _member_outputs(self, dt, stem, member):
         """Where extracting one archive member (its path inside the archive) puts

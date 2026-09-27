@@ -30,6 +30,13 @@ _WINRAR_DIRS = (
 # the run forever.
 _EXTRACT_TIMEOUT = 1800  # seconds
 
+# extract_to_temp's result for an archive that needs a password. Distinct from a
+# plain failure: such a pack is set aside for the user rather than retried.
+PASSWORD = "password"
+
+# UnRAR's exit code for a missing/wrong password (RARX_BADPWD) when run with -p-.
+_UNRAR_BADPWD = 11
+
 
 def _ext(name):
     return os.path.splitext(name)[1].lstrip(".").lower()
@@ -70,11 +77,42 @@ def unrar_available():
 
 
 def _run(cmd):
+    """Run a tool with no stdin (so a password prompt can never wait on it);
+    the CompletedProcess, or None if it couldn't be run or timed out."""
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=_EXTRACT_TIMEOUT)
-        return r.returncode == 0
+        return subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL,
+                              timeout=_EXTRACT_TIMEOUT)
     except Exception:
-        return False
+        return None
+
+
+def is_password_protected(path):
+    """True if the archive needs a password, False if it doesn't, None if that
+    can't be told up front (7z/tar-family packs are caught during extraction).
+
+    zip: any member with the encryption flag (bit 0). rar: UnRAR's technical
+    listing with -p- (never prompt) — RAR5 encrypted *headers* can't even be listed
+    (exit 11), encrypted *files* list with 'Flags: encrypted'. Checked against real
+    Rar.exe -p / -hp archives."""
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as zf:
+                return any(zi.flag_bits & 0x1 for zi in zf.infolist())
+        if _ext(path) == "rar":
+            exe = _resolve_unrar()
+            if not exe:
+                return None
+            r = _run([exe, "lt", "-p-", path])
+            if r is None:
+                return None
+            if r.returncode == _UNRAR_BADPWD:
+                return True
+            out = (r.stdout or b"").decode("utf-8", "replace").lower()
+            return any(line.strip().startswith("flags:") and "encrypted" in line
+                       for line in out.splitlines())
+    except Exception:
+        return None
+    return None
 
 
 def _looks_japanese(s):
@@ -174,9 +212,23 @@ def _extract_rar(path, dest):
     exe = _resolve_unrar()
     if not exe:
         return False
-    # x = extract with full paths; -o+ overwrite; -y assume yes; -idq quiet.
+    # x = extract with full paths; -o+ overwrite; -y assume yes; -idq quiet;
+    # -p- never ask for a password (an encrypted pack exits 11 instead of waiting).
     # Trailing separator tells UnRAR the target is a directory.
-    return _run([exe, "x", "-o+", "-y", "-idq", path, dest + os.sep])
+    r = _run([exe, "x", "-o+", "-y", "-idq", "-p-", path, dest + os.sep])
+    if r is None:
+        return False
+    if r.returncode == _UNRAR_BADPWD:
+        return PASSWORD
+    return r.returncode == 0
+
+
+def _resolve_bsdtar():
+    """Windows' own tar.exe (bsdtar/libarchive, reads 7z/zip/rar too) before
+    whatever 'tar' PATH has first: from a Git Bash shell that is GNU tar, which
+    only reads tarballs."""
+    sys_tar = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tar.exe")
+    return sys_tar if os.path.isfile(sys_tar) else shutil.which("tar")
 
 
 def _extract_tar(path, dest):
@@ -184,14 +236,20 @@ def _extract_tar(path, dest):
     name arrives as '??????' and fails to open. Feed the archive on stdin and set
     the target as the working directory (both Unicode-safe) instead of naming
     either on the command line."""
-    exe = shutil.which("tar")
+    exe = _resolve_bsdtar()
     if not exe:
         return False
     try:
         with open(path, "rb") as fh:
             r = subprocess.run([exe, "-xf", "-"], stdin=fh, cwd=dest,
                                capture_output=True, timeout=_EXTRACT_TIMEOUT)
-        return r.returncode == 0
+        if r.returncode == 0:
+            return True
+        # libarchive: "Couldn't read passphrase" / "...encrypted..." on stderr.
+        err = (r.stderr or b"").decode("utf-8", "replace").lower()
+        if "passphrase" in err or "encrypt" in err or "password" in err:
+            return PASSWORD
+        return False
     except Exception:
         return False
 
@@ -252,10 +310,13 @@ def list_zip_remote(session, url, timeout=30):
 def extract_to_temp(archive_path, dest_dir):
     """Unpack ``archive_path`` into the (already existing) ``dest_dir``.
 
-    Returns True on success, False if the format isn't supported here or the
+    Returns True on success, PASSWORD if the archive needs a password (nothing
+    usable was extracted), or False if the format isn't supported here or the
     extraction failed. Never raises out — a False result just means 'leave the
     archive in place'."""
     try:
+        if is_password_protected(archive_path):
+            return PASSWORD
         if zipfile.is_zipfile(archive_path):
             return _extract_zip(archive_path, dest_dir)
         if _ext(archive_path) == "rar":

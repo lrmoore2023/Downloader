@@ -7,8 +7,6 @@ const Settings = {
     libraryRoot: '',
     concurrency: 5,
     pawConcurrency: 6,
-    pawExtract: true,
-    pawExtractIntoLibrary: true,
     cookiesPath: '',
     cookiesBrowser: '',
     authMethod: 'file',
@@ -25,8 +23,6 @@ function loadSettingsFromState(state) {
     Settings.libraryRoot = state.library_root || '';
     Settings.concurrency = state.cf_concurrency || 5;
     Settings.pawConcurrency = state.pawchive_concurrency || 6;
-    Settings.pawExtract = state.pawchive_extract !== false;
-    Settings.pawExtractIntoLibrary = state.pawchive_extract_into_library !== false;
     Settings.cookiesPath = state.cookies_path || '';
     Settings.cookiesBrowser = state.cookies_browser || '';
     Settings.authMethod = state.auth_method || 'file';
@@ -46,11 +42,6 @@ function loadSettingsFromState(state) {
         pawEl.value = Settings.pawConcurrency;
         document.getElementById('setPawConcurrencyVal').textContent = `${Settings.pawConcurrency} downloads at once`;
     }
-    const pawExtractEl = document.getElementById('setPawExtract');
-    if (pawExtractEl) pawExtractEl.checked = Settings.pawExtract;
-    const pawIntoEl = document.getElementById('setPawExtractInto');
-    if (pawIntoEl) pawIntoEl.checked = Settings.pawExtractIntoLibrary;
-    syncPawExtractInto();
     const dbKeyEl = document.getElementById('setDerpiApiKey');
     if (dbKeyEl) dbKeyEl.value = Settings.derpibooruApiKey;
     const dcTokEl = document.getElementById('setDiscordToken');
@@ -81,8 +72,6 @@ function persistSettings() {
         library_root: Settings.libraryRoot,
         cf_concurrency: Settings.concurrency,
         pawchive_concurrency: Settings.pawConcurrency,
-        pawchive_extract: Settings.pawExtract,
-        pawchive_extract_into_library: Settings.pawExtractIntoLibrary,
         cookies_path: Settings.cookiesPath,
         cookies_browser: Settings.cookiesBrowser,
         auth_method: Settings.authMethod,
@@ -295,23 +284,6 @@ function setUpdatePawConcurrency() {
     document.getElementById('setPawConcurrencyVal').textContent = `${v} downloads at once`;
 }
 
-function setUpdatePawExtract() {
-    Settings.pawExtract = document.getElementById('setPawExtract').checked;
-    syncPawExtractInto();
-    persistSettings();
-}
-
-function setUpdatePawExtractInto() {
-    Settings.pawExtractIntoLibrary = document.getElementById('setPawExtractInto').checked;
-    persistSettings();
-}
-
-// "Into the year folders" only means something while auto-extract is on.
-function syncPawExtractInto() {
-    const el = document.getElementById('setPawExtractInto');
-    if (el) el.disabled = !Settings.pawExtract;
-}
-
 // ── Twitter auth (cookies) ──────────────────────────────────────
 
 function setAuthMethod(method) {
@@ -425,6 +397,7 @@ function openConfigure() {
     document.getElementById('cfgDest').value = currentCreator.destination || '';
     setCfgType(currentCreator.category, currentCreator.subcategory);
     cfgSetFetch(currentCreator.fetch);
+    document.getElementById('cfgExtractInto').checked = currentCreator.extract_into_folders !== false;
     const r = currentCreator.latest_range || {};
     document.getElementById('cfgRangeStart').value = (r.start != null) ? r.start : '';
     document.getElementById('cfgRangeEnd').value = (r.end != null) ? r.end : '';
@@ -440,6 +413,7 @@ function openNewCreator() {
     document.getElementById('cfgDest').value = '';
     setCfgType('', '');
     cfgSetFetch(null);
+    document.getElementById('cfgExtractInto').checked = true;
     document.getElementById('cfgRangeStart').value = '';
     document.getElementById('cfgRangeEnd').value = '';
     document.getElementById('cfgDeleteBtn').style.display = 'none';
@@ -690,6 +664,7 @@ async function cfgSave() {
         // Type is derived from the destination folder by the backend — not sent.
         destination,
         fetch: fetchPrefs,
+        extract_into_folders: document.getElementById('cfgExtractInto').checked,
         links: cfgLinksData.map(l => ({ url: l.url, tag: l.tag || '' })),
         // Saved Fetch Latest range (blank sides = open/all). Backend cleans + orders it.
         latest_range: { start: rangeStart || null, end: rangeEnd || null },

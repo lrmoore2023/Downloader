@@ -59,6 +59,14 @@ def fetch_prefs(creator):
             "links": bool(f.get("links", True))}
 
 
+def extract_into_folders(creator):
+    """The creator's "Put Extracted Files in Artist Folders" choice. Archives are
+    always unpacked; True sorts the contents into the artist's year folders, False
+    into <artist>/_extracted/ for review. Absent (every pre-feature record) = True,
+    which is how extraction always behaved."""
+    return (creator or {}).get("extract_into_folders", True) is not False
+
+
 def is_track_only(creator):
     """True when nothing downloadable is enabled — the creator only tracks
     external links (and may have no destination folder at all)."""
@@ -172,17 +180,12 @@ class CreatorRunner:
     """Runs a batch of links for one creator. Mirrors the per-engine public
     contract (run/cancel/is_running + downloaded/skipped/error counters)."""
 
-    def __init__(self, workers=5, pawchive_workers=None, pawchive_extract=True,
-                 pawchive_extract_into_library=True):
+    def __init__(self, workers=5, pawchive_workers=None):
         self.workers = workers
         # pawchive has its own (lower) concurrency knob because its CDN is behind
         # DDoS-Guard, which rate-limits on connection count; coomerfans tolerates the
         # full `workers`. Falls back to `workers` when unset.
         self.pawchive_workers = pawchive_workers
-        # Auto-extract downloaded archives (zip/rar) into the library.
-        self.pawchive_extract = pawchive_extract
-        # ...straight into the year folders, or into <dest>/_extracted/ for review.
-        self.pawchive_extract_into_library = pawchive_extract_into_library
         self.downloaded_count = 0
         self.skipped_count = 0
         self.error_count = 0
@@ -395,8 +398,7 @@ class CreatorRunner:
         # API throttle, so `workers` only sets file-download concurrency against the
         # DDoS-Guarded CDN — use the pawchive-specific (lower) knob when set.
         runner = PawchiveRunner(workers=self.pawchive_workers or self.workers,
-                                extract=self.pawchive_extract,
-                                extract_into_library=self.pawchive_extract_into_library)
+                                extract_into_library=extract_into_folders(creator))
         self._current = runner
         stats = {}
         runner.run(

@@ -499,6 +499,19 @@
                 </div>
                 <div class="field-hint" id="cfgLinkPreview" style="min-height: 16px;"></div>
 
+                <div class="section-title" style="margin-top: 14px;">Archives (zip / rar)</div>
+                <div class="form-row">
+                    <span class="form-label">Extract</span>
+                    <label class="checkbox-option">
+                        <input type="checkbox" id="cfgExtractInto" checked>
+                        <span class="checkbox-label">Put Extracted Files in Artist Folders</span>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Pawchive archives are always unzipped. Checked: images go to Images\&lt;year&gt; and videos to &lt;year&gt; in this creator's folder. Unchecked: they go to an <b>_extracted</b> folder inside it instead, laid out the same way, so you can see what came out of an archive and drag it into place or delete it (a deleted pack is not downloaded again). Password-protected archives always go to <b>_extracted\Password Protected</b> to open by hand.</span>
+                </div>
+
                 <div class="section-title" style="margin-top: 14px;">Fetch Latest range</div>
                 <div class="form-row">
                     <span class="form-label">Years</span>
@@ -645,28 +658,6 @@
                 <div class="form-row">
                     <span class="form-label"></span>
                     <span class="field-hint">Pawchive simultaneous downloads. Its CDN caps each connection's speed, so more parallel downloads = faster overall (~6 is the sweet spot). Lower it only if you see repeated rate-limit blocks.</span>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">Auto-extract</span>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="setPawExtract" onchange="setUpdatePawExtract()">
-                        <span>Unzip downloaded archives (zip/rar) into the library</span>
-                    </label>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">After a pack downloads, sort its images into Images/&lt;year&gt; and videos into &lt;year&gt; (named like your other files); any other files are kept together in a folder named after the archive. The original archive is deleted once extracted.</span>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="setPawExtractInto" onchange="setUpdatePawExtractInto()">
-                        <span>Put extracted files straight into the artist's year folders</span>
-                    </label>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Unchecked: extracted files go to a separate <b>_extracted</b> folder inside the artist's folder, laid out the same way (_extracted\&lt;year&gt;, _extracted\Images\&lt;year&gt;), so you can see what came out of a zip/rar and drag it into place or delete it. A pack unpacked there is never downloaded again, even if you delete its files.</span>
                 </div>
                 <div class="form-row">
                     <span class="form-label">Cloudflare access</span>
