@@ -693,6 +693,12 @@
                     <span class="field-hint">PMV ▸ Latest ▸ <b>Check for new</b> reads what's new from the creators you follow on each site, so only those creators get fetched. A site you're not signed in to still works — its creators are just checked one by one (slower). Sign-ins are kept locally — never copied to the archive folder.</span>
                 </div>
                 <div class="form-row">
+                    <span class="form-label">rule34video</span>
+                    <span id="pmvAcct-rule34video" class="status-badge status-idle">Checking…</span>
+                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('rule34video')">Test</button>
+                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('rule34video')">Forget</button>
+                </div>
+                <div class="form-row">
                     <span class="form-label">pawchive</span>
                     <span id="pmvAcct-pawchive" class="status-badge status-idle">Checking…</span>
                     <button class="btn btn-secondary btn-sm" id="pmvAcctBtn-pawchive" onclick="pmvAccountLogin('pawchive')">Sign in</button>
@@ -708,7 +714,7 @@
                 </div>
                 <div class="form-row">
                     <span class="form-label"></span>
-                    <span class="field-hint">Sign in opens pawchive in a small window — log in normally (it closes by itself once you're in). rule34video needs nothing: it allows only one session per account, so its creators are always checked one by one rather than signing your browser out. PMVHaven uses a personal API key instead: create one at <code>pmvhaven.com/api-keys</code> and paste it here. iwara uses the login above.</span>
+                    <span class="field-hint">Sign in opens pawchive in a small window — log in normally (it closes by itself once you're in). rule34video allows only one session per account, so the app shares your browser's instead of logging in: with the PMV Prefix Chrome extension, click its toolbar icon ▸ <b>Send rule34video sign-in</b> while the app is open. Without it, rule34video creators are checked one by one. PMVHaven uses a personal API key instead: create one at <code>pmvhaven.com/api-keys</code> and paste it here. iwara uses the login above.</span>
                 </div>
 
                 <div class="section-title" style="margin-top: 16px;">Pawchive Link Filters</div>

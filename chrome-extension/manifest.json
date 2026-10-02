@@ -1,15 +1,22 @@
 {
   "manifest_version": 3,
   "name": "PMV Prefix",
-  "version": "1.1.0",
-  "description": "On a video page, one click copies the filename prefix \"SITE - YYYY.MM.DD - \" (R34, Iwara, HMVMania, PMVHaven, Patreon via pawchive), numbering same-day uploads.",
-  "permissions": ["clipboardWrite"],
+  "version": "1.2.0",
+  "description": "On a video page, one click copies the filename prefix \"SITE - YYYY.MM.DD - \" (R34, Iwara, HMVMania, PMVHaven, Patreon via pawchive), numbering same-day uploads. Its toolbar popup can also share your rule34video sign-in with the Downloader app (rule34video allows one session per account).",
+  "permissions": [
+    "clipboardWrite",
+    "cookies"
+  ],
   "host_permissions": [
     "https://api.iwara.tv/*",
     "https://pmvhaven.com/*",
-    "https://pawchive.pw/*"
+    "https://pawchive.pw/*",
+    "https://rule34video.com/*",
+    "http://127.0.0.1:47834/*"
   ],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -24,9 +31,17 @@
         "https://pawchive.pw/*",
         "https://pawchive.st/*"
       ],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "action": {
+    "default_title": "PMV Prefix",
+    "default_popup": "popup.html"
+  }
 }

@@ -26,6 +26,7 @@ from backend.pawchive_scraper import (
 from backend.pawchive_links import PawchiveLinks
 from backend import pawchive_cf
 from backend import site_login
+from backend.ext_bridge import ExtBridge
 from backend.derpibooru_scraper import (
     parse_creator_url as db_parse_creator_url, query_label as db_query_label,
     search_url as db_search_url,
@@ -142,11 +143,17 @@ class Api:
         self._pmv_runner = None
         self._pmv_thread = None
         self._pmv_cancel = threading.Event()
+        # Localhost receiver for the Chrome extension's "send sign-in" button.
+        self._ext_bridge = ExtBridge(self._on_ext_session)
 
     def set_window(self, window):
         self._window = window
         try:
             self._media.start()
+        except Exception:
+            pass
+        try:
+            self._ext_bridge.start()
         except Exception:
             pass
         self._ensure_backup_seed()
@@ -919,6 +926,37 @@ class Api:
                 upd["pawchive_cf_captured_at"] = now
             self.save_state(upd)
         return res
+
+    def _on_ext_session(self, platform, payload):
+        """The Chrome extension handed over the browser's own session for a site
+        (rule34video: one session per account, so the app must share the
+        browser's rather than log in itself). Kept only if a members-only request
+        made with it is let in. Runs on the bridge's handler thread."""
+        if platform not in site_login.SITES:
+            return {"ok": False, "message": f"unsupported site {platform!r}"}
+        rows = site_login.site_cookies(payload.get("cookies") or [], platform)
+        if not rows:
+            return {"ok": False, "message": "No cookies for that site — are you signed in there?"}
+        fd, tmp = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        try:
+            site_login.write_cookies(rows, tmp)
+            ok, msg = site_login.verify(platform, tmp)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        if not ok:
+            return {"ok": False, "message": "The app couldn't use that session" + (f" ({msg})" if msg else "")}
+        cfg = site_login.SITES[platform]
+        path = site_login.write_cookies(rows, site_login.default_cookies_path(platform),
+                                        f"— {platform} session from Chrome")
+        self.save_state({cfg["state_key"]: path,
+                         cfg["signed_in_key"]: datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        self._push_js("onPmvAccountStatus", {"platform": platform, "message": "Signed in (from Chrome)",
+                                             "ok": True})
+        return {"ok": True, "message": "Downloader now shares this sign-in"}
 
     def pmv_account_logout(self, platform):
         """Forget a site's sign-in. pawchive keeps its Cloudflare clearance."""

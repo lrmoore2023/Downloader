@@ -21,10 +21,21 @@ Without it two files from the same day would be named identically and lose
 their order. A day with a single video is left bare. The number matches the one
 the PMV tab shows for the same video.
 
-Nothing is sent anywhere. The only network calls are to the site you are on
+Nothing is sent anywhere unless you ask (see *Sharing the rule34video sign-in*
+below). The only network calls are to the site you are on
 (iwara's and PMVHaven's own JSON APIs, to read the upload date on those
 single-page apps, and the uploader's listing for the day count). No data is
 stored.
+
+## Sharing the rule34video sign-in
+
+The Downloader's PMV ▸ **Check for new** reads rule34video's subscriptions feed,
+which needs a signed-in session — but rule34video allows one session per
+account, so the app logging in would sign Chrome out (and the other way round).
+Instead, click the extension's toolbar icon ▸ **Send rule34video sign-in** while
+the app is open: it reads Chrome's rule34video.com cookies (that site only) and
+posts them to the app on `127.0.0.1:47834`, nowhere else. Both then share one
+session. Do it again if the app later reports the sign-in expired.
 
 ## Install (unpacked)
 

@@ -88,3 +88,61 @@ def test_nas_payload_never_carries_feed_credentials():
     payload = api._nas_backup_payload(state)
     text = repr(payload)
     assert "pmvh_secret" not in text and "r34video_cookies_path" not in text
+
+
+# ── extension bridge ────────────────────────────────────────────────
+
+def _free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def test_bridge_only_accepts_extension_origin():
+    import json as _json
+    import urllib.request
+    import urllib.error
+    from backend.ext_bridge import ExtBridge
+    got = []
+    b = ExtBridge(lambda platform, payload: (got.append((platform, payload)) or {"ok": True, "message": "k"}),
+                  port=_free_port())
+    assert b.start()
+    try:
+        url = f"http://127.0.0.1:{b.port}/pmv/session/rule34video"
+        body = _json.dumps({"cookies": [{"name": "a", "value": "b"}]}).encode()
+
+        def post(origin):
+            req = urllib.request.Request(url, data=body, method="POST",
+                                         headers={"Content-Type": "application/json", **({"Origin": origin} if origin else {})})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status, _json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, None
+
+        assert post(None)[0] == 403
+        assert post("https://evil.example")[0] == 403
+        code, res = post("chrome-extension://abc")
+        assert code == 200 and res["ok"]
+        assert got == [("rule34video", {"cookies": [{"name": "a", "value": "b"}]})]
+    finally:
+        b.stop()
+
+
+def test_ext_session_rejected_unless_verified(tmp_path, monkeypatch):
+    from backend.api import Api
+    api = Api.__new__(Api)
+    saved = {}
+    api.save_state = lambda d: saved.update(d)
+    api._push_js = lambda *a: None
+    monkeypatch.setattr(sl, "default_cookies_path", lambda p: str(tmp_path / "r.txt"))
+    payload = {"cookies": [_c("kt_member", "m")]}
+    monkeypatch.setattr(sl, "verify", lambda *a, **k: (False, "Not signed in"))
+    assert not api._on_ext_session("rule34video", payload)["ok"] and not saved
+    monkeypatch.setattr(sl, "verify", lambda *a, **k: (True, "Signed in"))
+    assert api._on_ext_session("rule34video", payload)["ok"]
+    assert saved["r34video_cookies_path"].endswith("r.txt") and saved["r34video_signed_in_at"]
+    assert not api._on_ext_session("rule34video", {"cookies": [_c("x", "y", ".other.com")]})["ok"]
