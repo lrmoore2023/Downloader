@@ -25,6 +25,7 @@ from backend.pawchive_scraper import (
 )
 from backend.pawchive_links import PawchiveLinks
 from backend import pawchive_cf
+from backend import site_login
 from backend.derpibooru_scraper import (
     parse_creator_url as db_parse_creator_url, query_label as db_query_label,
     search_url as db_search_url,
@@ -214,6 +215,12 @@ class Api:
             "iwara_email": "",
             "iwara_password": "",
             "iwara_token": "",
+            # Signed-in sessions for the PMV "Check for new" feeds (site_login).
+            # Credentials: local only, never in the NAS payload (whitelisted).
+            "r34video_cookies_path": "",
+            "r34video_signed_in_at": "",
+            "pawchive_signed_in_at": "",
+            "pmvhaven_api_key": "",
             "window": {},
         }
 
@@ -818,6 +825,130 @@ class Api:
                                             .isoformat(timespec="seconds"),
             })
         return res
+
+    # ── PMV feed accounts (site_login) ──────────────────────────────
+
+    def pmv_accounts_status(self):
+        """Saved sign-in per feed site, for the Settings ▸ PMV accounts rows.
+        Cheap (no network) — `pmv_account_test` does the live check."""
+        state = self.load_state()
+        r34_path = state.get("r34video_cookies_path") or ""
+        paw_path = state.get("pawchive_cookies_path") or ""
+        iw_status = self.iwara_login_status()
+        return {
+            "rule34video": {"signed_in": bool(r34_path and os.path.isfile(r34_path)
+                                              and state.get("r34video_signed_in_at")),
+                            "at": state.get("r34video_signed_in_at") or ""},
+            "pawchive": {"signed_in": bool(paw_path and os.path.isfile(paw_path)
+                                           and state.get("pawchive_signed_in_at")),
+                         "at": state.get("pawchive_signed_in_at") or ""},
+            "pmvhaven": {"signed_in": bool((state.get("pmvhaven_api_key") or "").strip()), "at": ""},
+            "iwara": {"signed_in": bool(iw_status.get("configured")), "at": ""},
+        }
+
+    def pmv_account_test(self, platform):
+        """Live check of one site's saved sign-in. {ok: True|False|None, message}."""
+        state = self.load_state()
+        if platform == "pmvhaven":
+            key = (state.get("pmvhaven_api_key") or "").strip()
+            if not key:
+                return {"ok": False, "message": "No API key saved"}
+            try:
+                r = pmvh.make_session(api_key=key).get(
+                    pmvh.API + "/notifications", params={"page": 1, "limit": 1}, timeout=(15, 30))
+            except Exception as e:
+                return {"ok": None, "message": f"{e.__class__.__name__}: {e}"}
+            if r.status_code == 200:
+                return {"ok": True, "message": "API key works"}
+            if r.status_code in (401, 403):
+                return {"ok": False, "message": "API key rejected"}
+            return {"ok": None, "message": f"HTTP {r.status_code}"}
+        if platform == "iwara":
+            return self.iwara_test_login()
+        if platform not in site_login.SITES:
+            return {"ok": False, "message": f"unknown site {platform!r}"}
+        path = state.get(site_login.SITES[platform]["state_key"]) or ""
+        if not (path and os.path.isfile(path)):
+            return {"ok": False, "message": "Not signed in"}
+        ok, msg = site_login.verify(platform, path, state.get("pawchive_user_agent") or None
+                                    if platform == "pawchive" else None)
+        return {"ok": ok, "message": msg}
+
+    def pmv_account_login(self, platform):
+        """Open the site's login page in an embedded window; once the user is
+        signed in (verified by a members-only request) keep the cookies. Runs on
+        a js_api worker thread, like connect_pawchive."""
+        if platform not in site_login.SITES:
+            return {"ok": False, "message": f"unknown site {platform!r}"}
+        if self._window is None:
+            return {"ok": False, "message": "App window not ready"}
+        cfg = site_login.SITES[platform]
+
+        def _status(msg):
+            self._push_js("onPmvAccountStatus", {"platform": platform, "message": msg})
+
+        closed = threading.Event()
+        try:
+            child = webview.create_window(f"Sign in to {cfg['label']}", url=cfg["login_url"],
+                                          width=520, height=720)
+            try:
+                child.events.closed += lambda *a: closed.set()
+            except Exception:
+                pass
+        except Exception as e:
+            return {"ok": False, "message": f"Couldn't open browser window: {e}"}
+        try:
+            res = site_login.capture_login(child, platform, on_status=_status,
+                                           is_closed=closed.is_set)
+        except Exception as e:
+            res = {"ok": False, "message": f"Sign-in failed: {e}"}
+        finally:
+            if not closed.is_set():
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+        if res.get("ok"):
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            upd = {cfg["state_key"]: res.get("cookies_path") or "", f"{platform}_signed_in_at": now}
+            if platform == "pawchive":
+                # The login window also cleared Cloudflare: this jar + UA now back
+                # every pawchive request, exactly like a Connect.
+                upd["pawchive_user_agent"] = res.get("user_agent") or ""
+                upd["pawchive_cf_captured_at"] = now
+            self.save_state(upd)
+        return res
+
+    def pmv_account_logout(self, platform):
+        """Forget a site's sign-in. pawchive keeps its Cloudflare clearance."""
+        state = self.load_state()
+        if platform == "pmvhaven":
+            self.save_state({"pmvhaven_api_key": ""})
+            return {"ok": True}
+        if platform not in site_login.SITES:
+            return {"ok": False, "message": f"unknown site {platform!r}"}
+        path = state.get(site_login.SITES[platform]["state_key"]) or ""
+        if platform == "pawchive":
+            if path and os.path.isfile(path):
+                from http.cookiejar import MozillaCookieJar
+                jar = MozillaCookieJar()
+                try:
+                    jar.load(path, ignore_discard=True, ignore_expires=True)
+                    keep = [{"name": c.name, "value": c.value, "domain": c.domain, "path": c.path,
+                             "secure": c.secure, "expires": ""}
+                            for c in jar if c.name.startswith(("cf_", "__cf", "__ddg"))]
+                    site_login.write_cookies(keep, path, "— pawchive (signed out)")
+                except Exception:
+                    pass
+            self.save_state({"pawchive_signed_in_at": ""})
+            return {"ok": True}
+        if path and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self.save_state({site_login.SITES[platform]["state_key"]: "", f"{platform}_signed_in_at": ""})
+        return {"ok": True}
 
     # ── Window geometry ─────────────────────────────────────────────
 

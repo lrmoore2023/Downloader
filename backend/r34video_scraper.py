@@ -19,6 +19,7 @@ stock `requests` session.
 """
 
 import html as _html
+import os
 import re
 import time
 
@@ -70,7 +71,9 @@ def video_id_from_url(url):
     return m.group(1) if m else None
 
 
-def make_session():
+def make_session(cookies_path=None):
+    """Plain session; `cookies_path` (a cookies.txt from site_login) makes it a
+    signed-in one, which only the subscriptions feed needs."""
     s = requests.Session()
     s.headers.update({
         "User-Agent": DEFAULT_UA,
@@ -78,6 +81,9 @@ def make_session():
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": BASE + "/",
     })
+    if cookies_path and os.path.isfile(cookies_path):
+        from backend.pawchive_scraper import _load_cookies
+        _load_cookies(s, cookies_path)
     return s
 
 

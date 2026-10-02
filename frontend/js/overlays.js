@@ -32,6 +32,7 @@ function loadSettingsFromState(state) {
     Settings.discordTokenType = state.discord_token_type || 'user';
     Settings.iwaraEmail = state.iwara_email || '';
     Settings.iwaraPassword = state.iwara_password || '';
+    Settings.pmvhavenKey = state.pmvhaven_api_key || '';
 
     document.getElementById('setArchiveDir').value = Settings.archiveDir;
     document.getElementById('setLibraryRoot').value = Settings.libraryRoot;
@@ -52,6 +53,8 @@ function loadSettingsFromState(state) {
     if (iwEmailEl) iwEmailEl.value = Settings.iwaraEmail;
     const iwPassEl = document.getElementById('setIwaraPassword');
     if (iwPassEl) iwPassEl.value = Settings.iwaraPassword;
+    const pmvhKeyEl = document.getElementById('setPmvhavenKey');
+    if (pmvhKeyEl) pmvhKeyEl.value = Settings.pmvhavenKey;
 
     setAuthMethod(Settings.authMethod);
     if (Settings.cookiesPath) {
@@ -81,6 +84,7 @@ function persistSettings() {
         discord_token_type: Settings.discordTokenType,
         iwara_email: Settings.iwaraEmail,
         iwara_password: Settings.iwaraPassword,
+        pmvhaven_api_key: Settings.pmvhavenKey,
     });
 }
 
@@ -115,6 +119,7 @@ function setUpdateIwaraCreds() {
     Settings.iwaraPassword = pass;
     persistSettings();
     refreshIwaraStatus();
+    refreshPmvAccounts();
 }
 
 function setIwaraBadge(cls, text) {
@@ -154,6 +159,7 @@ async function openSettings() {
     loadLinkFilters();
     refreshPawCfStatus();
     refreshIwaraStatus();
+    refreshPmvAccounts();
     try {
         const roots = await pywebview.api.list_library_roots();
         document.getElementById('setRootsInfo').textContent = roots.length
@@ -359,6 +365,71 @@ async function refreshPawCfStatus() {
         const s = await pywebview.api.pawchive_cf_status();
         setPawCfBadge(!!(s && s.connected), s && s.message, s && s.captured_at);
     } catch (e) { /* ignore */ }
+}
+
+// ── PMV feed accounts (Settings ▸ PMV feed accounts) ─────────────
+
+function setPmvAccountBadge(platform, ok, message) {
+    const badge = document.getElementById('pmvAcct-' + platform);
+    if (badge) {
+        badge.textContent = message;
+        badge.className = 'status-badge ' + (ok === true ? 'status-ok' : ok === false ? 'status-warn' : 'status-idle');
+    }
+    const btn = document.getElementById('pmvAcctBtn-' + platform);
+    if (btn && ok !== null) btn.textContent = ok ? 'Sign in again' : 'Sign in';
+}
+
+async function refreshPmvAccounts() {
+    try {
+        const s = await pywebview.api.pmv_accounts_status();
+        for (const p of ['rule34video', 'pawchive', 'pmvhaven']) {
+            const a = (s && s[p]) || {};
+            setPmvAccountBadge(p, !!a.signed_in,
+                a.signed_in ? (p === 'pmvhaven' ? 'Key saved' : 'Signed in') : (p === 'pmvhaven' ? 'Not set' : 'Not signed in'));
+        }
+    } catch (e) { /* ignore */ }
+}
+
+window.onPmvAccountStatus = function (d) {
+    if (d && d.platform && d.message) setPmvAccountBadge(d.platform, null, d.message);
+};
+
+async function pmvAccountLogin(platform) {
+    const btn = document.getElementById('pmvAcctBtn-' + platform);
+    if (btn) btn.disabled = true;
+    setPmvAccountBadge(platform, null, 'Opening…');
+    try {
+        const res = await pywebview.api.pmv_account_login(platform);
+        setPmvAccountBadge(platform, !!(res && res.ok), (res && res.message) || 'Sign-in failed');
+    } catch (e) {
+        setPmvAccountBadge(platform, false, 'Sign-in failed');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function pmvAccountTest(platform) {
+    setPmvAccountBadge(platform, null, 'Testing…');
+    try {
+        const res = await pywebview.api.pmv_account_test(platform);
+        setPmvAccountBadge(platform, res ? res.ok : null, (res && res.message) || '?');
+    } catch (e) {
+        setPmvAccountBadge(platform, null, 'Test failed');
+    }
+}
+
+async function pmvAccountLogout(platform) {
+    await pywebview.api.pmv_account_logout(platform);
+    refreshPmvAccounts();
+}
+
+function setUpdatePmvhavenKey() {
+    const el = document.getElementById('setPmvhavenKey');
+    const v = (el.value || '').trim();
+    if (v === (Settings.pmvhavenKey || '')) return;
+    Settings.pmvhavenKey = v;
+    persistSettings();
+    setTimeout(refreshPmvAccounts, 300);
 }
 
 async function connectPawchive() {

@@ -687,6 +687,37 @@
                     <span class="field-hint">Optional. iwara lists most videos without an account, but some uploads only show for logged-in users. Saved locally in <code>app_state.json</code> like the Discord token — never copied to the archive folder.</span>
                 </div>
 
+                <div class="section-title" style="margin-top: 16px;">PMV feed accounts</div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">PMV ▸ Latest ▸ <b>Check for new</b> reads what's new from the creators you follow on each site, so only those creators get fetched. A site you're not signed in to still works — its creators are just checked one by one (slower). Sign-ins are kept locally — never copied to the archive folder.</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">rule34video</span>
+                    <span id="pmvAcct-rule34video" class="status-badge status-idle">Checking…</span>
+                    <button class="btn btn-secondary btn-sm" id="pmvAcctBtn-rule34video" onclick="pmvAccountLogin('rule34video')">Sign in</button>
+                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('rule34video')">Test</button>
+                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('rule34video')">Sign out</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">pawchive</span>
+                    <span id="pmvAcct-pawchive" class="status-badge status-idle">Checking…</span>
+                    <button class="btn btn-secondary btn-sm" id="pmvAcctBtn-pawchive" onclick="pmvAccountLogin('pawchive')">Sign in</button>
+                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('pawchive')">Test</button>
+                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('pawchive')">Sign out</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">PMVHaven key</span>
+                    <input type="password" class="input-field" id="setPmvhavenKey" placeholder="pmvh_…"
+                           onchange="setUpdatePmvhavenKey()" onblur="setUpdatePmvhavenKey()">
+                    <span id="pmvAcct-pmvhaven" class="status-badge status-idle">Not set</span>
+                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('pmvhaven')">Test</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label"></span>
+                    <span class="field-hint">Sign in opens the site in a small window — log in normally (the window closes by itself once you're in). PMVHaven uses a personal API key instead: create one at <code>pmvhaven.com/api-keys</code> and paste it here. iwara uses the login above.</span>
+                </div>
+
                 <div class="section-title" style="margin-top: 16px;">Pawchive Link Filters</div>
                 <div class="field-hint" style="margin-bottom: 10px;">
                     Hide junk from the “Links needing attention” list. Enter a domain

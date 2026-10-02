@@ -40,3 +40,4 @@ gallery-dl/
 
 # PMV tracker manifests when no archive dir is set (metadata naming creators/videos)
 .pmv/
+.r34video_cookies.txt

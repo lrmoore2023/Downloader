@@ -71,7 +71,9 @@ def video_url(raw):
     return f"{SITE}/video/{slug}_{vid}" if slug else f"{SITE}/video/{vid}"
 
 
-def make_session():
+def make_session(api_key=None):
+    """Plain session; `api_key` (a personal `pmvh_…` key from /api-keys) signs
+    it in as the user, which the notifications feed needs."""
     s = requests.Session()
     s.headers.update({
         "User-Agent": DEFAULT_UA,
@@ -79,6 +81,8 @@ def make_session():
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": SITE + "/",
     })
+    if api_key:
+        s.headers["Authorization"] = f"Bearer {api_key.strip()}"
     return s
 
 
