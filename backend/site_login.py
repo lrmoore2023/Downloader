@@ -34,6 +34,7 @@ SITES = {
         "login_url": "https://rule34video.com/login/",
         "cookies_file": ".r34video_cookies.txt",
         "state_key": "r34video_cookies_path",
+        "signed_in_key": "r34video_signed_in_at",
     },
     "pawchive": {
         "label": "pawchive",
@@ -41,6 +42,7 @@ SITES = {
         "login_url": "https://pawchive.pw/account/login",
         "cookies_file": ".pawchive_cookies.txt",
         "state_key": "pawchive_cookies_path",
+        "signed_in_key": "pawchive_signed_in_at",
     },
 }
 
@@ -145,6 +147,13 @@ def capture_login(window, platform, cookies_path=None, timeout=300.0, poll=1.0,
             except Exception:
                 pass
 
+    def _ua():
+        try:
+            ua = window.evaluate_js("navigator.userAgent")
+            return ua.strip() if isinstance(ua, str) and ua.strip() else None
+        except Exception:
+            return None
+
     user_agent = None
     last_sig, last_check = None, 0.0
     deadline = time.monotonic() + max(10.0, float(timeout))
@@ -161,11 +170,7 @@ def capture_login(window, platform, cookies_path=None, timeout=300.0, poll=1.0,
         if rows and (sig != last_sig) and now - last_check >= verify_every:
             last_sig, last_check = sig, now
             if user_agent is None:
-                try:
-                    ua = window.evaluate_js("navigator.userAgent")
-                    user_agent = ua.strip() if isinstance(ua, str) and ua.strip() else None
-                except Exception:
-                    user_agent = None
+                user_agent = _ua()
             # Test the jar from a scratch file so a failed attempt never
             # clobbers a previously working sign-in.
             fd, tmp = tempfile.mkstemp(suffix=".txt")
@@ -179,6 +184,13 @@ def capture_login(window, platform, cookies_path=None, timeout=300.0, poll=1.0,
                 except OSError:
                     pass
             if ok:
+                # The page may have been mid-navigation when the UA was first
+                # asked for; pawchive's Cloudflare clearance is bound to it.
+                for _ in range(5):
+                    if user_agent:
+                        break
+                    time.sleep(0.5)
+                    user_agent = _ua()
                 write_cookies(rows, cookies_path, f"— {platform} sign-in")
                 _status("Signed in.")
                 return {"ok": True, "message": "Signed in", "cookies_path": cookies_path,

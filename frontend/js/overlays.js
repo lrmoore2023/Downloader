@@ -382,7 +382,7 @@ function setPmvAccountBadge(platform, ok, message) {
 async function refreshPmvAccounts() {
     try {
         const s = await pywebview.api.pmv_accounts_status();
-        for (const p of ['rule34video', 'pawchive', 'pmvhaven']) {
+        for (const p of ['pawchive', 'pmvhaven']) {
             const a = (s && s[p]) || {};
             setPmvAccountBadge(p, !!a.signed_in,
                 a.signed_in ? (p === 'pmvhaven' ? 'Key saved' : 'Signed in') : (p === 'pmvhaven' ? 'Not set' : 'Not signed in'));

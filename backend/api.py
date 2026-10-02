@@ -910,11 +910,12 @@ class Api:
                     pass
         if res.get("ok"):
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            upd = {cfg["state_key"]: res.get("cookies_path") or "", f"{platform}_signed_in_at": now}
+            upd = {cfg["state_key"]: res.get("cookies_path") or "", cfg["signed_in_key"]: now}
             if platform == "pawchive":
                 # The login window also cleared Cloudflare: this jar + UA now back
                 # every pawchive request, exactly like a Connect.
-                upd["pawchive_user_agent"] = res.get("user_agent") or ""
+                if res.get("user_agent"):
+                    upd["pawchive_user_agent"] = res["user_agent"]
                 upd["pawchive_cf_captured_at"] = now
             self.save_state(upd)
         return res
@@ -947,7 +948,8 @@ class Api:
                 os.remove(path)
             except OSError:
                 pass
-        self.save_state({site_login.SITES[platform]["state_key"]: "", f"{platform}_signed_in_at": ""})
+        cfg = site_login.SITES[platform]
+        self.save_state({cfg["state_key"]: "", cfg["signed_in_key"]: ""})
         return {"ok": True}
 
     # ── Window geometry ─────────────────────────────────────────────
