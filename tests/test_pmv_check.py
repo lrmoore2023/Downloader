@@ -75,7 +75,7 @@ class World:
     def root(self, cid):
         return str(self.tmp / "pmv" / cid)
 
-    def add(self, cid, platform, user_id, existing=(), service=None):
+    def add(self, cid, platform, user_id, existing=(), service=None, last_fetch=None):
         link = {"platform": platform, "user_id": user_id, "username": f"user{user_id}", "url": "u"}
         if service:
             link["service"] = service
@@ -84,7 +84,7 @@ class World:
         m = pt.new_manifest(platform, user_id)
         pt.merge(m, [{"id": v, "title": v, "url": v, "pos": i, "date": "2026-09-01"} for i, v in enumerate(existing)],
                  full=True, complete=True, now="2026-09-01T00:00:00+00:00")
-        m["last_fetch"] = "2026-09-01T00:00:00+00:00"
+        m["last_fetch"] = last_fetch or ago(hours=1)
         pt.save_manifest(pt.manifest_path(self.root(cid), key), m)
         self.site[key] = list(existing)
         return key
@@ -102,6 +102,7 @@ class World:
             fetched = [{"id": v, "title": v, "url": v, "pos": i, "date": "2026-10-04"}
                        for i, v in enumerate(reversed(self.site[key]))]
             pt.merge(m, fetched, full=False, complete=False)
+            m["last_fetch"] = iso(NOW)                       # as PmvRunner does
             pt.save_manifest(path, m)
         return {"errors": errors, "cancelled": False}
 
@@ -347,3 +348,83 @@ def test_parse_r34_feed_reads_cards():
     items = pf.parse_r34_feed(html, NOW)
     assert items[0]["video_id"] == "4634703" and items[0]["title"] == "Some title"
     assert items[0]["newest"] == iso(NOW - timedelta(days=2)) and items[0]["uploader_id"] == ""
+
+
+def test_link_fetched_before_the_feed_window_is_fetched_once(tmp_path):
+    """Live case 2026-10-02: a link last fetched Sep 20, uploads on Sep 23 and
+    Oct 1, feed window starting Oct 2 — the feed alone never shows them."""
+    w = World(tmp_path)
+    stale = w.add("pc_a", "iwara", "ua", ["v1"], last_fetch=ago(days=12))
+    fresh = w.add("pc_b", "iwara", "ub", ["v2"])
+    w.site[stale] += ["sep23", "oct1"]
+    src = lambda: FakeSource("iwara", [[item("iwara", "v2", "ub", ago(days=3))]], following=["ua", "ub"])
+    res = w.check({"iwara": src()}, state_since=SINCE)
+    assert w.jobs == [stale]
+    assert res["reasons"][f"pc_a|{stale}"] == "last fetched before the feed window"
+    m = pt.load_manifest(pt.manifest_path(w.root("pc_a"), stale), "iwara", "ua")
+    assert {"sep23", "oct1"} <= set(m["items"])
+    w.check({"iwara": src()})
+    assert w.jobs == []                                     # gap closed for good
+
+
+def test_pawchive_first_baseline_uses_the_links_last_fetch(tmp_path):
+    w = World(tmp_path)
+    a = w.add("pc_a", "pawchive", "1", ["x"], service="patreon", last_fetch=ago(days=12))
+    b = w.add("pc_b", "pawchive", "2", ["y"], service="patreon", last_fetch=ago(days=1))
+    favs = [{"service": "patreon", "id": "1", "updated": ago(days=5)},    # after a's fetch
+            {"service": "patreon", "id": "2", "updated": ago(days=3)}]    # before b's fetch
+    w.check({}, paw_fetch=lambda url: favs, state_since=SINCE)
+    assert w.jobs == [a]
+
+
+class DeepSource(FakeSource):
+    cheap_depth = True
+
+
+def test_cheap_feed_reads_back_to_the_stalest_creator_instead_of_fetching_each(tmp_path):
+    """The user's point: iwara's subscriptions feed already holds the older
+    uploads, so read further back rather than fetching every stale creator."""
+    w = World(tmp_path)
+    stale = w.add("pc_a", "iwara", "ua", ["v1"], last_fetch=ago(days=12))
+    quiet = w.add("pc_b", "iwara", "ub", ["v2"], last_fetch=ago(days=12))
+    w.site[stale] += ["oct1"]
+    pages = [[item("iwara", "today", "zz", ago(hours=2))],
+             [item("iwara", "oct1", "ua", ago(days=4))],          # older than `since`
+             [item("iwara", "v1", "ua", ago(days=13))]]           # older than any last fetch
+    src = DeepSource("iwara", pages, following=["ua", "ub"])
+    res = w.check({"iwara": src}, state_since=SINCE)
+    assert w.jobs == [stale]                    # flagged by the feed; quiet one untouched
+    assert res["reasons"][f"pc_a|{stale}"] == "new in feed"
+    assert src.pages_read == 3
+
+
+def test_deep_window_is_capped_and_older_creators_fetched_directly(tmp_path):
+    w = World(tmp_path)
+    ancient = w.add("pc_a", "iwara", "ua", ["v1"], last_fetch=ago(days=200))
+    src = DeepSource("iwara", [[item("iwara", "x", "ua", ago(days=90))]], following=["ua"])
+    res = w.check({"iwara": src}, state_since=SINCE)
+    assert res["reasons"][f"pc_a|{ancient}"] == "last fetched before the feed window"
+
+
+def test_notifications_only_cover_back_to_the_oldest_one_kept(tmp_path):
+    w = World(tmp_path)
+    a = w.add("pc_a", "pmvhaven", "aa", ["p1"], last_fetch=ago(days=10))
+    b = w.add("pc_b", "pmvhaven", "bb", ["q1"], last_fetch=ago(hours=2))
+
+    class Notes(DeepSource):
+        history_complete = False
+
+    # The site kept notifications back to 3 days ago only; the feed then ends.
+    src = Notes("pmvhaven", [[item("pmvhaven", "p1", "aa", ago(days=3), ref="n1")]], following=["aa", "bb"])
+    res = w.check({"pmvhaven": src}, state_since=SINCE)
+    assert w.jobs == [a]                     # a's last fetch predates what the feed can show
+    assert res["reasons"][f"pc_a|{a}"] == "last fetched before the feed window"
+
+
+def test_untracked_only_recorded_from_the_start_date(tmp_path):
+    w = World(tmp_path)
+    w.add("pc_a", "iwara", "ua", ["v1"], last_fetch=ago(days=12))
+    src = DeepSource("iwara", [[item("iwara", "new", "zz", ago(hours=2)),
+                                item("iwara", "old", "yy", ago(days=5))]], following=["ua"])
+    w.check({"iwara": src}, state_since=SINCE)
+    assert set(w.state()["untracked"]) == {"iwara:zz"}

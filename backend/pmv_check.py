@@ -34,6 +34,11 @@ from backend import pmv_tracker as pt
 from backend import pmv_feeds as pf
 
 OVERLAP = timedelta(hours=48)
+PAW_MARGIN = timedelta(hours=14)    # pawchive `updated` has no time zone
+# How far back a feed is read to cover a creator whose last fetch is older than
+# the previous check (only on sites where reading further back is cheap — the
+# uploader is in the feed). Creators staler than this get one direct fetch.
+DEEP_CAP = timedelta(days=60)
 MAX_PAGES = 40               # feed pages read past which the walk is called a gap
 SEEN_CAP = 20000
 UNTRACKED_PER_UPLOADER = 20
@@ -176,7 +181,9 @@ class PmvCheck:
         """→ dict(status, message, items_new, flagged {key: [items]}, untracked
         [items], refs_known [ref], following set|None, pages)."""
         out = {"status": "ok", "message": "", "flagged": {}, "untracked": [], "refs_known": [],
-               "following": None, "pages": 0, "seen_new": 0, "unresolved": []}
+               "following": None, "pages": 0, "seen_new": 0, "unresolved": [],
+               "covered_from": cutoff}
+        oldest = None
         platform = src.platform
         ups = by_up.get(platform, {})
         reached = False
@@ -189,12 +196,14 @@ class PmvCheck:
                 all_old = bool(items)
                 for it in items:
                     newest = _parse(it.get("newest") or it.get("date"))
+                    if newest is not None and (oldest is None or newest < oldest):
+                        oldest = newest
                     if newest is not None and newest < cutoff:
                         continue
                     all_old = False
                     if not it.get("video_id"):
                         continue
-                    self._classify(src, it, st, known, ups, out)
+                    self._classify(src, it, st, known, ups, out, self._since)
                 self._emit(f"{platform}: feed page {out['pages']}", platform=platform)
                 if all_old:
                     reached = True
@@ -202,7 +211,14 @@ class PmvCheck:
                 if out["pages"] >= MAX_PAGES:
                     break
             else:
-                reached = True               # the feed ended: everything was read
+                # The feed ended. A full-history feed (iwara, rule34video) then
+                # covers everything; notifications only reach back as far as the
+                # oldest one the site still keeps (a deleted one is gone).
+                reached = True
+                if getattr(src, "history_complete", True):
+                    out["covered_from"] = None
+                else:
+                    out["covered_from"] = max(cutoff, oldest) if oldest else self.now()
         except pf.FeedAuthError as e:
             out.update(status="auth", message=str(e))
             return out
@@ -219,7 +235,7 @@ class PmvCheck:
             out["message"] = f"following list unavailable ({e}) — every link checked directly"
         return out
 
-    def _classify(self, src, it, st, known, ups, out):
+    def _classify(self, src, it, st, known, ups, out, since=None):
         platform, vid = src.platform, it["video_id"]
         skey = seen_key(platform, vid)
         if vid in known.get(platform, set()):
@@ -248,7 +264,11 @@ class PmvCheck:
             for e in entries:
                 out["flagged"].setdefault(e["key"], []).append(it)
         elif up:
-            out["untracked"].append(it)
+            # Untracked uploaders are a discovery aid: only from the start date
+            # on, even when the window reaches further back for tracked links.
+            when = _parse(it.get("date") or it.get("newest"))
+            if since is None or when is None or when >= since:
+                out["untracked"].append(it)
 
     # ── pawchive ────────────────────────────────────────────────────
 
@@ -285,11 +305,13 @@ class PmvCheck:
             sigs[e["key"]] = sig
             prev = st["pawchive_sig"].get(e["key"])
             if prev is None:
-                # First check for this link: only content added since the start
-                # date matters (nothing before it is backfilled).
+                # No baseline yet: compare with the link's own last fetch, so
+                # anything added since then is caught however long ago that was.
+                # `updated` carries no zone; PAW_MARGIN absorbs the doubt.
                 upd = _parse(sig)
-                if upd is not None and upd >= since:
-                    flagged[e["key"]] = "updated today"
+                last = _parse((e["manifest"] or {}).get("last_fetch"))
+                if upd is None or last is None or upd >= last - PAW_MARGIN:
+                    flagged[e["key"]] = "updated since last fetch"
             elif prev != sig:
                 flagged[e["key"]] = "updated"
         return sigs, flagged, msg
@@ -302,6 +324,7 @@ class PmvCheck:
         if not st["since"]:
             st["since"] = _iso(start_of_today_utc(started))
         since = _parse(st["since"])
+        self._since = since
         links, by_up, known = self._index()
         sweep = self.mode == "sweep"
         result = {"mode": self.mode, "platforms": {}, "fetched_links": 0, "direct_links": 0,
@@ -325,6 +348,14 @@ class PmvCheck:
                     continue
                 last_ok = _parse(pstate.get("last_ok"))
                 cutoff = max(since, last_ok - OVERLAP) if last_ok else since
+                if getattr(src, "cheap_depth", False):
+                    # Read back far enough to cover every creator's last fetch,
+                    # so a creator last fetched weeks ago needs no direct fetch.
+                    lfs = [_parse((e["manifest"] or {}).get("last_fetch")) for e in links
+                           if e["link"].get("platform") == platform]
+                    lfs = [d for d in lfs if d is not None]
+                    if lfs:
+                        cutoff = min(cutoff, max(min(lfs) - timedelta(hours=1), started - DEEP_CAP))
                 self._emit(f"{platform}: reading followed feed…", platform=platform)
                 walks[platform] = self._walk(src, cutoff, st, known, by_up)
 
@@ -362,6 +393,11 @@ class PmvCheck:
                     reason = f"feed {w['status']}"
                 elif key in w["flagged"]:
                     reason = "new in feed"
+                elif w.get("covered_from") is not None and                         (_parse(m.get("last_fetch")) or since) < w["covered_from"]:
+                    # The feed was only read back to its cutoff; this link was
+                    # last fetched before that, so uploads in between would be
+                    # missed. One direct fetch closes the gap for good.
+                    reason = "last fetched before the feed window"
                 elif any(p["link_key"] == key for p in st["pending"].values()):
                     reason = "pending"
                 elif w.get("following") is None:
@@ -375,7 +411,7 @@ class PmvCheck:
                 jobs.append({"creator": e["creator"], "link": e["link"], "mode": "latest"})
         result["fetched_links"] = len(jobs)
         result["flagged_links"] = sum(1 for r in reasons.values() if r in ("new in feed", "updated",
-                                                                           "updated today", "pending"))
+                                                                           "updated since last fetch", "pending"))
         result["direct_links"] = len(jobs) - result["flagged_links"]
 
         # 4. fetch

@@ -67,6 +67,8 @@ def _cancelled(should_cancel):
 
 class IwaraFeed:
     platform = "iwara"
+    history_complete = True  # subscriptions go back to the first follow
+    cheap_depth = True  # uploader is in the feed: reading back costs ~nothing
     PAGE = 50
 
     def __init__(self, session, auth, throttle=None, should_cancel=None):
@@ -133,6 +135,8 @@ class IwaraFeed:
 
 class PmvhavenFeed:
     platform = "pmvhaven"
+    history_complete = False  # only as far back as notifications are kept
+    cheap_depth = True  # uploader is in the notification
     PAGE = 100
 
     def __init__(self, session, api_key, throttle=None, should_cancel=None):
@@ -216,6 +220,10 @@ class PmvhavenFeed:
             r = self.s.put(pmvh.API + "/notifications", json={"action": "markAsRead",
                                                               "notificationIds": chunk},
                            timeout=(15, 60))
+            if r.status_code == 403 and "permission" in r.text:
+                raise FeedError("the PMVHaven API key is read-only — make one with write "
+                                "permission at pmvhaven.com/api-keys to let the app mark "
+                                "notifications read (checking works either way)")
             if r.status_code != 200:
                 raise FeedError(f"pmvhaven mark-read: HTTP {r.status_code}")
             done += len(chunk)
@@ -266,6 +274,8 @@ def parse_r34_feed(html, now):
 
 class R34Feed:
     platform = "rule34video"
+    history_complete = True  # subscriptions go back to the first follow
+    cheap_depth = False  # no uploader on cards: each unseen video costs a page load
 
     def __init__(self, session, signed_in, throttle=None, should_cancel=None, now=None):
         self.s, self.signed_in, self.t, self.cancel = session, signed_in, throttle, should_cancel
