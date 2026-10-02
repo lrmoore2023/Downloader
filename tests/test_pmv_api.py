@@ -421,3 +421,50 @@ def test_display_reads_do_not_wait_on_a_running_fetch(app, monkeypatch):
     finally:
         release.set()
         t.join()
+
+
+# ── Latest view ─────────────────────────────────────────────────────
+
+def _seed_new(app, cid, link, ids_initial, ids_new):
+    root = app._pmv_root(cid)
+    m = pt.new_manifest(link["platform"], link["user_id"])
+    pt.merge(m, [{"id": v, "title": v, "url": v, "pos": i, "date": "2026-09-01"}
+                 for i, v in enumerate(ids_initial)], full=True, complete=True)
+    pt.merge(m, [{"id": v, "title": v, "url": v, "pos": i, "date": f"2026-10-0{i + 1}"}
+                 for i, v in enumerate(ids_new)], full=False, complete=False)
+    pt.save_manifest(pt.manifest_path(root, pt.link_key(link)), m)
+
+
+def test_latest_lists_exactly_the_new_items_and_status_multi_clears_them(app, monkeypatch):
+    _no_network(monkeypatch)
+    monkeypatch.setattr(app, "pmv_accounts_status", lambda: {})
+    a = app.save_pmv_creator({"name": "A", "links": [R34]})["id"]
+    b = app.save_pmv_creator({"name": "B", "links": [IWA]})["id"]
+    _seed_new(app, a, R34, ["1", "2"], ["3"])
+    _seed_new(app, b, IWA, ["x"], ["y", "z"])
+    lat = app.get_pmv_latest()
+    assert sorted(i["id"] for i in lat["items"]) == ["3", "y", "z"]
+    assert sum(c["counts"]["new"] for c in app.list_pmv_creators()) == 3
+    row = next(i for i in lat["items"] if i["id"] == "3")
+    detail = next(s for s in app.get_pmv_items(a)["sites"])
+    assert row["prefix"] == next(i for i in detail["items"] if i["id"] == "3")["prefix"]
+    res = app.set_pmv_status_multi([{"creator_id": a, "link_key": "rule34video_2472537", "item_id": "3"},
+                                    {"creator_id": b, "link_key": "iwara_af0f", "item_id": "y"}], "downloaded")
+    assert res["updated"] == 2
+    assert [i["id"] for i in app.get_pmv_latest()["items"]] == ["z"]       # cache saw the save
+
+
+def test_untracked_hidden_once_tracked_or_dismissed(app, monkeypatch):
+    _no_network(monkeypatch)
+    monkeypatch.setattr(app, "pmv_accounts_status", lambda: {})
+    import backend.pmv_check as pc
+    path = app._pmv_feed_state_path()
+    st = pc.load_state(path)
+    st["untracked"] = {"iwara:af0f": {"platform": "iwara", "uploader_id": "af0f", "items": []},
+                       "iwara:zz": {"platform": "iwara", "uploader_id": "zz", "items": []}}
+    pc.save_state(path, st)
+    assert {u["key"] for u in app.get_pmv_latest()["untracked"]} == {"iwara:af0f", "iwara:zz"}
+    app.save_pmv_creator({"name": "J", "links": [IWA]})
+    assert {u["key"] for u in app.get_pmv_latest()["untracked"]} == {"iwara:zz"}
+    assert app.dismiss_pmv_untracked("iwara:zz")["ok"]
+    assert app.get_pmv_latest()["untracked"] == []

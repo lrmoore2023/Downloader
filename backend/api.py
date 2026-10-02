@@ -45,6 +45,8 @@ from backend import album_sites
 from backend.album_runner import AlbumRunner, album_state_dir, album_errors_db
 from backend import pmv_tracker as pt
 from backend.pmv_runner import PmvRunner
+from backend import pmv_check as pmvc
+from backend import pmv_feeds as pmvf
 from backend import r34video_scraper as r34
 from backend import iwara_scraper as iw
 from backend import hmvmania_scraper as hmv
@@ -3235,6 +3237,30 @@ class Api:
                 return link
         return None
 
+    @staticmethod
+    def _pmv_rows(rec, link, m, only=None):
+        """Display rows for a manifest's items (all, or those passing `only`):
+        the item plus its derived prefix / shifted / media flags. Shared by the
+        creator checklist and the Latest view so both show identical prefixes."""
+        code = pt.link_site_code(link)
+        width = pt.number_width(m["items"])
+        # Same-day uploads share a date, so their prefixes carry the day's
+        # running count ('… - 2026.07.21 02 - ') to keep them in order. Counted
+        # over every item, so a filtered view gets the same numbers.
+        seqs = pt.date_seqs(m["items"])
+        rows = []
+        for it in m["items"].values():
+            if only is not None and not only(it):
+                continue
+            row = dict(it)
+            row["prefix"] = pt.format_prefix(rec.get("name") or "", code, it.get("number"), width,
+                                             date=it.get("date") or "",
+                                             date_seq=seqs.get(str(it.get("id"))))
+            row["shifted"] = pt.is_shifted(it, m.get("numbering"))
+            row["media_post"] = pt.is_media_post(it)
+            rows.append(row)
+        return rows
+
     def get_pmv_items(self, creator_id):
         """The full checklist for one creator: sites in priority order, each with
         its videos newest-first plus the derived prefix / shifted / media flags."""
@@ -3249,18 +3275,7 @@ class Api:
             m = self._pmv_read_manifest(root, link)
             code = pt.link_site_code(link)
             width = pt.number_width(m["items"])
-            # Same-day uploads share a date, so their prefixes carry the day's
-            # running count ('… - 2026.07.21 02 - ') to keep them in order.
-            seqs = pt.date_seqs(m["items"])
-            rows = []
-            for it in m["items"].values():
-                row = dict(it)
-                row["prefix"] = pt.format_prefix(rec.get("name") or "", code, it.get("number"), width,
-                                                 date=it.get("date") or "",
-                                                 date_seq=seqs.get(str(it.get("id"))))
-                row["shifted"] = pt.is_shifted(it, m.get("numbering"))
-                row["media_post"] = pt.is_media_post(it)
-                rows.append(row)
+            rows = self._pmv_rows(rec, link, m)
             rows.sort(key=lambda r: -(r.get("number") or 0))
             sites.append({
                 "link_key": key, "platform": link.get("platform"), "site_code": code,
@@ -3428,6 +3443,164 @@ class Api:
         except Exception:
             pass
         self._push_js("onPmvComplete", result)
+
+    # ── PMV ▸ Latest: feed-driven check + unified inbox ────────────
+
+    def _pmv_feed_state_path(self, state=None):
+        return os.path.join(os.path.dirname(self._pmv_root("x", state)), "_feed_state.json")
+
+    def start_pmv_check(self, mode="check", sweep_pawchive=False):
+        """'check' — read the followed feeds, fetch only the links that changed
+        (plus every link no feed covers). 'sweep' — fetch every link directly,
+        ignoring feeds (pawchive only when sweep_pawchive: it's a full walk)."""
+        if self._pmv_busy():
+            return {"error": "A PMV fetch is already running"}
+        mode = "sweep" if mode == "sweep" else "check"
+        state = self.load_state()
+        pcs = self._pmv_creators(state)
+        if not pcs:
+            return {"error": "No PMV creators yet"}
+        self._pmv_cancel = threading.Event()
+        cancel = self._pmv_cancel
+        self._pmv_runner = PmvRunner(
+            manifest_root_for=lambda cid, _s=state: self._pmv_root(cid, _s),
+            state=state, cancel=cancel,
+            on_progress=lambda d: self._push_js("onPmvProgress", d),
+            on_complete=lambda r: None)
+        runner = self._pmv_runner
+
+        def work():
+            res = {"check": None, "cancelled": False, "errors": [], "total_new": 0}
+            try:
+                sources, paw_fetch = pmvf.make_sources(state, should_cancel=cancel.is_set)
+                check = pmvc.PmvCheck(
+                    creators=pcs, manifest_root_for=lambda cid: self._pmv_root(cid, state),
+                    state_path=self._pmv_feed_state_path(state), sources=sources,
+                    pawchive_fetch=paw_fetch, run_jobs=runner.run, cancel=cancel,
+                    on_progress=lambda d: self._push_js("onPmvProgress", d),
+                    mode=mode, sweep_pawchive=bool(sweep_pawchive))
+                summary = check.run()
+                rr = summary.pop("runner", None) or {}
+                res.update({k: v for k, v in rr.items() if k in (
+                    "errors", "total_new", "per_creator", "needs_cf_auth",
+                    "iwara_auth_failed", "iwara_message", "iwara_token")})
+                res["cancelled"] = bool(summary.get("cancelled") or rr.get("cancelled"))
+                res["check"] = summary
+                auth = getattr(sources.get("iwara"), "auth", None)
+                if auth is not None and auth.user_token_changed and not res.get("iwara_token"):
+                    res["iwara_token"] = auth.user_token
+            except Exception as e:
+                res["errors"] = list(res.get("errors") or []) + [
+                    {"creator_id": "", "link_key": "", "message": f"Check failed: {e.__class__.__name__}: {e}"}]
+            self._on_pmv_complete(res)
+
+        self._pmv_thread = threading.Thread(target=work, daemon=True)
+        self._pmv_thread.start()
+        return {"status": "started", "mode": mode}
+
+    def _pmv_cached_manifest(self, root, link):
+        """Display read with an in-memory cache keyed by (mtime, size): the
+        Latest view reads every manifest, mostly unchanged, from the NAS."""
+        path = pt.manifest_path(root, pt.link_key(link))
+        try:
+            stt = os.stat(path)
+            sig = (stt.st_mtime_ns, stt.st_size)
+        except OSError:
+            sig = None
+        cache = self.__dict__.setdefault("_pmv_mcache", {})
+        hit = cache.get(path)
+        if sig is not None and hit and hit[0] == sig:
+            return hit[1]
+        m = self._pmv_read_manifest(root, link)
+        if sig is not None and not (m.get("last_error") or "").endswith("try again in a moment"):
+            cache[path] = (sig, m)
+        return m
+
+    def get_pmv_latest(self):
+        """Every new (unreviewed, found after a creator's first scan, not gone /
+        excluded) video across all PMV creators, plus the feed check status, the
+        pending feed videos and followed-but-untracked uploaders."""
+        state = self.load_state()
+        pcs = self._pmv_creators(state)
+        fs = pmvc.load_state(self._pmv_feed_state_path(state))
+        last_check = fs.get("last_check") or ""
+        rows, tracked, keys = [], set(), {}
+
+        def is_new(it):
+            return (it.get("status") == "unreviewed" and not it.get("initial")
+                    and not it.get("gone") and not it.get("excluded"))
+
+        for cid, rec in pcs.items():
+            root = self._pmv_root(cid, state)
+            for link in rec.get("links") or []:
+                key = pt.link_key(link)
+                keys[key] = (cid, rec, link)
+                for ident in (link.get("user_id"), link.get("username")):
+                    if ident:
+                        tracked.add(pmvc.uploader_key(link.get("platform"), str(ident)))
+                m = self._pmv_cached_manifest(root, link)
+                for row in self._pmv_rows(rec, link, m, only=is_new):
+                    row.update({"creator_id": cid, "creator_name": rec.get("name") or cid,
+                                "link_key": key, "platform": link.get("platform"),
+                                "site_code": pt.link_site_code(link),
+                                "numbering": m.get("numbering"),
+                                "just_in": bool(last_check and (row.get("first_seen") or "") >= last_check)})
+                    rows.append(row)
+        rows.sort(key=lambda r: (r.get("date") or r.get("first_seen") or "", r.get("first_seen") or ""),
+                  reverse=True)
+        dismissed = set(fs["dismissed"])
+        untracked = [dict(v, key=k) for k, v in fs["untracked"].items()
+                     if k not in tracked and k not in dismissed]
+        untracked.sort(key=lambda u: u.get("last_seen") or "", reverse=True)
+        pending = []
+        for k, v in fs["pending"].items():
+            p = dict(v, key=k)
+            hit = keys.get(p.get("link_key"))
+            if hit:
+                p["creator_id"], p["creator_name"] = hit[0], hit[1].get("name") or hit[0]
+                p["site_code"] = pt.link_site_code(hit[2])
+            pending.append(p)
+        return {"items": rows, "pending": pending, "untracked": untracked,
+                "since": fs.get("since") or "", "last_check": last_check,
+                "last_sweep": fs.get("last_sweep") or "", "last_result": fs.get("last_result") or {},
+                "running": self._pmv_busy(), "accounts": self.pmv_accounts_status()}
+
+    def set_pmv_status_multi(self, entries, status):
+        """✓/✗ across creators from the Latest view: [{creator_id, link_key,
+        item_id}], grouped so each manifest is written once, under its lock."""
+        groups = {}
+        for e in entries or []:
+            groups.setdefault((e.get("creator_id"), e.get("link_key")), []).append(e.get("item_id"))
+        updated, errors = 0, []
+        for (cid, key), ids in groups.items():
+            r = self.set_pmv_status_bulk(cid, key, ids, status)
+            if r.get("error"):
+                errors.append(r["error"])
+            else:
+                updated += r.get("updated", 0)
+        return {"ok": not errors, "updated": updated, "errors": errors}
+
+    def _pmv_feed_state_edit(self, fn):
+        if self._pmv_busy():
+            return {"error": "Wait for the running check to finish"}
+        path = self._pmv_feed_state_path()
+        with pt.manifest_lock(path):
+            st = pmvc.load_state(path)
+            fn(st)
+            pmvc.save_state(path, st)
+        return {"ok": True}
+
+    def dismiss_pmv_untracked(self, key):
+        """Hide a followed-but-untracked uploader from Latest (and stop recording it)."""
+        def fn(st):
+            if key not in st["dismissed"]:
+                st["dismissed"].append(key)
+            st["untracked"].pop(key, None)
+        return self._pmv_feed_state_edit(fn)
+
+    def dismiss_pmv_pending(self, key):
+        """Stop waiting for a feed video that never shows up in its listing."""
+        return self._pmv_feed_state_edit(lambda st: st["pending"].pop(key, None))
 
     def cancel_pmv_fetch(self):
         self._pmv_cancel.set()
