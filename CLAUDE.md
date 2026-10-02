@@ -45,9 +45,23 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   `SITE - YYYY.MM.DD - ` from a video page, resolving the same-day count from the
   uploader's listing on click; `node tools/pmvx_check.js` runs its offline checks
   (pass a dir of saved video pages to also check the date extractors).
+- **PMV ▸ Latest / Check for new**: `backend/pmv_feeds.py` (each site's *followed*
+  feed), `backend/pmv_check.py` (the check job: feeds → only the changed links
+  through the unchanged `PmvRunner`), `frontend/js/pmv_latest.js` (the unified
+  new-video list). Feeds are only hints — every tracked link is either covered by
+  a readable feed or fetched directly (HMVMania, not followed, not signed in, feed
+  error, walk can't reach the cutoff). Feed state (`since`, per-site last good
+  check, seen ids, pending, untracked) is `<pmv root>/_feed_state.json`; nothing
+  before `since` (the day it was switched on) is backfilled. Sign-ins:
+  `backend/site_login.py` (pawchive window), a PMVHaven API key, and for
+  rule34video — **one session per account**, so the app can't log in itself —
+  the extension popup hands Chrome's session to `backend/ext_bridge.py`
+  (127.0.0.1:47834, `chrome-extension://` Origin only). Probe feeds read-only with
+  `tools/pmv_feed_probe.py`.
 - `frontend/js/` — `app.js` (shell/stats), `creators.js` (creator panel + URL panel +
   `switchView`), `overlays.js` (Configure/Settings dialogs), `album.js`, `dupes.js`,
-  `pmv.js`. The PMV tab is the first and default view; Creator is second.
+  `pmv.js`, `pmv_latest.js`. The PMV tab is the first and default view (it opens on
+  Latest); Creator is second.
 
 ## State model
 
@@ -128,7 +142,20 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
 - **pmvhaven** (PMV tab) — Nuxt; public JSON: `/api/users/<24-hex id>` and
   `/api/videos?uploader=<id>&limit=100&page=N` (1-based, `pagination.hasNext`).
   Video page = `/video/<slugified title>_<oldId or _id>`. A `/profile/<username>`
-  URL is resolved to the id from the page's `__NUXT_DATA__` payload.
+  URL is resolved to the id from the page's `__NUXT_DATA__` payload. Documented
+  API at `/api/openapi.json`; personal keys (`Authorization: Bearer pmvh_…`) unlock
+  `/api/notifications` (type `new_video`: `sender._id` + `video`; `PUT` with
+  `notificationIds` marks read) and `/api/users/<me>/subscriptions` (`data[].id`;
+  me = `/api/user/profile` → `data.userId`).
+- **Followed feeds** (PMV ▸ Check for new) — iwara: `/videos?subscribed=true&sort=date`
+  (token; full history, newest first), following `/user/<me>/following`.
+  rule34video: `/my/subscriptions/` async block `list_videos_videos_from_my_subscriptions`
+  (`from=NN`, 24/page, 404 past the end); cards have **no uploader and only a
+  relative date**, so a never-seen video's page is read once for its uploader;
+  followed members = block `list_members_subscriptions_my_subscriptions`.
+  pawchive: `/api/v1/account/favorites?type=artist` (signed in; every favourite in
+  one response) — `updated` = new content, `last_imported` = last import run; the
+  public `/api/v1/<svc>/user/<id>/profile` carries `updated` too.
 - **pawchive** — the API is behind a Cloudflare JS challenge; only `file.pawchive.pw`
   is not. The in-app solve is Settings ▸ Pawchive ▸ Connect, which captures
   `cf_clearance` + the browser UA (`backend/pawchive_cf.py`). `cf_clearance` is

@@ -43,7 +43,49 @@
 
             <!-- PMV tracker: creators × sites checklist (metadata only — never downloads) -->
             <div class="tab-content" id="pmvView">
-                <div class="pmv-layout">
+                <div class="pmv-modebar" role="tablist">
+                    <button class="pmv-mode" data-mode="latest" onclick="pmvSetMode('latest')" role="tab">Latest <span class="pmv-mode-count" id="pmvLatestCount"></span></button>
+                    <button class="pmv-mode" data-mode="creators" onclick="pmvSetMode('creators')" role="tab">Creators</button>
+                </div>
+
+                <!-- Latest: every new video across all creators + the feed check -->
+                <div class="section pmv-latest" id="pmvLatest" style="display: none;">
+                    <div class="pmv-latest-head">
+                        <div class="pmv-latest-actions">
+                            <button class="btn btn-primary btn-sm pmv-fetch-btn" id="pmvCheckBtn" onclick="pmvCheckForNew()"
+                                    title="Read what's new from the creators you follow on each site, then fetch only those creators (plus any no feed covers)">Check for new</button>
+                            <button class="btn btn-secondary btn-sm pmv-fetch-btn" id="pmvSweepBtn" onclick="pmvFullSweep()"
+                                    title="Ignore the feeds and look at every tracked creator directly — a safety net, slower">Full sweep</button>
+                            <label class="checkbox-option pmv-sweep-paw" title="pawchive is always a full walk per creator, so it is left out of a sweep unless ticked">
+                                <input type="checkbox" id="pmvSweepPaw">
+                                <span class="checkbox-label">incl. pawchive</span>
+                            </label>
+                            <button class="btn btn-danger btn-sm" id="pmvLatestCancelBtn" onclick="pmvCancel()" style="display: none;">Cancel</button>
+                        </div>
+                        <div class="pmv-latest-meta" id="pmvLatestMeta"></div>
+                    </div>
+                    <div class="field-hint pmv-status-line" id="pmvLatestStatus"></div>
+                    <div class="pmv-feed-chips" id="pmvFeedChips"></div>
+                    <div id="pmvCoverage"></div>
+                    <div class="pmv-filters pmv-latest-filters">
+                        <label class="checkbox-option" title="Select every video currently shown">
+                            <input type="checkbox" id="pmvLatestSelAll" onchange="pmvLatestSelectAll(this.checked)">
+                            <span class="checkbox-label" id="pmvLatestSelLabel">Select all</span>
+                        </label>
+                        <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulk('downloaded')" title="Mark the selected videos downloaded">✓ Selected</button>
+                        <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulk('skipped')" title="Mark the selected videos as not downloading">✗ Selected</button>
+                        <select class="input-field pmv-sort" id="pmvLatestSite" onchange="pmvLatestSetSite(this.value)" title="Only show one site"></select>
+                        <label class="checkbox-option" title="pawchive posts with no video, archive or download link">
+                            <input type="checkbox" id="pmvLatestHideNonMedia" checked onchange="pmvLatestSetHideNonMedia(this.checked)">
+                            <span class="checkbox-label">Hide image/text-only</span>
+                        </label>
+                        <input type="search" class="input-field pmv-search" id="pmvLatestSearch"
+                               placeholder="Filter by creator or title…" oninput="pmvLatestSetSearch(this.value)">
+                    </div>
+                    <div class="pmv-latest-body" id="pmvLatestBody"></div>
+                </div>
+
+                <div class="pmv-layout" id="pmvCreatorsPane">
                     <div class="section pmv-left">
                         <div class="section-title">PMV creators <span id="pmvCreatorCount"></span></div>
                         <div class="actions-row pmv-toolbar">
@@ -805,6 +847,7 @@
     <script src="js/dupes.js"></script>
     <script src="js/album.js"></script>
     <script src="js/pmv.js"></script>
+    <script src="js/pmv_latest.js"></script>
     <script src="js/overlays.js"></script>
     <script src="js/app.js"></script>
 </body>

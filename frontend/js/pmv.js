@@ -25,12 +25,14 @@ async function initPmv(state) {
         if (s && s.running) setPmvBusy(true, 'A PMV fetch is running…');
     } catch (e) { /* ignore */ }
     await refreshPmvCreators();
+    if (typeof initPmvLatest === 'function') initPmvLatest(state);
     const last = state.last_pmv_creator || '';
     if (last && pmvCreators.some(c => c.id === last)) openPmvCreator(last);
 }
 
 function onPmvViewShown() {
     refreshPmvCreators();
+    if (typeof pmvMode !== 'undefined' && pmvMode === 'latest') refreshPmvLatest();
 }
 
 let pmvListSeq = 0;
@@ -93,7 +95,7 @@ function renderPmvList() {
     el.innerHTML = rows.map(c => {
         const k = c.counts || {};
         const badges = [];
-        if (k.new) badges.push(`<span class="badge pmv-new" title="Posted since you started tracking and not yet reviewed">${k.new} new</span>`);
+        if (k.new) badges.push(`<span class="badge pmv-new" title="${k.new} new — posted since you started tracking and not yet reviewed (also listed under Latest)">+${k.new}</span>`);
         if (k.unreviewed) badges.push(`<span class="badge badge-skipped" title="Unreviewed (including the initial backlog)">${k.unreviewed}</span>`);
         if (k.shifted) badges.push(`<span class="badge badge-shifted" title="✓ posts whose catalogue number has changed">${k.shifted} shifted</span>`);
         const hasErr = (c.links || []).some(l => l.last_error);
@@ -184,18 +186,23 @@ function setPmvBusy(busy, label) {
         if (b) b.disabled = busy;
     });
     document.querySelectorAll('.pmv-fetch-btn').forEach(b => { b.disabled = busy; });
-    const c = document.getElementById('pmvCancelBtn');
-    if (c) c.style.display = busy ? '' : 'none';
+    ['pmvCancelBtn', 'pmvLatestCancelBtn'].forEach(id => {
+        const c = document.getElementById(id);
+        if (c) c.style.display = busy ? '' : 'none';
+    });
     if (label !== undefined) pmvStatusText(label);
 }
 
 function pmvStatusText(t) {
-    const el = document.getElementById('pmvStatus');
-    if (el) el.textContent = t || '';
+    ['pmvStatus', 'pmvLatestStatus'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = t || '';
+    });
 }
 
 window.onPmvProgress = function (d) {
     if (!d) return;
+    if (!pmvBusy) setPmvBusy(true);
     const who = d.creator_name ? `${d.creator_name} · ${d.site_code}: ` : '';
     pmvStatusText(who + (d.message || ''));
     if (d.type === 'error') Logger.error('[PMV] ' + who + d.message);
@@ -207,12 +214,15 @@ window.onPmvComplete = async function (r) {
     setPmvBusy(false);
     await refreshPmvCreators();
     if (pmvCurrentId) await openPmvCreator(pmvCurrentId, true);
+    if (typeof refreshPmvLatest === 'function') refreshPmvLatest();
     const errs = (r.errors || []).length;
     const n = r.total_new || 0;
     if (r.needs_cf_auth) {
         showToast('Pawchive needs a Cloudflare reconnect — opening Settings…', 'error');
         if (typeof openSettings === 'function') openSettings();
         if (typeof refreshPawCfStatus === 'function') refreshPawCfStatus();
+    } else if (typeof pmvCheckToast === 'function' && pmvCheckToast(r)) {
+        /* check / sweep summary shown */
     } else if (r.cancelled) {
         showToast('PMV fetch cancelled', 'info');
     } else if (errs) {
@@ -424,6 +434,7 @@ function pmvPad(n, w) {
 function renderPmvRow(it, s, titleMap) {
     const cls = ['pmv-item', 'is-' + it.status, it.gone ? 'is-gone' : '', it.excluded ? 'is-excluded' : ''].join(' ');
     const b = [];
+    if (it.status === 'unreviewed' && !it.initial && !it.gone && !it.excluded) b.push('<span class="badge pmv-new" title="New since you started tracking — also listed under Latest">new</span>');
     if (it.excluded) b.push('<span class="badge badge-skipped" title="Not a release — holds no catalogue number">not counted</span>');
     if (it.quality) b.push(`<span class="badge badge-q${it.quality >= 2160 ? ' badge-4k' : ''}" title="Best quality offered">${it.quality >= 2160 ? '4K' : it.quality + 'p'}</span>`);
     else if (s.platform === 'iwara' && !it.gone) b.push('<span class="badge badge-q" style="opacity:.45" title="iwara only records dimensions for newer uploads; the API returns nothing for this one">? p</span>');

@@ -2055,3 +2055,49 @@
 .pmv-ed-move { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
 .pmv-ed-move .btn-tiny { padding: 0 6px; font-size: 9px; line-height: 14px; }
 .pmv-ed-move .btn-tiny:disabled { opacity: 0.3; cursor: default; }
+
+/* ── PMV ▸ Latest ────────────────────────────────────────────── */
+/* "Latest | Creators" switch, then either the unified new-video list or the
+   two-column creator view. */
+#pmvView { gap: 12px; }
+.pmv-modebar { display: flex; gap: 2px; padding: 3px; align-self: flex-start; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); }
+.pmv-mode {
+    padding: 5px 14px; border: 0; border-radius: calc(var(--radius) - 2px); background: transparent;
+    color: var(--text-secondary); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: var(--transition);
+}
+.pmv-mode:hover { color: var(--text-primary); }
+.pmv-mode.active { background: var(--accent-soft); color: var(--accent-bright); }
+.pmv-mode-count:not(:empty) { margin-left: 4px; padding: 0 6px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 10.5px; }
+.pmv-latest { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+.pmv-latest-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pmv-latest-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pmv-sweep-paw .checkbox-label { font-size: 11.5px; }
+.pmv-latest-meta { font-size: 11.5px; color: var(--text-muted); }
+.pmv-feed-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; align-items: center; }
+.pmv-feed-chip { font-size: 11px; padding: 3px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-secondary); }
+.pmv-feed-chip b { color: var(--text-primary); font-weight: 600; margin-right: 2px; }
+.pmv-feed-chip.ok { border-color: var(--ok); background: var(--ok-soft); }
+.pmv-feed-chip.warn { border-color: var(--warn); background: var(--warn-soft); }
+.pmv-feed-chip.bad { border-color: var(--danger); background: var(--danger-soft); }
+.pmv-feed-chip a { color: var(--accent-bright); }
+.pmv-feed-extra { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
+.pmv-coverage { font-size: 11.5px; color: var(--warn); margin-bottom: 8px; }
+.pmv-coverage summary { cursor: pointer; }
+.pmv-coverage .field-hint { margin: 4px 0 0 14px; }
+.pmv-latest-filters { margin: 4px 0 10px; }
+.pmv-latest-body { flex: 1 1 0; min-height: 0; overflow: auto; }
+.pmv-day { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-input); margin-bottom: 12px; overflow: hidden; min-width: 860px; }
+.pmv-day-head { display: flex; justify-content: space-between; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--text-primary); background: var(--bg-raised); border-bottom: 1px solid var(--border); }
+.pmv-day-head span { color: var(--text-muted); font-weight: 500; }
+.pmv-item.pmv-latest-item { grid-template-columns: 18px 60px minmax(120px, 170px) minmax(180px, 1fr) 84px 48px minmax(120px, auto) auto; min-width: 860px; }
+.pmv-latest-who { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pmv-latest-who a { color: var(--text-primary); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmv-latest-who a:hover { color: var(--accent-bright); text-decoration: underline; }
+.pmv-side { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-input); margin-bottom: 12px; }
+.pmv-side summary { padding: 8px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text-primary); }
+.pmv-side summary .field-hint { font-weight: 400; }
+.pmv-side-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+.pmv-side-row a { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pmv-side-who { font-weight: 600; flex: 0 0 auto; }
+.pmv-side-vids { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.pmv-side-meta { margin-left: auto; color: var(--text-muted); font-size: 11px; flex: 0 0 auto; }
