@@ -106,6 +106,34 @@ MEMBER_PAGE = ('<html><head><title>SadBernard&#039;s Page</title></head><body>'
                + _card(999, "someone-elses", "Not Mine", "1:00")
                + '</div></body></html>')
 
+# The layout rule34video switched to around 2026-10 (trimmed from a live page):
+# every field is a data- attribute on the card; no data-video-card-id / a.th.
+def _card_v2(vid, slug, title, dur, age, idx=1):
+    url = f"https://rule34video.com/video/{vid}/{slug}/"
+    return f'''
+    <div class="item ma-v video_{idx}" data-rdm-item data-id="{vid}" data-idx="{idx}" data-title="{title}" data-dur="{dur}" data-views="640911" data-rating="4.4980" data-url="{url}">
+    <a data-href="https://rule34video.com/popup-video/{vid}/?popup_id={idx}" data-fancybox="ajax" class="js-click hidden" aria-hidden="true" tabindex="-1"></a>
+    <a class="ma-thumb js-open-popup" href="{url}" tabindex="-1" aria-hidden="true"><img class="thumb" src="x.jpg" alt=""><span class="ma-dur">{dur // 60}:{dur % 60:02d}</span></a>
+    <div class="ma-v__row"><a class="ma-v__t js-open-popup" href="{url}">{title}</a><button type="button" class="ma-more" data-rdp-more></button></div>
+    <div class="ma-v__m"><span>641K views</span><span>{age}</span><span>89%</span></div>
+    </div>'''
+
+
+LISTING_BLOCK_V2 = ('<div class="ma-grid" id="list_videos_uploaded_videos_items" data-rdm-items>'
+                    + _card_v2(4140375, "fall-pmv", "Fall PMV [Someone]", 408, "10 months ago")
+                    + _card_v2(4049502, "spring-pmv", "Spring &amp; Rain PMV", 319, "12 months ago", 2)
+                    + '</div><div class="pagination" id="list_videos_uploaded_videos_pagination"></div>')
+
+MEMBER_PAGE_V2 = ('<html><head><title>SadBernard&#039;s Page</title></head><body>'
+                  '<nav><a href="https://rule34video.com/members/1/" class="is-active">Overview</a>'
+                  '<a href="https://rule34video.com/members/1/videos/">Videos <span class="ma-count">(21)</span></a>'
+                  '<a href="https://rule34video.com/members/1/favourites/">Favourite Videos <span class="ma-count">(99)</span></a></nav>'
+                  + LISTING_BLOCK_V2
+                  + '<div class="ma-grid" id="list_videos_favourite_videos_items">'
+                  + _card_v2(999, "someone-elses", "Not Mine", 60, "1 day ago")
+                  + '</div></body></html>')
+
+
 VIDEO_PAGE_4K = '''<html><head><title>Confident - Brigitte HMV</title></head><body>
 <script type="application/ld+json">{"@type":"VideoObject","name":"Confident - Brigitte HMV",
  "uploadDate": "2026-09-14", "duration": "PT0H3M40S"}</script>
@@ -153,6 +181,23 @@ def test_r34_parse_listing_async_block():
     items = r34.parse_listing(LISTING_BLOCK)
     assert len(items) == 2
     assert r34.parse_listing("<div></div>") == []
+
+
+def test_r34_parse_member_page_v2_layout():
+    assert r34.parse_member_page(MEMBER_PAGE_V2) == {"name": "SadBernard", "total": 21}
+    assert r34.parse_member_page("<title>SadBernard's Videos</title>")["name"] == "SadBernard"
+
+
+def test_r34_parse_listing_v2_layout():
+    """Live 2026-10-07: the redesign dropped data-video-card-id and every
+    member returned 0 videos."""
+    items = r34.parse_listing(MEMBER_PAGE_V2)
+    assert [i["id"] for i in items] == ["4140375", "4049502"]
+    assert items[0] == {"id": "4140375", "title": "Fall PMV [Someone]",
+                        "url": "https://rule34video.com/video/4140375/fall-pmv/",
+                        "duration_text": "6:48", "duration": 408}
+    assert items[1]["title"] == "Spring & Rain PMV"
+    assert len(r34.parse_listing(LISTING_BLOCK_V2)) == 2
 
 
 def test_r34_durations():

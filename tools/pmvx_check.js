@@ -76,6 +76,18 @@ const BLOCK = '<div id="list_videos_uploaded_videos_items">'
 const cards = ext.r34Cards(BLOCK);
 check(cards.length === 2 && cards[0].id === 4593299 && /4567685/.test(cards[1].url), 'r34Cards', cards);
 
+// The ~2026-10 layout: ids + urls are data- attributes on the card.
+const BLOCK_V2 = '<div class="ma-grid" id="list_videos_uploaded_videos_items" data-rdm-items>'
+  + '<div class="item ma-v video_1" data-rdm-item data-id="4140375" data-idx="1" data-title="A" data-dur="408" data-url="https://rule34video.com/video/4140375/a/">'
+  + '<a data-href="https://rule34video.com/popup-video/4140375/?popup_id=1" class="js-click hidden"></a>'
+  + '<a class="ma-thumb" href="https://rule34video.com/video/4140375/a/"></a></div>'
+  + '<div class="item ma-v video_2" data-rdm-item data-id="4049502" data-idx="2" data-title="B" data-dur="319" data-url="https://rule34video.com/video/4049502/b/">'
+  + '<a class="ma-thumb" href="https://rule34video.com/video/4049502/b/"></a></div>'
+  + '</div>';
+const cards2 = ext.r34Cards(BLOCK_V2);
+check(cards2.length === 2 && cards2[0].id === 4140375 && /4140375\/a\//.test(cards2[0].url)
+      && cards2[1].id === 4049502 && /4049502/.test(cards2[1].url), 'r34Cards (2026-10 layout)', cards2);
+
 const FEED = '<rss><channel><title>Author &#8211; Page 2 of 7</title>'
   + '<item><title><![CDATA[[Mina] One]]></title><link>https://hmvmania.com/video/one/</link>'
   + '<guid isPermaLink="false">https://hmvmania.com/?post_type=video&#038;p=811</guid>'

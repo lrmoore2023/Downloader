@@ -34,7 +34,8 @@ MAX_PAGES = 5000
 
 _MEMBER_RE = re.compile(r"rule34video\.com/members/(\d+)", re.I)
 _VIDEO_ID_RE = re.compile(r"/video/(\d+)/")
-_ALL_VIDEOS_RE = re.compile(r"All Videos\s*\((\d[\d,]*)\)")
+# 'All Videos (16)' (pre-2026-10 layout) or 'Videos <span class="ma-count">(21)</span>'.
+_ALL_VIDEOS_RE = re.compile(r"(?:All Videos\s*|>\s*Videos\s*<span[^>]*>\s*)\((\d[\d,]*)\)")
 _UPLOAD_DATE_RE = re.compile(r'"uploadDate"\s*:\s*"([^"]+)"')
 _ISO_DUR_RE = re.compile(r'"duration"\s*:\s*"(PT[^"]+)"')
 _QUALITY_TEXT_RE = re.compile(r"video(?:_alt)?_url\d*_text\s*:\s*'([^']*)'")
@@ -95,7 +96,7 @@ def parse_member_page(html):
     m = re.search(r"<title>\s*(.*?)\s*</title>", html or "", re.S | re.I)
     if m:
         t = _html.unescape(m.group(1)).strip()
-        t = re.sub(r"['’]s Page$", "", t).strip()
+        t = re.sub(r"['’]s (?:Page|Videos)$", "", t).strip()
         name = t
     total = None
     m = _ALL_VIDEOS_RE.search(html or "")
@@ -127,31 +128,40 @@ def parse_iso8601_duration(text):
 def parse_listing(html):
     """Video cards from a member page or an async listing block, in page order
     (newest first). Only the uploaded-videos container is read when present, so a
-    full member page's favourites / related blocks never leak in."""
+    full member page's favourites / related blocks never leak in.
+
+    Two card layouts: since ~2026-10 `<div class="item ma-v" data-rdm-item
+    data-id=… data-title=… data-dur=… data-url=…>`; before that
+    `<div class="item" data-video-card-id=…>` with `a.th` / `.thumb_title` / `.time`."""
     soup = BeautifulSoup(html or "", "html.parser")
     container = soup.find(id="list_videos_uploaded_videos_items") or soup
     out = []
-    for card in container.select("div.item[data-video-card-id]"):
-        vid = (card.get("data-video-card-id") or "").strip()
-        a = card.select_one("a.th[href]") or card.select_one("a[href*='/video/']")
-        if not a:
+    for card in container.select("div.item[data-video-card-id], div.item[data-rdm-item][data-id]"):
+        vid = (card.get("data-video-card-id") or card.get("data-id") or "").strip()
+        a = (card.select_one("a.th[href]") or card.select_one("a.ma-v__t[href]")
+             or card.select_one("a[href*='/video/']"))
+        url = (card.get("data-url") or (a.get("href") if a else "") or "").strip()
+        if not url:
             continue
-        url = a.get("href") or ""
         if not vid:
             vid = video_id_from_url(url) or ""
         if not vid:
             continue
-        title = (a.get("title") or "").strip()
+        title = (card.get("data-title") or (a.get("title") if a else "") or "").strip()
         if not title:
-            t = card.select_one(".thumb_title")
+            t = card.select_one(".thumb_title") or card.select_one(".ma-v__t")
             title = t.get_text(" ", strip=True) if t else ""
-        tm = card.select_one(".time")
+        tm = card.select_one(".time") or card.select_one(".ma-dur")
+        duration_text = tm.get_text(strip=True) if tm else ""
+        duration = parse_duration_text(duration_text)
+        if duration is None and (card.get("data-dur") or "").strip().isdigit():
+            duration = int(card.get("data-dur"))
         out.append({
             "id": vid,
             "title": _html.unescape(title),
             "url": url,
-            "duration_text": tm.get_text(strip=True) if tm else "",
-            "duration": parse_duration_text(tm.get_text(strip=True)) if tm else None,
+            "duration_text": duration_text,
+            "duration": duration,
         })
     return out
 

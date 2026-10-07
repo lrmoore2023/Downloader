@@ -79,7 +79,9 @@
     const s = String(html || '');
     const at = s.indexOf('list_videos_uploaded_videos_items');
     const body = at >= 0 ? s.slice(at) : s;
-    const re = /data-video-card-id="(\d+)"[\s\S]{0,600}?href="([^"]*\/video\/\d+\/[^"]*)"/g;
+    // Old layout: data-video-card-id + a.th href; since ~2026-10:
+    // <div class="item ma-v" data-rdm-item data-id=… data-url=…>.
+    const re = /<div class="item\b[^"]*"[^>]*?\bdata-(?:video-card-)?id="(\d+)"[\s\S]{0,600}?(?:data-url|href)="([^"]*\/video\/\d+\/[^"]*)"/g;
     const out = [];
     let m;
     while ((m = re.exec(body))) out.push({ id: Number(m[1]), url: m[2] });

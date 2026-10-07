@@ -350,6 +350,18 @@ def test_parse_r34_feed_reads_cards():
     assert items[0]["newest"] == iso(NOW - timedelta(days=2)) and items[0]["uploader_id"] == ""
 
 
+def test_parse_r34_feed_reads_v2_cards():
+    html = '''<div class="ma-grid" id="list_videos_videos_from_my_subscriptions_items">
+      <div class="item ma-v video_1" data-rdm-item data-id="4634703" data-title="Some title" data-dur="92"
+           data-url="https://rule34video.com/video/4634703/x/">
+        <a class="ma-thumb" href="https://rule34video.com/video/4634703/x/"><span class="ma-dur">1:32</span></a>
+        <div class="ma-v__row"><a class="ma-v__t" href="https://rule34video.com/video/4634703/x/">Some title</a></div>
+        <div class="ma-v__m"><span>1K views</span><span>2 days ago</span><span>90%</span></div></div></div>'''
+    items = pf.parse_r34_feed(html, NOW)
+    assert items[0]["video_id"] == "4634703" and items[0]["title"] == "Some title"
+    assert items[0]["newest"] == iso(NOW - timedelta(days=2)) and items[0]["uploader_id"] == ""
+
+
 def test_link_fetched_before_the_feed_window_is_fetched_once(tmp_path):
     """Live case 2026-10-02: a link last fetched Sep 20, uploads on Sep 23 and
     Oct 1, feed window starting Oct 2 — the feed alone never shows them."""

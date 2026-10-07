@@ -261,9 +261,14 @@ def parse_r34_feed(html, now):
     soup = BeautifulSoup(html or "", "html.parser")
     container = soup.find(id=f"{FEED_BLOCK}_items") or soup
     added = {}
-    for card in container.select("div.item[data-video-card-id]"):
+    # Old layout: `.added`; since ~2026-10 the age is one of the `.ma-v__m` spans.
+    for card in container.select("div.item[data-video-card-id], div.item[data-rdm-item][data-id]"):
         a = card.select_one(".added")
-        added[(card.get("data-video-card-id") or "").strip()] = a.get_text(" ", strip=True) if a else ""
+        text = a.get_text(" ", strip=True) if a else ""
+        if not text:
+            text = next((sp.get_text(" ", strip=True) for sp in card.select(".ma-v__m span")
+                         if relative_newest(sp.get_text(" ", strip=True), now)), "")
+        added[(card.get("data-video-card-id") or card.get("data-id") or "").strip()] = text
     out = []
     for it in r34.parse_listing(str(container)):
         newest = relative_newest(added.get(it["id"]), now)
