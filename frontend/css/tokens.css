@@ -112,6 +112,20 @@
     --wordmark-size: 15px;
     --wordmark-weight: 700;
     --btn-shadow: none;
+    --focus-style: solid;
+    --font-field: var(--font-mono);
+
+    /* Control shapes */
+    --btn-radius: var(--radius);
+    --btn-tiny-radius: var(--radius-sm);
+    --seg-radius: var(--radius-sm);
+    --check-radius: var(--radius-sm);
+
+    /* Surfaces a theme can paint (gradients, glows); none by default */
+    --app-bg-image: none;
+    --panel-bg-image: none;
+    --input-shadow: none;
+    --seg-active-shadow: none;
 
     /* Derived semantic defaults — a theme may override any of them. These resolve
        on <html>, so they pick up whichever theme's colours are active. */
@@ -127,6 +141,10 @@
     --row-active-color: var(--text-primary);
     --tile-shadow-hover: var(--shadow-md);
     --accent-soft-hover: color-mix(in srgb, var(--accent) 22%, transparent);
+    --btn-primary-bg: var(--accent);
+    --btn-primary-bg-hover: var(--accent-hover);
+    --btn-primary-shadow: var(--btn-shadow);
+    --title-color: var(--text-muted);
     --check-border: var(--accent);
 
     /* Always drawn over photos/video, so fixed regardless of theme. */

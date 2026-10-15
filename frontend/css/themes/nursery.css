@@ -1,0 +1,271 @@
+/* ── Theme: Nursery ─────────────────────────────────────────────────
+   A soft digital nursery: warm cream room, pillowy white cards with warm
+   diffused shadows, pill-shaped controls, pastel fills (baby blue, blush,
+   lavender, a little butter), and rounded type — Fredoka for headings,
+   Nunito for everything else. Selected options sit as raised white "pillows"
+   in a recessed track. Light only. Contrast is soft but text stays ≥ 4.5:1. */
+
+:root[data-theme="nursery"] {
+    --font-sans: 'Nunito', ui-rounded, 'Segoe UI Variable', 'Segoe UI', sans-serif;
+    --font-display: 'Fredoka', var(--font-sans);
+    --font-label: var(--font-sans);
+    --font-ui: var(--font-sans);
+    --font-field: var(--font-sans);
+    --badge-font: var(--font-sans);
+    --radius: 14px;
+    --radius-sm: 10px;
+    --radius-lg: 22px;
+    --radius-pill: 999px;
+    --btn-radius: 999px;
+    --btn-tiny-radius: 999px;
+    --seg-radius: 999px;
+    --check-radius: 6px;
+    --border-w: 1px;
+    --border-w-strong: 2px;
+    --press-x: 0px;
+    --press-y: 1px;
+    --title-transform: none;
+    --title-tracking: 0.1px;
+    --title-weight: 600;
+    --title-size: 15px;
+    --heading-weight: 600;
+    --heading-tracking: 0.1px;
+    --btn-transform: none;
+    --btn-tracking: 0.1px;
+    --btn-weight: 700;
+    --btn-size: 13px;
+    --btn-size-sm: 12px;
+    --wordmark-size: 22px;
+    --wordmark-weight: 600;
+    --wordmark-tracking: 0.2px;
+    --header-rule: 0px;
+    --focus-w: 3px;
+    --focus-offset: 2px;
+    --overlay-blur: 6px;
+    --row-active-rule: 0px;
+    --control-h: 36px;
+    --control-h-sm: 30px;
+    --control-h-xs: 25px;
+    --dur-fast: 180ms;
+    --dur-base: 260ms;
+    --dur-slow: 360ms;
+    --ease-out: cubic-bezier(0.25, 0.8, 0.25, 1);
+    --enter-shift: 8px;
+}
+
+:root[data-theme="nursery"][data-mode="light"] {
+    color-scheme: light;
+    --ink: #4a4450;
+    --baby-blue: #a8d4f0;
+    --blush: #f5c6d0;
+    --lavender: #d4c4e8;
+    --butter: #f0e4b8;
+    --recess: #ede8e2;
+
+    --bg-deep: #f7f4f0;
+    --bg-primary: #fbf8f5;
+    --bg-secondary: #f3eee9;
+    --bg-panel: #ffffff;
+    --bg-raised: #f6f1ec;
+    --bg-input: #f8f5f2;
+    --bg-hover: #f0eae4;
+
+    --border: #e8e0d8;
+    --border-bright: #d9cec4;
+    --border-focus: #b9a3dd;
+    --divider: #f0e9e2;
+
+    --accent: #a8d4f0;
+    --accent-hover: #97caec;
+    --accent-bright: #5b8db8;
+    --accent-dim: #cfe6f6;
+    --accent-soft: #eaf4fb;
+    --accent-soft-hover: #dcedf9;
+    --accent-line: #a8d4f0;
+    --accent-text: #3b6e99;
+    --on-accent: #3a3440;
+    --link: #3b6e99;
+
+    --ok: #37724f;
+    --ok-soft: #e5f3eb;
+    --ok-line: #b9dcc8;
+    --warn: #86661a;
+    --warn-soft: #f8f0d4;
+    --warn-line: #e6d596;
+    --danger: #ad4560;
+    --danger-soft: #fbe8ed;
+    --danger-line: #f0bfcb;
+    --on-status: #ffffff;
+
+    --text-primary: #4a4450;
+    --text-secondary: #675f6d;
+    --text-muted: #6f6875;
+    --text-bright: #3a3440;
+    --title-color: #4a4450;
+
+    --neutral-soft: #f4efea;
+    --neutral-line: #e2d8cf;
+
+    --brand-paw: #6a5498;
+    --brand-paw-soft: #f2ebf9;
+    --brand-paw-line: #d4c4e8;
+    --brand-derpi: #3b7766;
+    --brand-derpi-soft: #e4f3ee;
+    --brand-derpi-line: #bfe0d4;
+    --brand-discord: #4d58a4;
+    --brand-discord-soft: #e9ecfa;
+    --brand-discord-line: #c7cdf0;
+
+    /* Selected = a raised white pillow in a recessed track. */
+    --seg-active-bg: #ffffff;
+    --seg-active-fg: #3a3440;
+    --seg-active-border: transparent;
+    --seg-active-shadow: 0 1px 2px rgba(120, 95, 80, 0.12), 0 3px 10px rgba(120, 95, 80, 0.1);
+    --row-active-bg: #fdf0f3;
+    --row-active-border: #f5c6d0;
+    --row-active-color: #3a3440;
+
+    --check-border: #e9a9b8;
+
+    --focus-ring: #9a7fcf;
+    --overlay-bg: rgba(247, 244, 240, 0.6);
+    --scrim: rgba(74, 68, 80, 0.6);
+    --lightbox-bg: rgba(58, 52, 64, 0.94);
+    --skeleton: #f2ede8;
+    --skeleton-hi: #faf7f3;
+
+    --input-shadow: inset 0 1px 3px rgba(120, 95, 80, 0.07);
+    --shadow-sm: 0 1px 2px rgba(120, 95, 80, 0.05), 0 6px 18px rgba(120, 95, 80, 0.06);
+    --shadow-md: 0 2px 4px rgba(120, 95, 80, 0.05), 0 10px 26px rgba(120, 95, 80, 0.11);
+    --shadow-lg: 0 4px 12px rgba(120, 95, 80, 0.08), 0 26px 64px rgba(120, 95, 80, 0.18);
+    --btn-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 -2px 0 rgba(74, 68, 80, 0.06),
+        0 2px 6px rgba(120, 95, 80, 0.1);
+    --tile-shadow-hover: var(--shadow-md);
+
+    /* Faint pastel light pooling on the cream "wall". */
+    --app-bg-image:
+        radial-gradient(720px 420px at 100% 0%, rgba(245, 198, 208, 0.34), transparent 70%),
+        radial-gradient(820px 520px at 0% 100%, rgba(168, 212, 240, 0.3), transparent 70%),
+        radial-gradient(640px 420px at 55% 45%, rgba(212, 196, 232, 0.16), transparent 70%);
+}
+
+/* ── Identity rules ───────────────────────────────────────────── */
+
+/* Rounded display face for every heading. */
+:root[data-theme="nursery"] .section-title,
+:root[data-theme="nursery"] .modal-header,
+:root[data-theme="nursery"] .theme-name,
+:root[data-theme="nursery"] .pmv-day-head,
+:root[data-theme="nursery"] .pmv-site-who {
+    font-family: var(--font-display);
+}
+:root[data-theme="nursery"] .modal-header { font-size: 20px; border-bottom-color: var(--divider); }
+:root[data-theme="nursery"] .modal-footer { border-top-color: var(--divider); background: var(--bg-primary); }
+
+/* A little pastel bead before each section title; the colour rotates. */
+:root[data-theme="nursery"] .section-title::before {
+    content: '';
+    width: 10px;
+    height: 10px;
+    flex: 0 0 10px;
+    border-radius: 50%;
+    background: var(--blush);
+    box-shadow: inset 0 -2px 0 rgba(74, 68, 80, 0.08);
+}
+:root[data-theme="nursery"] .section:nth-of-type(3n+2) .section-title::before { background: var(--baby-blue); }
+:root[data-theme="nursery"] .section:nth-of-type(3n) .section-title::before { background: var(--lavender); }
+:root[data-theme="nursery"] .settings-section:nth-child(3n+2) .section-title::before { background: var(--baby-blue); }
+:root[data-theme="nursery"] .settings-section:nth-child(3n) .section-title::before { background: var(--lavender); }
+
+/* Header floats on a soft shadow instead of a rule. */
+:root[data-theme="nursery"] .header {
+    background: rgba(251, 248, 245, 0.92);
+    box-shadow: 0 2px 14px rgba(120, 95, 80, 0.07);
+}
+:root[data-theme="nursery"] .header-title { color: var(--ink); }
+:root[data-theme="nursery"] .header-title::after {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 5px;
+    border-radius: 50%;
+    background: var(--blush);
+    box-shadow: 11px 0 0 var(--baby-blue), 22px 0 0 var(--lavender);
+    vertical-align: middle;
+}
+:root[data-theme="nursery"] .header-title { margin-right: 24px; }
+:root[data-theme="nursery"] .header-divider { background: var(--border); }
+
+/* Sections: pillowy white cards with no hard edge. */
+:root[data-theme="nursery"] .section { border-color: rgba(232, 224, 216, 0.7); }
+
+/* Recessed tracks for segmented controls; the active option is the pillow. */
+:root[data-theme="nursery"] .segmented:not(.seg-sub):not(:has(> .field-hint:only-child)),
+:root[data-theme="nursery"] .pmv-modebar {
+    background: var(--recess);
+    border-color: transparent;
+}
+:root[data-theme="nursery"] .settings-nav { background: var(--bg-primary); border-right-color: var(--divider); }
+
+/* Secondary: blush pillow (primary is baby blue). */
+:root[data-theme="nursery"] .btn-secondary {
+    background: #fce9ed;
+    border-color: var(--blush);
+    color: #8a4a5c;
+}
+:root[data-theme="nursery"] .btn-secondary:hover:not(:disabled) {
+    background: #f9dbe2;
+    border-color: #eeb3c1;
+}
+:root[data-theme="nursery"] .btn-ghost {
+    background: #ffffff;
+    color: var(--text-secondary);
+}
+:root[data-theme="nursery"] .btn:hover:not(:disabled) { transform: translateY(-1px); }
+:root[data-theme="nursery"] .btn:active:not(:disabled) { transform: translateY(1px); }
+
+/* Checkboxes: blush when ticked, charcoal tick. */
+:root[data-theme="nursery"] input[type="checkbox"]:checked,
+:root[data-theme="nursery"] input[type="checkbox"]:indeterminate {
+    background: var(--blush);
+}
+:root[data-theme="nursery"] input[type="checkbox"]::after { border-color: var(--ink); }
+:root[data-theme="nursery"] input[type="checkbox"].switch:checked { background: var(--baby-blue); border-color: #8fc3e6; }
+:root[data-theme="nursery"] input[type="checkbox"].switch::after { background: #ffffff; box-shadow: 0 1px 3px rgba(74, 68, 80, 0.25); }
+:root[data-theme="nursery"] input[type="checkbox"].switch:checked::after { background: #ffffff; }
+
+/* Badges and chips: soft pastel pills. */
+:root[data-theme="nursery"] .badge,
+:root[data-theme="nursery"] .chip,
+:root[data-theme="nursery"] .link-badge { font-weight: 700; letter-spacing: 0.2px; }
+:root[data-theme="nursery"] .badge.pmv-new { background: #fdeef1; border-color: var(--blush); color: #8a4a5c; }
+:root[data-theme="nursery"] .badge.badge-4k { background: #f2ebf9; border-color: var(--lavender); color: #6a5498; }
+
+/* Tables and lists: rounded rows, gentle hover. */
+:root[data-theme="nursery"] .pmv-site,
+:root[data-theme="nursery"] .pmv-day { background: #ffffff; box-shadow: var(--shadow-sm); }
+:root[data-theme="nursery"] .pmv-site-head,
+:root[data-theme="nursery"] .pmv-day-head { background: var(--bg-raised); border-bottom-color: var(--divider); }
+:root[data-theme="nursery"] .pmv-item:hover { background: #fbf6f2; }
+:root[data-theme="nursery"] .pmv-num { color: #5b8db8; }
+:root[data-theme="nursery"] .pmv-st { border-radius: 8px; }
+:root[data-theme="nursery"] .pmv-st.on { background: #e5f3eb; }
+
+/* Log: a soft notebook page. */
+:root[data-theme="nursery"] .log-container { background: #fdfbf9; }
+:root[data-theme="nursery"] .log-entry::before { content: '•'; color: var(--blush); }
+:root[data-theme="nursery"] .log-entry.log-download { color: var(--accent-text); }
+
+/* Empty states get a little more warmth. */
+:root[data-theme="nursery"] .links-empty { background: #fdfaf7; border-color: #eadfd4; }
+
+/* Scrollbars: soft rounded beige. */
+:root[data-theme="nursery"] ::-webkit-scrollbar-thumb {
+    background: #e2d8ce;
+    background-clip: content-box;
+}
+:root[data-theme="nursery"] ::-webkit-scrollbar-thumb:hover {
+    background: #d4c8bc;
+    background-clip: content-box;
+}

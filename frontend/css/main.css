@@ -24,6 +24,30 @@
     font-display: swap;
 }
 
+/* Theme display faces (SIL OFL, latin subset, variable weight). Only fetched
+   when a theme actually uses them. */
+@font-face {
+    font-family: 'Unbounded';
+    src: url('../fonts/unbounded.woff2') format('woff2');
+    font-weight: 200 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Fredoka';
+    src: url('../fonts/fredoka.woff2') format('woff2');
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Nunito';
+    src: url('../fonts/nunito.woff2') format('woff2');
+    font-weight: 200 1000;
+    font-style: normal;
+    font-display: swap;
+}
+
 *, *::before, *::after {
     box-sizing: border-box;
     margin: 0;
@@ -63,7 +87,7 @@ code {
    show it (:focus-visible). Components never set outline:none on their own. */
 :focus { outline: none; }
 :focus-visible {
-    outline: var(--focus-w) solid var(--focus-ring);
+    outline: var(--focus-w) var(--focus-style) var(--focus-ring);
     outline-offset: var(--focus-offset);
 }
 input:focus-visible, select:focus-visible, textarea:focus-visible {

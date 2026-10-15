@@ -15,7 +15,12 @@ THEME_BACKGROUNDS = {
     ("brutalist", "dark"): "#0a0a0a",
     ("studio", "light"): "#eef1f4",
     ("studio", "dark"): "#0b0e13",
+    ("neon", "dark"): "#0a0a0f",
+    ("nursery", "light"): "#f7f4f0",
 }
+
+# Themes that ship one mode only (ignore the Light/Dark/System setting).
+THEME_FIXED_MODE = {"neon": "dark", "nursery": "light"}
 
 
 def _system_mode():
@@ -46,7 +51,8 @@ def _theme_bootstrap(state, frontend_dir):
             f.write("window.__THEME_PREF = %s;\n" % json.dumps(pref))
     except OSError:
         pass
-    mode = pref["mode"] if pref["mode"] in ("light", "dark") else _system_mode()
+    mode = THEME_FIXED_MODE.get(pref["theme"]) or (
+        pref["mode"] if pref["mode"] in ("light", "dark") else _system_mode())
     return THEME_BACKGROUNDS.get((pref["theme"], mode), "#0a0a0a")
 
 

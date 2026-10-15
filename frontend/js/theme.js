@@ -3,26 +3,48 @@
    data-theme="<id>" and data-mode="light|dark". This file only flips those
    attributes, remembers the choice, and draws the picker in Settings ▸ Appearance.
 
-   To add a theme: write its CSS file, link it in index.html, add an entry here.
-   `swatches` drive the mini preview card: [ground, panel, ink, accent]. */
+   To add a theme: write its CSS file, link it in index.html, add an entry here
+   (and a THEME_BACKGROUNDS row in main.py). `modes` lists the modes it ships; a
+   single-mode theme ignores the Light/Dark/System setting. `swatches` drive the
+   mini preview card: [ground, panel, ink, accent]. */
 
 const THEMES = [
     {
         id: 'brutalist',
         label: 'Brutalist',
-        blurb: 'Square, ruled, monospace. Hazard-yellow signal.',
+        blurb: 'Square, ruled, monospace. Strictly black and white.',
+        modes: ['light', 'dark'],
         swatches: {
-            light: ['#e9e6de', '#ffffff', '#0b0b0b', '#ffd400'],
-            dark: ['#0a0a0a', '#141414', '#ece9e2', '#ffd400'],
+            light: ['#e9e6de', '#ffffff', '#0b0b0b', '#0b0b0b'],
+            dark: ['#0a0a0a', '#141414', '#ece9e2', '#ece9e2'],
         },
     },
     {
         id: 'studio',
         label: 'Studio',
         blurb: 'Soft slate panels, rounded corners, calm teal.',
+        modes: ['light', 'dark'],
         swatches: {
             light: ['#eef1f4', '#ffffff', '#1b2129', '#1a7b70'],
             dark: ['#0b0e13', '#161a21', '#e6e8ec', '#3fb6a8'],
+        },
+    },
+    {
+        id: 'neon',
+        label: 'Neon',
+        blurb: 'After-hours: glowing pink, cyan and violet on black.',
+        modes: ['dark'],
+        swatches: {
+            dark: ['#0a0a0f', '#16161f', '#f0f0f5', '#ff2d95'],
+        },
+    },
+    {
+        id: 'nursery',
+        label: 'Nursery',
+        blurb: 'Pillowy pastels on warm cream, rounded everything.',
+        modes: ['light'],
+        swatches: {
+            light: ['#f7f4f0', '#ffffff', '#4a4450', '#a8d4f0'],
         },
     },
 ];
@@ -41,7 +63,14 @@ const Theme = (() => {
         try { localStorage.setItem('ui-theme', JSON.stringify(p)); } catch (e) { /* private mode */ }
     }
 
-    function resolveMode(mode) {
+    function themeOf(id) {
+        return THEMES.find(t => t.id === id) || THEMES[0];
+    }
+
+    // The mode actually painted: a single-mode theme always uses its own.
+    function resolveMode(mode, themeId) {
+        const modes = themeOf(themeId || pref.theme).modes;
+        if (modes.length === 1) return modes[0];
         if (mode === 'light' || mode === 'dark') return mode;
         return darkQuery && !darkQuery.matches ? 'light' : 'dark';
     }
@@ -55,7 +84,7 @@ const Theme = (() => {
 
     function paint() {
         root.dataset.theme = pref.theme;
-        root.dataset.mode = resolveMode(pref.mode);
+        root.dataset.mode = resolveMode(pref.mode, pref.theme);
         if (pref.motion === 'reduce') root.dataset.motion = 'reduce';
         else delete root.dataset.motion;
     }
@@ -102,9 +131,9 @@ const Theme = (() => {
     function renderPicker() {
         const grid = document.getElementById('themeGrid');
         if (!grid) return;
-        const mode = resolveMode(pref.mode);
         grid.innerHTML = THEMES.map(t => {
-            const [ground, panel, ink, accent] = t.swatches[mode] || t.swatches.dark;
+            const mode = resolveMode(pref.mode, t.id);
+            const [ground, panel, ink, accent] = t.swatches[mode];
             const on = t.id === pref.theme;
             return `<button type="button" class="theme-card${on ? ' active' : ''}" role="radio"
                         aria-checked="${on}" tabindex="${on ? 0 : -1}" data-theme-id="${t.id}"
@@ -119,11 +148,21 @@ const Theme = (() => {
                 </span>
             </button>`;
         }).join('');
+        // A single-mode theme can't follow Light/Dark/System: lock the control
+        // (the saved choice is kept for when you switch back) and say why.
+        const cur = themeOf(pref.theme);
+        const fixed = cur.modes.length === 1 ? cur.modes[0] : null;
         document.querySelectorAll('#themeModeSeg .seg').forEach(b => {
-            const on = b.dataset.mode === pref.mode;
+            const on = b.dataset.mode === (fixed || pref.mode);
             b.classList.toggle('active', on);
             b.setAttribute('aria-checked', String(on));
+            b.disabled = !!fixed;
         });
+        const hint = document.getElementById('themeModeHint');
+        if (hint) {
+            hint.textContent = fixed ? `${cur.label} is ${fixed}-only — this setting applies to the other themes.` : '';
+            hint.style.display = fixed ? '' : 'none';
+        }
         const rm = document.getElementById('themeReduceMotion');
         if (rm) rm.checked = pref.motion === 'reduce';
     }
