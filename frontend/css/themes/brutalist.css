@@ -1,7 +1,8 @@
 /* ── Theme: Brutalist ───────────────────────────────────────────────
    Utilitarian print/terminal identity: square geometry, 2px rules, hard offset
-   shadows with no blur, monospace uppercase labels, heavy grotesk headings, and a
-   single hazard-yellow signal used as a *fill* (never as text on paper).
+   shadows with no blur, monospace uppercase labels, heavy grotesk headings.
+   Strictly monochrome — emphasis is inversion (solid ink blocks), never a hue;
+   colour appears only for status (ok / warn / error) and site brands.
    Everything below is tokens except a few identity rules at the end that tokens
    can't express (title marker, header rule). */
 
@@ -43,6 +44,7 @@
     --dur-base: 140ms;
     --dur-slow: 200ms;
     --ease-out: cubic-bezier(0.3, 0.9, 0.3, 1);
+    --focus-style: dashed;
 }
 
 /* ── Light: ink on paper ─────────────────────────────────────── */
@@ -63,16 +65,16 @@
     --border-focus: #0b0b0b;
     --divider: rgba(11, 11, 11, 0.16);
 
-    --accent: #ffd400;
-    --accent-hover: #ffe347;
+    --accent: #0b0b0b;
+    --accent-hover: #2e2e2c;
     --accent-bright: #0b0b0b;
     --accent-dim: #0b0b0b;
-    --accent-soft: rgba(255, 212, 0, 0.34);
-    --accent-soft-hover: rgba(255, 212, 0, 0.62);
+    --accent-soft: rgba(11, 11, 11, 0.06);
+    --accent-soft-hover: rgba(11, 11, 11, 0.13);
     --accent-line: #0b0b0b;
     --accent-text: #0b0b0b;
-    --on-accent: #0b0b0b;
-    --link: #1d1dd6;
+    --on-accent: #ffffff;
+    --link: #0b0b0b;
 
     --ok: #00764a;
     --ok-soft: rgba(0, 150, 94, 0.12);
@@ -104,13 +106,13 @@
     --brand-discord-line: #2f39c9;
 
     --seg-active-bg: #0b0b0b;
-    --seg-active-fg: #ffd400;
+    --seg-active-fg: #ffffff;
     --seg-active-border: #0b0b0b;
-    --row-active-bg: rgba(255, 212, 0, 0.3);
+    --row-active-bg: rgba(11, 11, 11, 0.06);
     --row-active-border: #0b0b0b;
     --row-active-color: #0b0b0b;
 
-    --focus-ring: #1d1dd6;
+    --focus-ring: #0b0b0b;
     --overlay-bg: rgba(233, 230, 222, 0.82);
     --scrim: rgba(11, 11, 11, 0.82);
     --lightbox-bg: rgba(11, 11, 11, 0.96);
@@ -139,18 +141,18 @@
 
     --border: #8f8b82;
     --border-bright: #ece9e2;
-    --border-focus: #ffd400;
+    --border-focus: #ece9e2;
     --divider: rgba(236, 233, 226, 0.14);
 
-    --accent: #ffd400;
-    --accent-hover: #ffe347;
-    --accent-bright: #ffd400;
-    --accent-dim: #ffd400;
-    --accent-soft: rgba(255, 212, 0, 0.13);
-    --accent-line: #ffd400;
-    --accent-text: #ffd400;
+    --accent: #ece9e2;
+    --accent-hover: #ffffff;
+    --accent-bright: #ffffff;
+    --accent-dim: #ece9e2;
+    --accent-soft: rgba(236, 233, 226, 0.08);
+    --accent-line: #ece9e2;
+    --accent-text: #ffffff;
     --on-accent: #0a0a0a;
-    --link: #ffd400;
+    --link: #ece9e2;
 
     --ok: #2fd58a;
     --ok-soft: rgba(47, 213, 138, 0.12);
@@ -181,14 +183,14 @@
     --brand-discord-soft: rgba(159, 169, 255, 0.12);
     --brand-discord-line: #9fa9ff;
 
-    --seg-active-bg: #ffd400;
+    --seg-active-bg: #ece9e2;
     --seg-active-fg: #0a0a0a;
-    --seg-active-border: #ffd400;
-    --row-active-bg: rgba(255, 212, 0, 0.1);
-    --row-active-border: #ffd400;
+    --seg-active-border: #ece9e2;
+    --row-active-bg: rgba(236, 233, 226, 0.08);
+    --row-active-border: #ece9e2;
     --row-active-color: #ffffff;
 
-    --focus-ring: #ffd400;
+    --focus-ring: #ece9e2;
     --overlay-bg: rgba(0, 0, 0, 0.78);
     --scrim: rgba(0, 0, 0, 0.8);
     --lightbox-bg: rgba(0, 0, 0, 0.96);
@@ -197,9 +199,10 @@
 
     --shadow-sm: none;
     --shadow-md: 4px 4px 0 #000000;
-    --shadow-lg: 8px 8px 0 #ffd400;
-    --btn-shadow: 3px 3px 0 #000000;
-    --tile-shadow-hover: 5px 5px 0 #ffd400;
+    --shadow-lg: 8px 8px 0 #ece9e2;
+    --btn-shadow: 3px 3px 0 #55534e;
+    --tile-shadow-hover: 5px 5px 0 #ece9e2;
+    --accent-soft-hover: rgba(236, 233, 226, 0.16);
 }
 
 /* ── Identity rules tokens can't express ─────────────────────── */
@@ -208,12 +211,10 @@
    on a printed sheet. */
 :root[data-theme="brutalist"] .section-title::before {
     content: '';
-    width: 8px;
-    height: 8px;
-    flex: 0 0 8px;
-    background: var(--accent);
-    outline: var(--border-w) solid var(--ink);
-    outline-offset: 0;
+    width: 9px;
+    height: 9px;
+    flex: 0 0 9px;
+    background: var(--ink);
 }
 
 :root[data-theme="brutalist"] .section-title {
@@ -230,8 +231,8 @@
     color: var(--bg-panel);
 }
 :root[data-theme="brutalist"] .modal-header .modal-close:hover {
-    color: var(--accent);
-    background: transparent;
+    color: var(--bg-panel);
+    background: color-mix(in srgb, var(--bg-panel) 20%, transparent);
 }
 
 /* Links read as links: underlined, in the link colour. */
@@ -252,8 +253,11 @@
 :root[data-theme="brutalist"] .log-entry.log-download { color: var(--text-primary); font-weight: 600; }
 :root[data-theme="brutalist"] .log-entry.log-download::before { content: '↓'; color: var(--text-primary); }
 
-/* Count pill on the Latest tab: a hard yellow tag. */
+/* Count tag on the Latest tab: paper with an ink rule, so it reads both on the
+   inverted (active) tab and on a plain one. */
 :root[data-theme="brutalist"] .pmv-mode-count:not(:empty) {
+    background: var(--bg-panel);
+    color: var(--ink);
     outline: var(--border-w) solid var(--ink);
 }
 
