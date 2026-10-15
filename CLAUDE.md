@@ -62,6 +62,20 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   `switchView`), `overlays.js` (Configure/Settings dialogs), `album.js`, `dupes.js`,
   `pmv.js`, `pmv_latest.js`. The PMV tab is the first and default view (it opens on
   Latest); Creator is second.
+- **Themes / design tokens**: `css/tokens.css` (spacing, type, motion, shape defaults,
+  and the list of semantic tokens every theme must define) → `css/themes/<id>.css`
+  (`brutalist` = default, `studio` = the original look; each has light + dark, keyed
+  off `data-theme` / `data-mode` on `<html>`) → `main.css` / `layout.css` /
+  `components.css`, which use tokens only — no colour literals. `js/theme.js` holds
+  the theme registry + Settings ▸ Appearance picker; the choice persists as
+  `ui_theme` / `ui_mode` / `ui_motion` in `app_state.json`. pywebview runs private
+  (no lasting localStorage), so `main.py` writes the saved choice to
+  `frontend/js/theme-pref.js` (gitignored) before launch and sets the window
+  background from it — no flash of the default theme. New theme = one CSS file,
+  a `<link>` in `index.html`, a `THEMES` entry, and a `THEME_BACKGROUNDS` row.
+  `js/ui.js` owns dialog open/close (focus trap + return), busy buttons
+  (`UI.busy`) and tab-strip keyboard handling — use it rather than toggling
+  `.visible` by hand.
 
 ## State model
 
