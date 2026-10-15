@@ -22,14 +22,14 @@ function pmvRowKey(it) { return `${it.creator_id}|${it.link_key}|${it.id}`; }
 function pmvSetMode(mode, quiet) {
     pmvMode = mode === 'creators' ? 'creators' : 'latest';
     document.querySelectorAll('.pmv-mode').forEach(b => {
-        const on = b.dataset.mode === pmvMode;
-        b.classList.toggle('active', on);
-        b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.classList.toggle('active', b.dataset.mode === pmvMode);
     });
+    UI.syncTabs(document.querySelector('.pmv-modebar'), '.pmv-mode');
     const latest = document.getElementById('pmvLatest');
     const creators = document.getElementById('pmvCreatorsPane');
     if (latest) latest.style.display = pmvMode === 'latest' ? '' : 'none';
     if (creators) creators.style.display = pmvMode === 'creators' ? '' : 'none';
+    if (!quiet) UI.enter(pmvMode === 'latest' ? latest : creators);
     if (!quiet) pywebview.api.save_state({ pmv_mode: pmvMode });
     if (pmvMode === 'latest') refreshPmvLatest();
 }
@@ -366,6 +366,8 @@ async function pmvStartCheck(mode) {
     if (pmvBusy) { showToast('A PMV fetch is already running', 'info'); return; }
     const sweepPaw = !!(document.getElementById('pmvSweepPaw') || {}).checked;
     setPmvBusy(true, mode === 'sweep' ? 'Starting full sweep…' : 'Checking feeds…');
+    const btn = document.getElementById(mode === 'sweep' ? 'pmvSweepBtn' : 'pmvCheckBtn');
+    if (btn) btn.classList.add('is-loading');
     let res;
     try { res = await pywebview.api.start_pmv_check(mode, sweepPaw); }
     catch (e) { res = { error: String(e) }; }

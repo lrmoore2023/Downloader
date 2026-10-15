@@ -1,0 +1,151 @@
+/* ── Design tokens ──────────────────────────────────────────────────
+   Three layers:
+     1. Primitives (this file) — spacing, type scale, motion, layers. Theme-independent.
+     2. Shape/character defaults (this file) — radius, border width, shadows, title
+        treatment. A theme overrides these to change the app's *geometry*, not just colour.
+     3. Semantic colours (css/themes/<id>.css) — every theme MUST define, per mode:
+
+        surfaces   --bg-deep --bg-primary --bg-secondary --bg-panel --bg-raised
+                   --bg-input --bg-hover
+        borders    --border --border-bright --border-focus
+        accent     --accent --accent-bright --accent-dim --accent-soft --accent-line
+                   --on-accent  (text/icons drawn on a solid --accent fill)
+                   --accent-text (accent used as text on panels; must pass 4.5:1)
+        status     --ok --ok-soft --ok-line  --warn --warn-soft --warn-line
+                   --danger --danger-soft --danger-line  --on-status
+        text       --text-primary --text-secondary --text-muted --text-bright
+        neutral    --neutral-soft --neutral-line   (quiet chips / idle badges)
+        brands     --brand-paw(-soft/-line) --brand-derpi(-soft/-line)
+                   --brand-discord(-soft/-line)
+        misc       --focus-ring --overlay-bg --scrim --lightbox-bg --skeleton
+                   --shadow-sm --shadow-md --shadow-lg  --select-chevron (colour)
+
+   Adding a theme: create css/themes/<id>.css with
+     :root[data-theme="<id>"]                     { shape overrides }
+     :root[data-theme="<id>"][data-mode="light"]  { semantic colours }
+     :root[data-theme="<id>"][data-mode="dark"]   { semantic colours }
+   link it in index.html, and add an entry to THEMES in js/theme.js. */
+
+:root {
+    /* Spacing scale (4px base) */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-7: 32px;
+    --space-8: 48px;
+
+    /* Type scale */
+    --text-2xs: 10px;
+    --text-xs: 11px;
+    --text-sm: 12px;
+    --text-md: 12.5px;
+    --text-base: 14px;
+    --text-lg: 16px;
+    --text-xl: 20px;
+
+    --font-sans: 'Hanken Grotesk', ui-sans-serif, system-ui, 'Segoe UI Variable',
+        'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+
+    /* Control sizes */
+    --control-h: 34px;
+    --control-h-sm: 28px;
+    --control-h-xs: 24px;
+    --label-w: 96px;
+
+    /* Motion */
+    --dur-fast: 120ms;
+    --dur-base: 180ms;
+    --dur-slow: 260ms;
+    --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-in: cubic-bezier(0.4, 0, 1, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --transition: var(--dur-fast) var(--ease-out);
+    --transition-slow: var(--dur-slow) var(--ease-out);
+    --enter-shift: 6px;
+
+    /* Layers */
+    --z-sticky: 5;
+    --z-tooltip: 100;
+    --z-modal: 9000;
+    --z-lightbox: 9500;
+    --z-menu: 9600;
+    --z-toast: 10000;
+
+    /* Shape / character defaults (soft, rounded) — themes override */
+    --radius: 6px;
+    --radius-sm: 4px;
+    --radius-lg: 10px;
+    --radius-pill: 999px;
+    --border-w: 1px;
+    --border-w-strong: 2px;
+    --press-shift: 1px;
+    --shadow-press: none;
+    --font-display: var(--font-sans);
+    --font-label: var(--font-sans);
+    --font-ui: var(--font-sans);
+    --title-transform: uppercase;
+    --title-tracking: 1.4px;
+    --title-weight: 700;
+    --title-size: 11px;
+    --heading-weight: 700;
+    --heading-tracking: 0.2px;
+    --btn-transform: none;
+    --btn-tracking: 0.2px;
+    --btn-weight: 600;
+    --badge-font: var(--font-sans);
+    --wordmark-transform: none;
+    --wordmark-tracking: 0.5px;
+    --header-rule: 1px;
+    --focus-w: 2px;
+    --focus-offset: 2px;
+    --modal-max: 640px;
+    --press-x: 0px;
+    --press-y: 1px;
+    --overlay-blur: 2px;
+    --row-active-rule: 0px;
+    --btn-size: 12.5px;
+    --btn-size-sm: 11.5px;
+    --wordmark-size: 15px;
+    --wordmark-weight: 700;
+    --btn-shadow: none;
+
+    /* Derived semantic defaults — a theme may override any of them. These resolve
+       on <html>, so they pick up whichever theme's colours are active. */
+    --ink: var(--text-bright);
+    --accent-hover: var(--accent-bright);
+    --divider: var(--border);
+    --link: var(--accent-text);
+    --seg-active-bg: var(--accent-soft);
+    --seg-active-fg: var(--accent-text);
+    --seg-active-border: var(--accent-dim);
+    --row-active-bg: var(--accent-soft);
+    --row-active-border: var(--accent-line);
+    --row-active-color: var(--text-primary);
+    --tile-shadow-hover: var(--shadow-md);
+    --accent-soft-hover: color-mix(in srgb, var(--accent) 22%, transparent);
+    --check-border: var(--accent);
+
+    /* Always drawn over photos/video, so fixed regardless of theme. */
+    --on-scrim: #ffffff;
+    --media-bg: #000000;
+}
+
+/* Motion off: the OS preference, or Settings ▸ Appearance ▸ Reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --dur-fast: 0ms;
+        --dur-base: 0ms;
+        --dur-slow: 0ms;
+        --enter-shift: 0px;
+    }
+}
+:root[data-motion="reduce"] {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+    --enter-shift: 0px;
+}

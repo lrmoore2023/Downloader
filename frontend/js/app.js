@@ -223,24 +223,45 @@ function clearLog() {
 
 // ── Toast notifications ─────────────────────────────────────────
 
+const TOAST_ICON = { success: '✓', error: '!', info: 'i' };
+const TOAST_MS = 4000;
+
+// Click to dismiss; hovering pauses the timer so a long message can be read.
 function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    toast.textContent = message;
+    if (type === 'error') toast.setAttribute('role', 'alert');
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = TOAST_ICON[type] || TOAST_ICON.info;
+    const text = document.createElement('span');
+    text.className = 'toast-text';
+    text.textContent = message;
+    toast.append(icon, text);
     container.appendChild(toast);
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transition = 'opacity 0.3s ease';
-        setTimeout(() => toast.remove(), 300);
-    }, 4000);
+
+    let timer = null;
+    const dismiss = () => {
+        if (toast.classList.contains('toast-out')) return;
+        clearTimeout(timer);
+        toast.classList.add('toast-out');
+        toast.addEventListener('animationend', () => toast.remove(), { once: true });
+        setTimeout(() => toast.remove(), 400);
+    };
+    const arm = () => { clearTimeout(timer); timer = setTimeout(dismiss, TOAST_MS); };
+    toast.addEventListener('click', dismiss);
+    toast.addEventListener('mouseenter', () => clearTimeout(timer));
+    toast.addEventListener('mouseleave', arm);
+    arm();
 }
 
 // ── Close overlays on backdrop click / Escape ───────────────────
 
 function dismissOverlay(ov) {
     if (ov.id === 'settingsOverlay') persistSettings();
-    ov.classList.remove('visible');
+    UI.closeOverlay(ov);
 }
 
 document.querySelectorAll('.modal-overlay').forEach(ov => {
@@ -250,8 +271,10 @@ document.querySelectorAll('.modal-overlay').forEach(ov => {
 });
 
 document.addEventListener('keydown', e => {
+    // Escape closes only the top-most dialog (the lightbox handles its own).
     if (e.key === 'Escape') {
-        document.querySelectorAll('.modal-overlay.visible').forEach(dismissOverlay);
+        const top = UI.topOverlay();
+        if (top && top.classList.contains('modal-overlay')) dismissOverlay(top);
     }
 });
 
@@ -272,6 +295,7 @@ window.addEventListener('pywebviewready', async function () {
     }
 
     const state = await pywebview.api.load_state();
+    Theme.loadFromState(state);
     loadSettingsFromState(state);
     currentSort = state.creator_sort || 'recent';
     document.getElementById('creatorSort').value = currentSort;

@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import webview
@@ -7,14 +8,58 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from backend.api import Api
 
+# Window ground per theme/mode, painted by the native window before the page
+# loads. Keep in step with --bg-deep in frontend/css/themes/*.css.
+THEME_BACKGROUNDS = {
+    ("brutalist", "light"): "#e9e6de",
+    ("brutalist", "dark"): "#0a0a0a",
+    ("studio", "light"): "#eef1f4",
+    ("studio", "dark"): "#0b0e13",
+}
+
+
+def _system_mode():
+    """'light' or 'dark' from Windows' app theme setting (dark if unknown)."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return "light" if winreg.QueryValueEx(k, "AppsUseLightTheme")[0] else "dark"
+    except Exception:
+        return "dark"
+
+
+def _theme_bootstrap(state, frontend_dir):
+    """Hand the saved theme to the page before its first paint.
+
+    pywebview runs private, so the page has no storage that survives a restart,
+    and the JS API only exists after load — too late to avoid a flash of the
+    default theme. Writing a one-line script the page loads synchronously in
+    <head> closes that gap. Returns the window background colour."""
+    pref = {
+        "theme": state.get("ui_theme") or "brutalist",
+        "mode": state.get("ui_mode") or "system",
+        "motion": state.get("ui_motion") or "auto",
+    }
+    try:
+        with open(os.path.join(frontend_dir, "js", "theme-pref.js"), "w", encoding="utf-8") as f:
+            f.write("window.__THEME_PREF = %s;\n" % json.dumps(pref))
+    except OSError:
+        pass
+    mode = pref["mode"] if pref["mode"] in ("light", "dark") else _system_mode()
+    return THEME_BACKGROUNDS.get((pref["theme"], mode), "#0a0a0a")
+
 
 def main():
     api = Api()
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
     index_path = os.path.join(frontend_dir, "index.html")
 
+    state = api.load_state()
+    background = _theme_bootstrap(state, frontend_dir)
+
     # Restore saved window geometry (size/position) if present.
-    saved = api.load_state().get("window", {}) or {}
+    saved = state.get("window", {}) or {}
     width = saved.get("width") or 1100
     height = saved.get("height") or 750
 
@@ -24,7 +69,7 @@ def main():
         width=width,
         height=height,
         min_size=(900, 600),
-        background_color="#0e1116",
+        background_color=background,
     )
     # Only restore a saved position if it's plausibly on-screen. A minimized
     # or mid-close window reports a large-negative sentinel (~-32000) on

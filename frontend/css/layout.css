@@ -1,88 +1,9 @@
-/* ── Main Layout: Sidebar + Content ───────────────────────────── */
+/* ── Main Layout: header + one scrollable view ───────────────────── */
 
 .app-container {
     display: flex;
     height: 100vh;
     width: 100%;
-}
-
-/* ── Sidebar ──────────────────────────────────────────────────── */
-
-.sidebar {
-    width: 60px;
-    min-width: 60px;
-    background: var(--bg-primary);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding-top: 16px;
-    gap: 8px;
-}
-
-.sidebar-tab {
-    width: 44px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius);
-    cursor: pointer;
-    transition: var(--transition);
-    position: relative;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--text-muted);
-}
-
-.sidebar-tab:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-}
-
-.sidebar-tab.active {
-    background: var(--accent-soft);
-    color: var(--accent-bright);
-}
-
-.sidebar-tab.active::before {
-    content: '';
-    position: absolute;
-    left: -8px;
-    top: 10px;
-    bottom: 10px;
-    width: 3px;
-    background: var(--accent);
-    border-radius: 0 3px 3px 0;
-}
-
-.sidebar-tab svg {
-    width: 22px;
-    height: 22px;
-    fill: currentColor;
-}
-
-.sidebar-tab .tab-tooltip {
-    position: absolute;
-    left: 56px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: var(--bg-raised);
-    border: 1px solid var(--border-bright);
-    color: var(--text-primary);
-    padding: 5px 10px;
-    border-radius: var(--radius);
-    font-size: 12px;
-    white-space: nowrap;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-    z-index: 100;
-    box-shadow: var(--shadow-md);
-}
-
-.sidebar-tab:hover .tab-tooltip {
-    opacity: 1;
 }
 
 /* ── Main Content Area ────────────────────────────────────────── */
@@ -101,31 +22,49 @@
 .header {
     display: flex;
     align-items: center;
-    padding: 0 24px;
-    border-bottom: 1px solid var(--border);
+    padding: 0 var(--space-6);
+    border-bottom: var(--header-rule) solid var(--border);
     background: var(--bg-primary);
-    gap: 14px;
-    min-height: 56px;
+    gap: var(--space-4);
+    min-height: 58px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 2;
+}
+
+.header-brand {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
 }
 
 .header-title {
-    font-family: var(--font-sans);
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
+    font-family: var(--font-display);
+    font-size: var(--wordmark-size);
+    font-weight: var(--wordmark-weight);
+    letter-spacing: var(--wordmark-tracking);
+    text-transform: var(--wordmark-transform);
     color: var(--text-bright);
+    line-height: 1;
 }
 
 .header-subtitle {
-    font-size: 12px;
+    font-family: var(--font-label);
+    font-size: var(--text-xs);
     color: var(--text-muted);
-    letter-spacing: 0.3px;
-    font-weight: 500;
+    letter-spacing: 0.6px;
+    font-weight: 600;
+    text-transform: var(--title-transform);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
 }
 
 .header-divider {
-    width: 1px;
-    height: 20px;
+    width: var(--border-w);
+    height: 22px;
     background: var(--border-bright);
 }
 
@@ -133,7 +72,7 @@
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     min-width: 0;
 }
 
@@ -146,46 +85,59 @@
     /* Reserve the scrollbar gutter so it appearing/disappearing never shifts the
        column width (a source of layout jitter during fast log streaming). */
     scrollbar-gutter: stable;
-    padding: 22px 24px;
+    padding: var(--space-5) var(--space-6);
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: var(--space-4);
     min-height: 0;
 }
 
-.tab-panel {
-    display: none;
+/* The view that switchView() just revealed. Opacity + a few px of rise only —
+   cheap to composite, and zeroed by reduced motion. */
+.view-enter {
+    animation: viewEnter var(--dur-slow) var(--ease-out);
 }
 
-.tab-panel.active {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    flex: 1;
-    min-height: 0;
+@keyframes viewEnter {
+    from { opacity: 0; transform: translateY(var(--enter-shift)); }
+    to { opacity: 1; transform: none; }
 }
 
 /* ── Sections (cards) ─────────────────────────────────────────── */
 
 .section {
     background: var(--bg-panel);
-    border: 1px solid var(--border);
+    border: var(--border-w) solid var(--border);
     border-radius: var(--radius-lg);
-    padding: 18px 20px;
+    padding: var(--space-4) var(--space-5);
     box-shadow: var(--shadow-sm);
 }
 
 .section-title {
-    font-family: var(--font-sans);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1.4px;
-    text-transform: uppercase;
+    font-family: var(--font-label);
+    font-size: var(--title-size);
+    font-weight: var(--title-weight);
+    letter-spacing: var(--title-tracking);
+    text-transform: var(--title-transform);
     color: var(--text-muted);
-    margin-bottom: 14px;
+    margin-bottom: var(--space-3);
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
+    min-height: 18px;
+}
+
+/* A sub-heading inside a modal body: extra air above, same treatment. */
+.section-title.sub {
+    margin-top: var(--space-5);
+}
+
+.section-title .title-note {
+    font-family: var(--font-sans);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+    color: var(--text-muted);
 }
 
 /* ── Form Rows ────────────────────────────────────────────────── */
@@ -193,19 +145,24 @@
 .form-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
+    gap: var(--space-2) 10px;
+    margin-bottom: var(--space-3);
 }
 
 .form-row:last-child {
     margin-bottom: 0;
 }
 
+.form-row.align-start { align-items: flex-start; }
+.form-row.align-stretch { align-items: stretch; }
+
 .form-label {
-    font-size: 12px;
+    font-family: var(--font-label);
+    font-size: var(--text-sm);
     color: var(--text-secondary);
-    min-width: 96px;
-    font-weight: 500;
+    min-width: var(--label-w);
+    flex: 0 0 var(--label-w);
+    font-weight: 600;
     letter-spacing: 0.2px;
 }
 
@@ -236,14 +193,24 @@
 /* ── Responsive: wrap rows on narrow widths ───────────────────── */
 
 @media (max-width: 720px) {
+    .header { padding: var(--space-2) var(--space-4); }
+    .tab-content { padding: var(--space-4); }
     .form-row {
         flex-wrap: wrap;
     }
     .form-label {
         min-width: 100%;
+        flex-basis: 100%;
         margin-bottom: 2px;
     }
+    .form-label:empty { display: none; }
     .field-error {
         margin-left: 0 !important;
     }
+}
+
+/* A form row whose only control is hidden by JS (e.g. the subcategory filter
+   when a major has no subs) collapses instead of leaving a blank gap. */
+.form-row:has(> .form-label:empty + [style*="display: none"]:last-child) {
+    display: none;
 }

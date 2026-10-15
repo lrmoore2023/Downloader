@@ -840,18 +840,34 @@ function switchView(name) {
                     dupes: 'dupesView', albums: 'albumsView' };
     Object.entries(views).forEach(([n, id]) => {
         const el = document.getElementById(id);
-        if (el) el.style.display = (n === name) ? 'flex' : 'none';
+        if (!el) return;
+        const show = n === name;
+        const wasHidden = el.style.display === 'none';
+        el.style.display = show ? 'flex' : 'none';
+        if (show && wasHidden) UI.enter(el);
     });
-    // The header toggle only offers Creator/Gallery/Duplicates; the media browser is
-    // a sub-page of the gallery, so keep "Gallery" lit while viewing media.
+    // The media browser is a sub-page of the gallery, so keep "Gallery" lit
+    // while viewing media.
     const lit = (name === 'media') ? 'gallery' : name;
-    document.querySelectorAll('#viewToggle .seg')
+    const toggle = document.getElementById('viewToggle');
+    toggle.querySelectorAll('.seg')
         .forEach(b => b.classList.toggle('active', b.dataset.view === lit));
+    UI.syncTabs(toggle, '.seg');
     if (name === 'gallery' && typeof renderGallery === 'function') renderGallery();
     if (name === 'dupes' && typeof renderDupeHeader === 'function') renderDupeHeader();
     if (name === 'albums' && typeof onAlbumViewShown === 'function') onAlbumViewShown();
     if (name === 'pmv' && typeof onPmvViewShown === 'function') onPmvViewShown();
 }
+
+// Ctrl+1…5 jump between the header views; ←/→ move along the strip when focused.
+UI.tablist(document.getElementById('viewToggle'), '.seg');
+UI.tablist(document.querySelector('.pmv-modebar'), '.pmv-mode');
+document.addEventListener('keydown', e => {
+    if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || UI.topOverlay()) return;
+    const tabs = [...document.querySelectorAll('#viewToggle .seg')];
+    const i = parseInt(e.key, 10) - 1;
+    if (i >= 0 && i < tabs.length) { e.preventDefault(); tabs[i].click(); tabs[i].focus(); }
+});
 
 function persistLastCreator(id) {
     pywebview.api.save_state({ last_creator: id || '' });

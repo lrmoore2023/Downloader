@@ -125,7 +125,7 @@ function manageCurrentCreator() {
 function openViewer(index) {
     if (index < 0 || index >= mediaFiltered.length) return;
     viewerIndex = index;
-    document.getElementById('mediaViewer').classList.add('visible');
+    UI.openOverlay('mediaViewer', '.lightbox-close');
     showViewerItem();
 }
 
@@ -174,7 +174,7 @@ function viewerNext() { if (viewerIndex < mediaFiltered.length - 1) { viewerInde
 function closeViewer() {
     _teardownStageVideo();
     document.getElementById('lightboxStage').innerHTML = '';
-    document.getElementById('mediaViewer').classList.remove('visible');
+    UI.closeOverlay('mediaViewer');
 }
 
 // Click the dim backdrop (not the media) to close.
@@ -184,7 +184,7 @@ document.getElementById('lightboxStage').addEventListener('click', e => {
 
 // Keyboard nav — capture phase so arrows navigate instead of seeking a focused video.
 document.addEventListener('keydown', e => {
-    if (!document.getElementById('mediaViewer').classList.contains('visible')) return;
+    if (!UI.isOpen('mediaViewer')) return;
     if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); viewerPrev(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); viewerNext(); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeViewer(); }

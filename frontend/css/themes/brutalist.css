@@ -1,0 +1,270 @@
+/* ── Theme: Brutalist ───────────────────────────────────────────────
+   Utilitarian print/terminal identity: square geometry, 2px rules, hard offset
+   shadows with no blur, monospace uppercase labels, heavy grotesk headings, and a
+   single hazard-yellow signal used as a *fill* (never as text on paper).
+   Everything below is tokens except a few identity rules at the end that tokens
+   can't express (title marker, header rule). */
+
+:root[data-theme="brutalist"] {
+    --radius: 0px;
+    --radius-sm: 0px;
+    --radius-lg: 0px;
+    --radius-pill: 0px;
+    --border-w: 2px;
+    --border-w-strong: 3px;
+    --press-x: 3px;
+    --press-y: 3px;
+    --font-display: var(--font-sans);
+    --font-label: var(--font-mono);
+    --font-ui: var(--font-mono);
+    --title-transform: uppercase;
+    --title-tracking: 1.6px;
+    --title-weight: 700;
+    --title-size: 11px;
+    --heading-weight: 900;
+    --heading-tracking: -0.4px;
+    --btn-transform: uppercase;
+    --btn-tracking: 0.6px;
+    --btn-weight: 700;
+    --btn-size: 11.5px;
+    --btn-size-sm: 10.5px;
+    --badge-font: var(--font-mono);
+    --wordmark-transform: uppercase;
+    --wordmark-tracking: -0.6px;
+    --wordmark-size: 19px;
+    --wordmark-weight: 900;
+    --header-rule: 3px;
+    --focus-w: 3px;
+    --focus-offset: 2px;
+    --overlay-blur: 0px;
+    --row-active-rule: 6px;
+    --check-border: var(--ink);
+    --dur-fast: 90ms;
+    --dur-base: 140ms;
+    --dur-slow: 200ms;
+    --ease-out: cubic-bezier(0.3, 0.9, 0.3, 1);
+}
+
+/* ── Light: ink on paper ─────────────────────────────────────── */
+:root[data-theme="brutalist"][data-mode="light"] {
+    color-scheme: light;
+    --ink: #0b0b0b;
+
+    --bg-deep: #e9e6de;
+    --bg-primary: #f6f4ef;
+    --bg-secondary: #f1eee7;
+    --bg-panel: #ffffff;
+    --bg-raised: #f1eee7;
+    --bg-input: #ffffff;
+    --bg-hover: #e4e0d5;
+
+    --border: #0b0b0b;
+    --border-bright: #0b0b0b;
+    --border-focus: #0b0b0b;
+    --divider: rgba(11, 11, 11, 0.16);
+
+    --accent: #ffd400;
+    --accent-hover: #ffe347;
+    --accent-bright: #0b0b0b;
+    --accent-dim: #0b0b0b;
+    --accent-soft: rgba(255, 212, 0, 0.34);
+    --accent-soft-hover: rgba(255, 212, 0, 0.62);
+    --accent-line: #0b0b0b;
+    --accent-text: #0b0b0b;
+    --on-accent: #0b0b0b;
+    --link: #1d1dd6;
+
+    --ok: #00764a;
+    --ok-soft: rgba(0, 150, 94, 0.12);
+    --ok-line: #00764a;
+    --warn: #a84300;
+    --warn-soft: rgba(255, 122, 0, 0.16);
+    --warn-line: #a84300;
+    --danger: #c80000;
+    --danger-soft: rgba(225, 6, 0, 0.1);
+    --danger-line: #c80000;
+    --on-status: #ffffff;
+
+    --text-primary: #0b0b0b;
+    --text-secondary: #37352f;
+    --text-muted: #5c5a54;
+    --text-bright: #000000;
+
+    --neutral-soft: rgba(11, 11, 11, 0.06);
+    --neutral-line: rgba(11, 11, 11, 0.45);
+
+    --brand-paw: #4e25c9;
+    --brand-paw-soft: rgba(78, 37, 201, 0.09);
+    --brand-paw-line: #4e25c9;
+    --brand-derpi: #00665a;
+    --brand-derpi-soft: rgba(0, 120, 105, 0.09);
+    --brand-derpi-line: #00665a;
+    --brand-discord: #2f39c9;
+    --brand-discord-soft: rgba(47, 57, 201, 0.09);
+    --brand-discord-line: #2f39c9;
+
+    --seg-active-bg: #0b0b0b;
+    --seg-active-fg: #ffd400;
+    --seg-active-border: #0b0b0b;
+    --row-active-bg: rgba(255, 212, 0, 0.3);
+    --row-active-border: #0b0b0b;
+    --row-active-color: #0b0b0b;
+
+    --focus-ring: #1d1dd6;
+    --overlay-bg: rgba(233, 230, 222, 0.82);
+    --scrim: rgba(11, 11, 11, 0.82);
+    --lightbox-bg: rgba(11, 11, 11, 0.96);
+    --skeleton: rgba(11, 11, 11, 0.06);
+    --skeleton-hi: rgba(11, 11, 11, 0.13);
+
+    --shadow-sm: none;
+    --shadow-md: 4px 4px 0 #0b0b0b;
+    --shadow-lg: 8px 8px 0 #0b0b0b;
+    --btn-shadow: 3px 3px 0 #0b0b0b;
+    --tile-shadow-hover: 5px 5px 0 #0b0b0b;
+}
+
+/* ── Dark: bone on black ─────────────────────────────────────── */
+:root[data-theme="brutalist"][data-mode="dark"] {
+    color-scheme: dark;
+    --ink: #ece9e2;
+
+    --bg-deep: #0a0a0a;
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #121212;
+    --bg-panel: #141414;
+    --bg-raised: #1c1c1c;
+    --bg-input: #0a0a0a;
+    --bg-hover: #262624;
+
+    --border: #8f8b82;
+    --border-bright: #ece9e2;
+    --border-focus: #ffd400;
+    --divider: rgba(236, 233, 226, 0.14);
+
+    --accent: #ffd400;
+    --accent-hover: #ffe347;
+    --accent-bright: #ffd400;
+    --accent-dim: #ffd400;
+    --accent-soft: rgba(255, 212, 0, 0.13);
+    --accent-line: #ffd400;
+    --accent-text: #ffd400;
+    --on-accent: #0a0a0a;
+    --link: #ffd400;
+
+    --ok: #2fd58a;
+    --ok-soft: rgba(47, 213, 138, 0.12);
+    --ok-line: #2fd58a;
+    --warn: #ff9a3c;
+    --warn-soft: rgba(255, 154, 60, 0.13);
+    --warn-line: #ff9a3c;
+    --danger: #ff4d3d;
+    --danger-soft: rgba(255, 77, 61, 0.13);
+    --danger-line: #ff4d3d;
+    --on-status: #0a0a0a;
+
+    --text-primary: #ece9e2;
+    --text-secondary: #b8b4ab;
+    --text-muted: #8d897f;
+    --text-bright: #ffffff;
+
+    --neutral-soft: rgba(236, 233, 226, 0.07);
+    --neutral-line: rgba(236, 233, 226, 0.4);
+
+    --brand-paw: #bba8ff;
+    --brand-paw-soft: rgba(187, 168, 255, 0.12);
+    --brand-paw-line: #bba8ff;
+    --brand-derpi: #52e3cb;
+    --brand-derpi-soft: rgba(82, 227, 203, 0.11);
+    --brand-derpi-line: #52e3cb;
+    --brand-discord: #9fa9ff;
+    --brand-discord-soft: rgba(159, 169, 255, 0.12);
+    --brand-discord-line: #9fa9ff;
+
+    --seg-active-bg: #ffd400;
+    --seg-active-fg: #0a0a0a;
+    --seg-active-border: #ffd400;
+    --row-active-bg: rgba(255, 212, 0, 0.1);
+    --row-active-border: #ffd400;
+    --row-active-color: #ffffff;
+
+    --focus-ring: #ffd400;
+    --overlay-bg: rgba(0, 0, 0, 0.78);
+    --scrim: rgba(0, 0, 0, 0.8);
+    --lightbox-bg: rgba(0, 0, 0, 0.96);
+    --skeleton: rgba(236, 233, 226, 0.05);
+    --skeleton-hi: rgba(236, 233, 226, 0.11);
+
+    --shadow-sm: none;
+    --shadow-md: 4px 4px 0 #000000;
+    --shadow-lg: 8px 8px 0 #ffd400;
+    --btn-shadow: 3px 3px 0 #000000;
+    --tile-shadow-hover: 5px 5px 0 #ffd400;
+}
+
+/* ── Identity rules tokens can't express ─────────────────────── */
+
+/* A solid ink block before every section title — reads like a form-field label
+   on a printed sheet. */
+:root[data-theme="brutalist"] .section-title::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    background: var(--accent);
+    outline: var(--border-w) solid var(--ink);
+    outline-offset: 0;
+}
+
+:root[data-theme="brutalist"] .section-title {
+    color: var(--text-primary);
+}
+
+/* Sections: flat paper cards with a full-width rule under the title row. */
+:root[data-theme="brutalist"] .modal-header {
+    background: var(--ink);
+    color: var(--bg-panel);
+    border-bottom: none;
+}
+:root[data-theme="brutalist"] .modal-header .modal-close {
+    color: var(--bg-panel);
+}
+:root[data-theme="brutalist"] .modal-header .modal-close:hover {
+    color: var(--accent);
+    background: transparent;
+}
+
+/* Links read as links: underlined, in the link colour. */
+:root[data-theme="brutalist"] .pending-url,
+:root[data-theme="brutalist"] .album-error-name,
+:root[data-theme="brutalist"] .pmv-feed-chip a {
+    color: var(--link);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+:root[data-theme="brutalist"] .pmv-title a:hover,
+:root[data-theme="brutalist"] .pmv-latest-who a:hover,
+:root[data-theme="brutalist"] .pending-posttitle:hover {
+    color: var(--link);
+}
+
+/* Log: ruled terminal. */
+:root[data-theme="brutalist"] .log-entry.log-download { color: var(--text-primary); font-weight: 600; }
+:root[data-theme="brutalist"] .log-entry.log-download::before { content: '↓'; color: var(--text-primary); }
+
+/* Count pill on the Latest tab: a hard yellow tag. */
+:root[data-theme="brutalist"] .pmv-mode-count:not(:empty) {
+    outline: var(--border-w) solid var(--ink);
+}
+
+/* Scrollbars: square ink thumbs. */
+:root[data-theme="brutalist"] ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 0;
+}
+:root[data-theme="brutalist"] ::-webkit-scrollbar-thumb:hover {
+    background: var(--ink);
+    background-clip: content-box;
+}

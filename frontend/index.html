@@ -4,35 +4,43 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Downloader</title>
+    <link rel="stylesheet" href="css/tokens.css">
+    <link rel="stylesheet" href="css/themes/brutalist.css">
+    <link rel="stylesheet" href="css/themes/studio.css">
     <link rel="stylesheet" href="css/main.css">
     <link rel="stylesheet" href="css/layout.css">
     <link rel="stylesheet" href="css/components.css">
+    <!-- Runs before first paint so the page never renders unthemed. -->
+    <script src="js/theme-pref.js"></script>
+    <script src="js/theme.js"></script>
 </head>
 <body>
-    <div class="toast-container" id="toastContainer"></div>
+    <div class="toast-container" id="toastContainer" role="status" aria-live="polite"></div>
 
     <div class="app-container">
         <main class="main-content">
             <!-- Header -->
             <header class="header">
-                <span class="header-title">Downloader</span>
-                <div class="header-divider"></div>
-                <span class="header-subtitle" id="headerSubtitle">Library</span>
-                <div class="segmented header-toggle" id="viewToggle">
-                    <button class="seg active" data-view="pmv" onclick="switchView('pmv')">PMV</button>
-                    <button class="seg" data-view="creator" onclick="switchView('creator')">Creator</button>
-                    <button class="seg" data-view="gallery" onclick="switchView('gallery')">Gallery</button>
-                    <button class="seg" data-view="dupes" onclick="switchView('dupes')">Duplicates</button>
-                    <button class="seg" data-view="albums" onclick="switchView('albums')">Albums</button>
+                <div class="header-brand">
+                    <span class="header-title">Downloader</span>
+                    <div class="header-divider" aria-hidden="true"></div>
+                    <span class="header-subtitle" id="headerSubtitle">Library</span>
+                </div>
+                <div class="segmented header-toggle" id="viewToggle" role="tablist" aria-label="Views">
+                    <button class="seg active" data-view="pmv" onclick="switchView('pmv')" role="tab" aria-selected="true" aria-controls="pmvView" title="PMV (Ctrl+1)">PMV</button>
+                    <button class="seg" data-view="creator" onclick="switchView('creator')" role="tab" aria-selected="false" aria-controls="creatorView" tabindex="-1" title="Creator (Ctrl+2)">Creator</button>
+                    <button class="seg" data-view="gallery" onclick="switchView('gallery')" role="tab" aria-selected="false" aria-controls="galleryView" tabindex="-1" title="Gallery (Ctrl+3)">Gallery</button>
+                    <button class="seg" data-view="dupes" onclick="switchView('dupes')" role="tab" aria-selected="false" aria-controls="dupesView" tabindex="-1" title="Duplicates (Ctrl+4)">Duplicates</button>
+                    <button class="seg" data-view="albums" onclick="switchView('albums')" role="tab" aria-selected="false" aria-controls="albumsView" tabindex="-1" title="Albums (Ctrl+5)">Albums</button>
                 </div>
                 <div class="header-status">
-                    <div class="running-indicator" id="runningIndicator">
-                        <div class="pulse-dot"></div>
+                    <div class="running-indicator" id="runningIndicator" role="status">
+                        <div class="pulse-dot" aria-hidden="true"></div>
                         <span class="run-label">Downloading</span>
                         <span class="run-count" id="runCount">0</span>
                         <span class="run-file" id="runFile"></span>
                     </div>
-                    <button class="btn btn-ghost btn-icon" id="btnSettings" onclick="openSettings()" title="Settings">
+                    <button class="btn btn-ghost btn-icon" id="btnSettings" onclick="openSettings()" title="Settings" aria-label="Settings">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"/>
                             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -42,10 +50,10 @@
             </header>
 
             <!-- PMV tracker: creators × sites checklist (metadata only — never downloads) -->
-            <div class="tab-content" id="pmvView">
-                <div class="pmv-modebar" role="tablist">
-                    <button class="pmv-mode" data-mode="latest" onclick="pmvSetMode('latest')" role="tab">Latest <span class="pmv-mode-count" id="pmvLatestCount"></span></button>
-                    <button class="pmv-mode" data-mode="creators" onclick="pmvSetMode('creators')" role="tab">Creators</button>
+            <div class="tab-content" id="pmvView" role="tabpanel" aria-label="PMV">
+                <div class="pmv-modebar" role="tablist" aria-label="PMV mode">
+                    <button class="pmv-mode" data-mode="latest" onclick="pmvSetMode('latest')" role="tab" aria-controls="pmvLatest">Latest <span class="pmv-mode-count" id="pmvLatestCount"></span></button>
+                    <button class="pmv-mode" data-mode="creators" onclick="pmvSetMode('creators')" role="tab" aria-controls="pmvCreatorsPane">Creators</button>
                 </div>
 
                 <!-- Latest: every new video across all creators + the feed check -->
@@ -64,7 +72,7 @@
                         </div>
                         <div class="pmv-latest-meta" id="pmvLatestMeta"></div>
                     </div>
-                    <div class="field-hint pmv-status-line" id="pmvLatestStatus"></div>
+                    <div class="field-hint pmv-status-line" id="pmvLatestStatus" role="status"></div>
                     <div class="pmv-feed-chips" id="pmvFeedChips"></div>
                     <div id="pmvCoverage"></div>
                     <div class="pmv-filters pmv-latest-filters">
@@ -80,7 +88,7 @@
                             <span class="checkbox-label">Hide image/text-only</span>
                         </label>
                         <input type="search" class="input-field pmv-search" id="pmvLatestSearch"
-                               placeholder="Filter by creator or title…" oninput="pmvLatestSetSearch(this.value)">
+                               placeholder="Filter by creator or title…" oninput="pmvLatestSetSearch(this.value)" aria-label="Filter by creator or title">
                     </div>
                     <div class="pmv-latest-body" id="pmvLatestBody"></div>
                 </div>
@@ -109,18 +117,18 @@
                             </select>
                         </div>
                         <input type="search" class="input-field pmv-list-search" id="pmvListSearch"
-                               placeholder="Filter creators by name, tag or site…" oninput="pmvSetListSearch(this.value)">
+                               placeholder="Filter creators by name, tag or site…" oninput="pmvSetListSearch(this.value)" aria-label="Filter creators">
                         <div class="pmv-list" id="pmvList"></div>
-                        <div class="field-hint pmv-status-line" id="pmvStatus"></div>
+                        <div class="field-hint pmv-status-line" id="pmvStatus" role="status"></div>
                     </div>
-                    <div class="section pmv-right" id="pmvDetail">
+                    <div class="section pmv-right" id="pmvDetail" aria-live="polite" aria-busy="false">
                         <div class="links-empty">Select a creator to see its videos.</div>
                     </div>
                 </div>
             </div>
 
             <!-- Scrollable content: Creator view -->
-            <div class="tab-content" id="creatorView" style="display: none;">
+            <div class="tab-content" id="creatorView" style="display: none;" role="tabpanel" aria-label="Creator">
 
                 <!-- Creator bar -->
                 <div class="section">
@@ -135,16 +143,16 @@
                     </div>
                     <div class="form-row">
                         <span class="form-label">Creator</span>
-                        <select class="select-field" id="creatorSelect" style="flex: 1;" onchange="onCreatorChange()">
+                        <select class="select-field grow" id="creatorSelect" onchange="onCreatorChange()" aria-label="Creator">
                             <option value="">Select a creator…</option>
                         </select>
-                        <select class="select-field" id="creatorSort" style="min-width: 130px;" onchange="onSortChange()" title="Sort creators">
+                        <select class="select-field w-130" id="creatorSort" onchange="onSortChange()" title="Sort creators" aria-label="Sort creators">
                             <option value="recent">Recent</option>
                             <option value="name">Name A–Z</option>
                         </select>
                         <button class="btn btn-ghost btn-sm" id="btnConfigure" onclick="openConfigure()">Configure Links</button>
                         <button class="btn btn-secondary btn-sm" onclick="openNewCreator()">+ New</button>
-                        <button class="btn btn-ghost btn-sm btn-icon" id="btnOpenFolder" onclick="openCreatorFolder()" title="Open folder in Explorer">
+                        <button class="btn btn-ghost btn-sm btn-icon" id="btnOpenFolder" onclick="openCreatorFolder()" title="Open folder in Explorer" aria-label="Open folder in Explorer">
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                             </svg>
@@ -168,54 +176,53 @@
                     </div>
                     <div class="form-row">
                         <span class="form-label">Single link</span>
-                        <select class="select-field" id="linkScope" style="flex: 1;" onchange="onLinkScopeChange()">
+                        <select class="select-field grow" id="linkScope" onchange="onLinkScopeChange()" aria-label="Single link">
                             <option value="">Use the scope above</option>
                         </select>
-                        <span class="field-hint">Pick one link to fetch just that account.</span>
+                        <span class="field-hint no-shrink">Pick one link to fetch just that account.</span>
                     </div>
-                    <div class="actions-row">
+                    <div class="actions-row download-primary">
                         <button class="btn btn-primary" id="btnDownloadAll" onclick="startDownload('full')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                             </svg>
                             Download Everything
                         </button>
                         <button class="btn btn-secondary" id="btnFetchLatest" onclick="startDownload('latest')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <polyline points="23 4 23 10 17 10"/>
                                 <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
                             </svg>
                             Fetch Latest
                         </button>
+                        <span class="actions-sep" aria-hidden="true"></span>
                         <button class="btn btn-ghost" id="btnVerify" onclick="verifyRepair()" title="Check downloaded coomerfans files for corruption and re-download broken ones">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <path d="M9 12l2 2 4-4"/>
                                 <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                             </svg>
                             Verify &amp; Repair
                         </button>
-                        <label class="checkbox-option" id="deepVerifyOpt" style="margin-right: 8px;"
+                        <label class="checkbox-option" id="deepVerifyOpt"
                                title="Also decode-scan videos to catch files that are the right size but internally corrupt (from an interrupted download). Slower — reads each video's tail.">
                             <input type="checkbox" id="deepVerify">
                             <span class="checkbox-label">Deep scan</span>
                         </label>
                         <button class="btn btn-warning" id="btnRedownloadErrors" onclick="redownloadErrors()" style="display: none;" title="Re-attempt files that failed to download. Anything still gone upstream is listed below with its direct URL + post page for a manual grab.">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <path d="M23 4v6h-6"/>
                                 <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
                             </svg>
                             Redownload Errors (<span class="err-count">0</span>)
                         </button>
-                        <button class="btn btn-danger" id="btnCancel" onclick="cancelDownload()" style="display: none;">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <button class="btn btn-danger ml-auto" id="btnCancel" onclick="cancelDownload()" style="display: none;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
                             </svg>
                             Cancel
                         </button>
                     </div>
-
-                    <span class="field-hint">Fetch Latest grabs only posts not downloaded before (including older posts imported later) and retries files that previously errored or weren't imported yet — without re-downloading the rest of a post — while never re-downloading anything you deleted. For pawchive, new files are staged in a <code>_latest\</code> folder mirroring the year structure — review them there, then drag what you want into the proper year folders.</span>
-                    <div class="field-hint" id="latestRangeInfo" style="display: none; margin-top: 4px;"></div>
+                    <div class="field-hint mt-1" id="latestRangeInfo" style="display: none;"></div>
 
                     <div class="download-modifier" id="refreshLinksRow" style="display: none;">
                         <label class="checkbox-option">
@@ -225,49 +232,58 @@
                         <span class="field-hint">Download Everything and Download Year rebuild the “Links needing attention” list from every post. Uncheck to redownload media only and leave that list exactly as it is.</span>
                     </div>
 
-                    <div class="actions-row actions-divider">
-                        <select class="select-field" id="redownloadYear" style="min-width: 100px;">
+                    <div class="form-row actions-divider">
+                        <span class="form-label">One year</span>
+                        <select class="select-field w-110" id="redownloadYear" aria-label="Year to download">
                             <option value="">Year…</option>
                         </select>
-                        <button class="btn btn-ghost" id="btnRedownload" onclick="redownloadYear()">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <button class="btn btn-ghost btn-sm" id="btnRedownload" onclick="redownloadYear()">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <path d="M1 4v6h6M23 20v-6h-6"/>
                                 <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
                             </svg>
                             Download Year
                         </button>
-                        <span class="field-hint">Downloads (or re-fetches) a single year for the links in the selected scope — pick a year even before a full download.</span>
                     </div>
 
-                    <div class="actions-row">
-                        <select class="select-field" id="latestRangeStart" style="min-width: 90px;">
+                    <div class="form-row">
+                        <span class="form-label">Year range</span>
+                        <select class="select-field w-90" id="latestRangeStart" aria-label="From year">
                             <option value="">From…</option>
                         </select>
-                        <span class="field-hint" style="flex: 0 0 auto;">–</span>
-                        <select class="select-field" id="latestRangeEnd" style="min-width: 90px;">
+                        <span class="field-hint no-shrink" aria-hidden="true">–</span>
+                        <select class="select-field w-90" id="latestRangeEnd" aria-label="To year">
                             <option value="">…to</option>
                         </select>
-                        <button class="btn btn-ghost" id="btnFetchLatestRange" onclick="fetchLatestRange()">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <button class="btn btn-ghost btn-sm" id="btnFetchLatestRange" onclick="fetchLatestRange()">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                                 <polyline points="23 4 23 10 17 10"/>
                                 <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
                             </svg>
                             Fetch Latest (years)
                         </button>
-                        <span class="field-hint">One-off Fetch Latest limited to these years (pawchive &amp; coomerfans only). Leave a side blank for open-ended. Does <b>not</b> change the creator's saved range.</span>
                     </div>
+
+                    <details class="help">
+                        <summary>How these work</summary>
+                        <div class="help-body field-hint">
+                            <span><b>Fetch Latest</b> grabs only posts not downloaded before (including older posts imported later) and retries files that previously errored or weren't imported yet — without re-downloading the rest of a post — while never re-downloading anything you deleted. For pawchive, new files are staged in a <code>_latest\</code> folder mirroring the year structure — review them there, then drag what you want into the proper year folders.</span>
+                            <span><b>Download Year</b> downloads (or re-fetches) a single year for the links in the selected scope — pick a year even before a full download.</span>
+                            <span><b>Fetch Latest (years)</b> is a one-off Fetch Latest limited to those years (pawchive &amp; coomerfans only). Leave a side blank for open-ended. It does <b>not</b> change the creator's saved range.</span>
+                        </div>
+                    </details>
                 </div>
 
                 <!-- Active downloads (live list of in-flight files, each skippable) -->
                 <div class="section active-section" id="activeSection" style="display: none;">
-                    <div class="section-title" style="margin-bottom: 8px;">Active downloads</div>
+                    <div class="section-title mb-2">Active downloads</div>
                     <div class="active-list" id="activeDownloads"></div>
                 </div>
 
                 <!-- Output Log -->
                 <div class="section log-section">
                     <div class="log-header">
-                        <div class="section-title" style="margin-bottom: 0;">Output Log</div>
+                        <div class="section-title mb-0">Output Log</div>
                         <button class="btn btn-ghost btn-sm" onclick="clearLog()">Clear</button>
                     </div>
                     <div class="log-container" id="logContainer"></div>
@@ -298,13 +314,13 @@
             </div><!-- /creatorView -->
 
             <!-- Scrollable content: Gallery view -->
-            <div class="tab-content" id="galleryView" style="display: none;">
+            <div class="tab-content" id="galleryView" style="display: none;" role="tabpanel" aria-label="Gallery">
                 <div class="gallery-toolbar">
                     <div class="segmented" id="galleryCategoryFilter"></div>
                     <div class="segmented seg-sub" id="galleryCategorySubFilter" style="display: none;"></div>
-                    <input type="text" class="input-field" id="gallerySearch" placeholder="Search creators…"
-                           oninput="renderGallery()" style="max-width: 280px;">
-                    <span class="field-hint" id="galleryCount" style="margin-left: auto;"></span>
+                    <input type="search" class="input-field maxw-280" id="gallerySearch" placeholder="Search creators…"
+                           oninput="renderGallery()" aria-label="Search creators">
+                    <span class="field-hint ml-auto" id="galleryCount"></span>
                 </div>
                 <div class="tile-grid" id="tileGrid"></div>
             </div>
@@ -314,7 +330,7 @@
                 <div class="media-toolbar">
                     <button class="btn btn-ghost btn-sm" onclick="switchView('gallery')">← Gallery</button>
                     <span class="media-title" id="mediaTitle"></span>
-                    <select class="select-field" id="mediaYear" style="min-width: 110px;" onchange="renderMedia()">
+                    <select class="select-field w-110" id="mediaYear" onchange="renderMedia()" aria-label="Year">
                         <option value="">All years</option>
                     </select>
                     <div class="segmented" id="mediaSourceFilter"></div>
@@ -327,14 +343,14 @@
                         <button class="seg active" data-sort="newest" onclick="setMediaSort('newest')">Newest</button>
                         <button class="seg" data-sort="oldest" onclick="setMediaSort('oldest')">Oldest</button>
                     </div>
-                    <span class="field-hint" id="mediaCount" style="margin-left: auto;"></span>
+                    <span class="field-hint ml-auto" id="mediaCount"></span>
                     <button class="btn btn-secondary btn-sm" onclick="manageCurrentCreator()">Manage / Download</button>
                 </div>
                 <div class="media-grid" id="mediaGrid"></div>
             </div>
 
             <!-- Scrollable content: Duplicates / similar media -->
-            <div class="tab-content" id="dupesView" style="display: none;">
+            <div class="tab-content" id="dupesView" style="display: none;" role="tabpanel" aria-label="Duplicates">
                 <div class="dupes-toolbar">
                     <span class="media-title" id="dupeCreatorName">No creator selected</span>
                     <div class="segmented" id="dupeMode">
@@ -345,7 +361,7 @@
                     <button class="btn btn-primary btn-sm" id="dupeScanBtn" onclick="startDupeScan()">Scan</button>
                     <button class="btn btn-danger btn-sm" id="dupeCancelBtn" onclick="cancelDupe()" style="display: none;">Cancel</button>
                     <button class="btn btn-ghost btn-sm" id="dupeUndoBtn" onclick="undoDupe()" style="display: none;" title="Undo the last Apply — restores files and archive">Undo last apply</button>
-                    <span class="field-hint" id="dupeStatus" style="margin-left: auto;"></span>
+                    <span class="field-hint ml-auto" id="dupeStatus" role="status"></span>
                 </div>
 
                 <div class="dupes-controls" id="dupeControls">
@@ -377,14 +393,14 @@
             </div>
 
             <!-- Albums view: ad-hoc album downloader (bunkr / cyberdrop / filester / gofile) -->
-            <div class="tab-content" id="albumsView" style="display: none;">
+            <div class="tab-content" id="albumsView" style="display: none;" role="tabpanel" aria-label="Albums">
                 <div class="section">
                     <div class="section-title">Album downloader</div>
-                    <div class="segmented" id="albumMode" style="margin-bottom: 10px;">
+                    <div class="segmented mb-3" id="albumMode">
                         <button class="seg active" data-amode="quick" onclick="setAlbumMode('quick')">Quick download</button>
                         <button class="seg" data-amode="creator" onclick="setAlbumMode('creator')">Saved creators</button>
                     </div>
-                    <div class="field-hint" style="margin-bottom: 10px;">
+                    <div class="field-hint mb-3">
                         Whole-album downloads from <strong>bunkr</strong>, <strong>cyberdrop</strong>, <strong>filester</strong> and <strong>gofile</strong> — each into its own subfolder.
                         Locked filester/gofile folder? append the password: <code>https://gofile.io/d/ID | password</code>
                     </div>
@@ -394,9 +410,9 @@
                         <div class="form-row">
                             <span class="form-label">Folder</span>
                             <button class="btn btn-ghost btn-sm" onclick="pickAlbumDest()">Browse…</button>
-                            <span class="field-hint album-path" id="albumDestPath" style="flex: 1;">— no folder chosen</span>
+                            <span class="field-hint album-path grow" id="albumDestPath">— no folder chosen</span>
                         </div>
-                        <div class="form-row" style="align-items: stretch;">
+                        <div class="form-row align-stretch">
                             <span class="form-label">Links</span>
                             <textarea id="albumLinks" class="input-field album-links" rows="5"
                                       placeholder="https://cyberdrop.cr/a/…&#10;https://bunkr.cr/a/…&#10;https://filester.gg/f/…  (| password if locked)&#10;https://gofile.io/d/…  (| password if locked)"></textarea>
@@ -411,7 +427,7 @@
                     <div id="albumCreator" style="display: none;">
                         <div class="form-row">
                             <span class="form-label">Creator</span>
-                            <select class="select-field" id="albumCreatorSelect" style="flex: 1;" onchange="onAlbumCreatorChange()">
+                            <select class="select-field grow" id="albumCreatorSelect" onchange="onAlbumCreatorChange()" aria-label="Album creator">
                                 <option value="">— select a creator —</option>
                             </select>
                             <button class="btn btn-ghost btn-sm" onclick="newAlbumCreator()">+ New</button>
@@ -419,16 +435,16 @@
                         </div>
                         <div class="form-row" id="albumCreatorRootRow" style="display: none;">
                             <span class="form-label">Root</span>
-                            <span class="field-hint album-path" id="albumCreatorRoot" style="flex: 1;"></span>
+                            <span class="field-hint album-path grow" id="albumCreatorRoot"></span>
                             <button class="btn btn-ghost btn-sm" onclick="openAlbumCreatorFolder()">Open</button>
                         </div>
                         <div id="albumLinkList" class="album-link-list"></div>
                         <div class="form-row" id="albumAddRow" style="display: none;">
                             <span class="form-label">Add link</span>
-                            <input id="albumNewLink" class="input-field" style="flex: 1;"
+                            <input id="albumNewLink" class="input-field grow" aria-label="Album link"
                                    placeholder="bunkr / cyberdrop / filester / gofile URL"
                                    onkeydown="if(event.key==='Enter')addAlbumLink()">
-                            <input id="albumNewPassword" class="input-field" style="width: 170px;"
+                            <input id="albumNewPassword" class="input-field album-pass" aria-label="Album password"
                                    placeholder="password (filester/gofile, optional)"
                                    onkeydown="if(event.key==='Enter')addAlbumLink()">
                             <button class="btn btn-ghost btn-sm" onclick="addAlbumLink()">Add</button>
@@ -446,29 +462,41 @@
                     <div class="form-row">
                         <span class="form-label"></span>
                         <button class="btn btn-danger btn-sm" id="albumCancelBtn" onclick="cancelAlbum()" style="display: none;">Cancel</button>
-                        <span class="field-hint" id="albumStatus" style="margin-left: auto;"></span>
+                        <span class="field-hint ml-auto" id="albumStatus" role="status"></span>
                     </div>
                 </div>
 
                 <div class="section" id="albumStatsSection" style="display: none;">
-                    <div class="stats-bar">
-                        <span class="stat-item"><span class="stat-label">Downloaded</span> <span id="albumStatDownloaded">0</span></span>
-                        <span class="stat-item"><span class="stat-label">Skipped</span> <span id="albumStatSkipped">0</span></span>
-                        <span class="stat-item"><span class="stat-label">Errors</span> <span id="albumStatErrors">0</span></span>
+                    <div class="stats-bar mt-0">
+                        <div class="stat-item">
+                            <span class="stat-label">Downloaded</span>
+                            <span class="stat-value stat-downloaded" id="albumStatDownloaded">0</span>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="stat-item">
+                            <span class="stat-label">Skipped</span>
+                            <span class="stat-value stat-skipped" id="albumStatSkipped">0</span>
+                        </div>
+                        <div class="stat-divider"></div>
+                        <div class="stat-item">
+                            <span class="stat-label">Errors</span>
+                            <span class="stat-value stat-errors" id="albumStatErrors">0</span>
+                        </div>
                     </div>
                 </div>
 
                 <div class="section">
-                    <div class="section-title">Output log
-                        <button class="btn btn-ghost btn-sm" onclick="copyAlbumLog()" style="margin-left: 10px;">Copy log</button>
+                    <div class="log-header">
+                        <div class="section-title mb-0">Output log</div>
+                        <button class="btn btn-ghost btn-sm" onclick="copyAlbumLog()">Copy log</button>
                     </div>
                     <div class="log-container" id="albumLog"></div>
                 </div>
 
                 <div class="section" id="albumErrorsSection" style="display: none;">
-                    <div class="section-title">Files that failed
-                        <button class="btn btn-ghost btn-sm" id="albumRetryBtn" onclick="retryAlbumFailed()"
-                                style="margin-left: 10px;">Retry failed</button>
+                    <div class="log-header">
+                        <div class="section-title mb-0">Files that failed</div>
+                        <button class="btn btn-ghost btn-sm" id="albumRetryBtn" onclick="retryAlbumFailed()">Retry failed</button>
                     </div>
                     <div class="links-panel" id="albumErrors"></div>
                 </div>
@@ -477,20 +505,20 @@
     </div>
 
     <!-- ── Lightbox viewer ─────────────────────────────────────── -->
-    <div class="lightbox" id="mediaViewer">
-        <button class="lightbox-close" onclick="closeViewer()" title="Close (Esc)">&times;</button>
-        <button class="lightbox-nav lightbox-prev" onclick="viewerPrev()" title="Previous (←)">&#8249;</button>
+    <div class="lightbox" id="mediaViewer" role="dialog" aria-modal="true" aria-label="Media viewer">
+        <button class="lightbox-close" onclick="closeViewer()" title="Close (Esc)" aria-label="Close">&times;</button>
+        <button class="lightbox-nav lightbox-prev" onclick="viewerPrev()" title="Previous (←)" aria-label="Previous">&#8249;</button>
         <div class="lightbox-stage" id="lightboxStage"></div>
-        <button class="lightbox-nav lightbox-next" onclick="viewerNext()" title="Next (→)">&#8250;</button>
+        <button class="lightbox-nav lightbox-next" onclick="viewerNext()" title="Next (→)" aria-label="Next">&#8250;</button>
         <div class="lightbox-caption" id="lightboxCaption"></div>
     </div>
 
     <!-- ── Configure Links overlay ─────────────────────────────── -->
     <div class="modal-overlay" id="configureOverlay">
-        <div class="modal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="configureTitle">
             <div class="modal-header">
                 <span id="configureTitle">Configure Creator</span>
-                <button class="modal-close" onclick="closeConfigure()" title="Close">&times;</button>
+                <button class="modal-close" onclick="closeConfigure()" title="Close (Esc)" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-row">
@@ -532,16 +560,16 @@
                     <span class="form-label"></span>
                     <span class="field-hint" id="cfgFetchHint">Images/Videos apply to pawchive &amp; coomerfans (Twitter/Derpibooru always fetch everything). Uncheck <b>both</b> to track a creator's post links without downloading anything — no folder needed.</span>
                 </div>
-                <div class="section-title" style="margin-top: 6px;">Links</div>
+                <div class="section-title sub">Links</div>
                 <div class="links-list" id="cfgLinks"></div>
 
-                <div class="form-row" style="margin-top: 12px;">
-                    <input type="text" class="input-field" id="cfgNewLink" placeholder="Paste a coomerfans (OF/Fansly), X/Twitter, derpibooru search, or Discord channel URL…">
+                <div class="form-row mt-3">
+                    <input type="text" class="input-field" id="cfgNewLink" aria-label="New link" placeholder="Paste a coomerfans (OF/Fansly), X/Twitter, derpibooru search, or Discord channel URL…">
                     <button class="btn btn-secondary btn-sm" id="cfgAddBtn" onclick="cfgAddLink()">Add Link</button>
                 </div>
-                <div class="field-hint" id="cfgLinkPreview" style="min-height: 16px;"></div>
+                <div class="field-hint preview-line" id="cfgLinkPreview" role="status"></div>
 
-                <div class="section-title" style="margin-top: 14px;">Archives (zip / rar)</div>
+                <div class="section-title sub">Archives (zip / rar)</div>
                 <div class="form-row">
                     <span class="form-label">Extract</span>
                     <label class="checkbox-option">
@@ -554,12 +582,12 @@
                     <span class="field-hint">Pawchive archives are always unzipped. Checked: images go to Images\&lt;year&gt; and videos to &lt;year&gt; in this creator's folder. Unchecked: they go to an <b>_extracted</b> folder inside it instead, laid out the same way, so you can see what came out of an archive and drag it into place or delete it (a deleted pack is not downloaded again). Password-protected archives always go to <b>_extracted\Password Protected</b> to open by hand.</span>
                 </div>
 
-                <div class="section-title" style="margin-top: 14px;">Fetch Latest range</div>
+                <div class="section-title sub">Fetch Latest range</div>
                 <div class="form-row">
                     <span class="form-label">Years</span>
-                    <input type="number" class="input-field" id="cfgRangeStart" placeholder="From (e.g. 2024)" style="max-width: 160px;" min="2006" max="2100">
-                    <span class="field-hint" style="flex: 0 0 auto;">–</span>
-                    <input type="number" class="input-field" id="cfgRangeEnd" placeholder="To (e.g. 2026)" style="max-width: 160px;" min="2006" max="2100">
+                    <input type="number" class="input-field maxw-160" id="cfgRangeStart" placeholder="From (e.g. 2024)" aria-label="From year" min="2006" max="2100">
+                    <span class="field-hint no-shrink" aria-hidden="true">–</span>
+                    <input type="number" class="input-field maxw-160" id="cfgRangeEnd" placeholder="To (e.g. 2026)" aria-label="To year" min="2006" max="2100">
                 </div>
                 <div class="form-row">
                     <span class="form-label"></span>
@@ -567,7 +595,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-danger btn-sm" id="cfgDeleteBtn" onclick="cfgDelete()" style="margin-right: auto;">Delete Creator</button>
+                <button class="btn btn-danger btn-sm mr-auto" id="cfgDeleteBtn" onclick="cfgDelete()">Delete Creator</button>
                 <button class="btn btn-ghost btn-sm" onclick="closeConfigure()">Cancel</button>
                 <button class="btn btn-primary btn-sm" onclick="cfgSave()">Save</button>
             </div>
@@ -576,10 +604,10 @@
 
     <!-- ── PMV creator editor ──────────────────────────────────── -->
     <div class="modal-overlay" id="pmvEditorOverlay">
-        <div class="modal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pmvEditorTitle">
             <div class="modal-header">
                 <span id="pmvEditorTitle">PMV creator</span>
-                <button class="modal-close" onclick="closePmvEditor()" title="Close">&times;</button>
+                <button class="modal-close" onclick="closePmvEditor()" title="Close (Esc)" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-row">
@@ -594,23 +622,23 @@
                     <span class="form-label">Notes</span>
                     <input type="text" class="input-field" id="pmvEdNotes" placeholder="Optional">
                 </div>
-                <div class="section-title" style="margin-top: 6px;">Sites
-                    <span class="field-hint" style="text-transform: none; letter-spacing: 0; font-weight: 500;">— top = source of truth; ▲▼ to reorder</span>
+                <div class="section-title sub">Sites
+                    <span class="title-note">— top = source of truth; ▲▼ to reorder</span>
                 </div>
                 <div class="links-list" id="pmvEdLinks"></div>
-                <div class="form-row" style="margin-top: 12px;">
-                    <input type="text" class="input-field" id="pmvEdNewLink"
+                <div class="form-row mt-3">
+                    <input type="text" class="input-field" id="pmvEdNewLink" aria-label="New site link"
                            placeholder="Paste a rule34video.com/members/…, iwara.tv/profile/…, pawchive.pw/{service}/user/…, hmvmania.com/author/…, or pmvhaven.com/profile/… URL">
                     <button class="btn btn-secondary btn-sm" onclick="pmvEdAdd()">Add site</button>
                 </div>
-                <div class="field-hint" id="pmvEdPreview" style="min-height: 16px;"></div>
-                <div class="field-hint" style="margin-top: 10px;">
+                <div class="field-hint preview-line" id="pmvEdPreview" role="status"></div>
+                <div class="field-hint mt-3">
                     Nothing is downloaded — the PMV tab only lists each site's videos so you can tick off what you have
                     and copy a ready-made prefix like <code>SadBernard - R34 - 02 - </code>.
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-danger btn-sm" id="pmvEdDeleteBtn" onclick="pmvEdDelete()" style="margin-right: auto;">Delete</button>
+                <button class="btn btn-danger btn-sm mr-auto" id="pmvEdDeleteBtn" onclick="pmvEdDelete()">Delete</button>
                 <button class="btn btn-ghost btn-sm" onclick="closePmvEditor()">Cancel</button>
                 <button class="btn btn-primary btn-sm" onclick="pmvEdSave()">Save</button>
             </div>
@@ -619,227 +647,284 @@
 
     <!-- ── Settings overlay ────────────────────────────────────── -->
     <div class="modal-overlay" id="settingsOverlay">
-        <div class="modal">
+        <div class="modal modal-settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
             <div class="modal-header">
-                <span>Settings</span>
-                <button class="modal-close" onclick="closeSettings()" title="Close">&times;</button>
+                <span id="settingsTitle">Settings</span>
+                <button class="modal-close" onclick="closeSettings()" title="Close (Esc)" aria-label="Close">&times;</button>
             </div>
-            <div class="modal-body">
-                <div class="section-title">Storage</div>
-                <div class="form-row">
-                    <span class="form-label">Archive Dir</span>
-                    <input type="text" class="input-field" id="setArchiveDir" placeholder="Folder for archive .db files…" readonly>
-                    <button class="btn btn-ghost btn-sm" onclick="setBrowseArchive()">Browse</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Per-link download history (twitter_*.db, coomerfans_*.db), shared by both platforms.</span>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">Library Root</span>
-                    <input type="text" class="input-field" id="setLibraryRoot" placeholder="Parent folder for new creators (optional)…" readonly>
-                    <button class="btn btn-ghost btn-sm" onclick="setBrowseLibrary()">Browse</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">Concurrency</span>
-                    <input type="range" id="setConcurrency" class="slider-field" min="3" max="10" step="1" value="5" oninput="setUpdateConcurrency()">
-                    <span id="setConcurrencyVal" class="field-hint" style="min-width: 140px;">5 downloads at once</span>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Coomerfans simultaneous downloads. Raise for big cold-storage backfills; lower if rate-limited.</span>
-                </div>
+            <div class="settings-layout">
+                <nav class="settings-nav" id="settingsNav" aria-label="Settings sections">
+                    <button type="button" class="settings-nav-item active" data-target="set-sec-appearance">Appearance</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-storage">Storage</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-pawchive">Pawchive</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-pmvfeeds">PMV feeds</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-iwara">Iwara</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-derpibooru">Derpibooru</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-discord">Discord</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-twitter">Twitter</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-filters">Link filters</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-library">Rebuild library</button>
+                </nav>
+                <div class="modal-body settings-body" id="settingsBody">
 
-                <div class="section-title" style="margin-top: 16px;">Derpibooru</div>
-                <div class="form-row">
-                    <span class="form-label">API Key</span>
-                    <input type="password" class="input-field" id="setDerpiApiKey"
-                           placeholder="Your derpibooru API key…"
-                           onchange="setUpdateDerpiApiKey()" onblur="setUpdateDerpiApiKey()">
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Found on derpibooru under Account → Settings. Logs downloads in as your account (with the “Everything” filter) so gated images/videos are accessible. Without it, only logged-out content is fetched.</span>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">Discord</div>
-                <div class="form-row">
-                    <span class="form-label">Token</span>
-                    <input type="password" class="input-field" id="setDiscordToken"
-                           placeholder="Your Discord token…"
-                           onchange="setUpdateDiscordToken()" onblur="setUpdateDiscordToken()">
-                </div>
-                <div class="form-row">
-                    <span class="form-label">Token type</span>
-                    <select class="input-field" id="setDiscordTokenType" onchange="setUpdateDiscordTokenType()">
-                        <option value="user">User account token</option>
-                        <option value="bot">Bot token</option>
-                    </select>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <div class="field-hint">
-                        Downloads media from a specific channel (paste its URL in Configure Links).
-                        <b>Get a user token from your browser:</b>
-                        <ol class="hint-steps">
-                            <li>Log in at discord.com, press <b>F12</b> → <b>Network</b> tab.</li>
-                            <li>Type <code>messages</code> in the filter, then click any channel.</li>
-                            <li>Click the <code>messages</code> request → <b>Headers</b> → copy the <code>authorization</code> value.</li>
-                            <li>Paste it above; set type to <b>User account</b>.</li>
-                        </ol>
-                        Read-only (never posts), but automating a user account breaks Discord's ToS — prefer a <b>secondary account</b> for servers you don't own. <b>Bot token:</b> only for servers you can add a bot to (create at discord.com/developers, enable the Message Content intent).
+                <section class="settings-section" id="set-sec-appearance" aria-labelledby="set-h-appearance">
+                    <h3 class="section-title" id="set-h-appearance">Appearance</h3>
+                    <div class="theme-grid" id="themeGrid" role="radiogroup" aria-label="Theme"></div>
+                    <div class="form-row mt-4">
+                        <span class="form-label">Mode</span>
+                        <div class="segmented" id="themeModeSeg" role="radiogroup" aria-label="Colour mode">
+                            <button type="button" class="seg" data-mode="light" role="radio" onclick="Theme.set({mode: 'light'})">Light</button>
+                            <button type="button" class="seg" data-mode="dark" role="radio" onclick="Theme.set({mode: 'dark'})">Dark</button>
+                            <button type="button" class="seg" data-mode="system" role="radio" onclick="Theme.set({mode: 'system'})">System</button>
+                        </div>
                     </div>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">Pawchive</div>
-                <div class="form-row">
-                    <span class="form-label">Concurrency</span>
-                    <input type="range" id="setPawConcurrency" class="slider-field" min="1" max="10" step="1" value="6" oninput="setUpdatePawConcurrency()">
-                    <span id="setPawConcurrencyVal" class="field-hint" style="min-width: 140px;">6 downloads at once</span>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Pawchive simultaneous downloads. Its CDN caps each connection's speed, so more parallel downloads = faster overall (~6 is the sweet spot). Lower it only if you see repeated rate-limit blocks.</span>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">Cloudflare access</span>
-                    <span id="pawCfStatus" class="status-badge status-idle">Checking…</span>
-                    <button class="btn btn-secondary btn-sm" id="pawCfConnectBtn" onclick="connectPawchive()">Connect</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint" id="pawCfHint">Pawchive now sits behind a Cloudflare check that blocks the app. Click <b>Connect</b> — a small window opens, clears the check automatically (usually a second or two), and the app remembers it. If a fetch later fails with a Cloudflare message, just click <b>Reconnect</b>.</span>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">Iwara (PMV tab)</div>
-                <div class="form-row">
-                    <span class="form-label">Login</span>
-                    <input type="email" class="input-field" id="setIwaraEmail" placeholder="Email"
-                           onchange="setUpdateIwaraCreds()" onblur="setUpdateIwaraCreds()">
-                    <input type="password" class="input-field" id="setIwaraPassword" placeholder="Password"
-                           onchange="setUpdateIwaraCreds()" onblur="setUpdateIwaraCreds()">
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span id="iwaraStatus" class="status-badge status-idle">Not configured</span>
-                    <button class="btn btn-secondary btn-sm" id="iwaraTestBtn" onclick="testIwaraLogin()">Test login</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Optional. iwara lists most videos without an account, but some uploads only show for logged-in users. Saved locally in <code>app_state.json</code> like the Discord token — never copied to the archive folder.</span>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">PMV feed accounts</div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">PMV ▸ Latest ▸ <b>Check for new</b> reads what's new from the creators you follow on each site, so only those creators get fetched. A site you're not signed in to still works — its creators are just checked one by one (slower). Sign-ins are kept locally — never copied to the archive folder.</span>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">rule34video</span>
-                    <span id="pmvAcct-rule34video" class="status-badge status-idle">Checking…</span>
-                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('rule34video')">Test</button>
-                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('rule34video')">Forget</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">pawchive</span>
-                    <span id="pmvAcct-pawchive" class="status-badge status-idle">Checking…</span>
-                    <button class="btn btn-secondary btn-sm" id="pmvAcctBtn-pawchive" onclick="pmvAccountLogin('pawchive')">Sign in</button>
-                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('pawchive')">Test</button>
-                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('pawchive')">Sign out</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">PMVHaven key</span>
-                    <input type="password" class="input-field" id="setPmvhavenKey" placeholder="pmvh_…"
-                           onchange="setUpdatePmvhavenKey()" onblur="setUpdatePmvhavenKey()">
-                    <span id="pmvAcct-pmvhaven" class="status-badge status-idle">Not set</span>
-                    <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('pmvhaven')">Test</button>
-                </div>
-                <div class="form-row">
-                    <span class="form-label"></span>
-                    <span class="field-hint">Sign in opens pawchive in a small window — log in normally (it closes by itself once you're in). rule34video allows only one session per account, so the app shares your browser's instead of logging in: with the PMV Prefix Chrome extension, click its toolbar icon ▸ <b>Send rule34video sign-in</b> while the app is open. Without it, rule34video creators are checked one by one. PMVHaven uses a personal API key instead: create one at <code>pmvhaven.com/api-keys</code> and paste it here. iwara uses the login above.</span>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">Pawchive Link Filters</div>
-                <div class="field-hint" style="margin-bottom: 10px;">
-                    Hide junk from the “Links needing attention” list. Enter a domain
-                    (<code>youtube.com</code> — also matches subdomains), a subdomain prefix
-                    ending in a dot (<code>shop.</code>), or part of a URL containing a slash
-                    (<code>patreon.com/posts/</code> hides paywalled posts but keeps profiles).
-                    Changes apply immediately — no re-download needed.
-                </div>
-                <div id="linkFilterList" class="filter-chips"></div>
-                <div class="form-row" style="margin-top: 8px;">
-                    <input type="text" class="input-field" id="linkFilterInput"
-                           placeholder="Add a pattern (e.g. tiktok.com)…"
-                           onkeydown="if(event.key==='Enter'){event.preventDefault();addLinkFilter();}">
-                    <button class="btn btn-secondary btn-sm" onclick="addLinkFilter()">Add</button>
-                    <button class="btn btn-ghost btn-sm" onclick="resetLinkFilters()">Reset to defaults</button>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">Rebuild Library</div>
-                <div class="field-hint" style="margin-bottom: 10px;">
-                    Recover creators whose folder↔link index was lost. <b>Recover from backup</b> restores
-                    mappings saved in earlier state files. <b>Scan &amp; Import</b> rebuilds from the NAS by
-                    matching archive DBs to creator folders (coomerfans names are looked up online as needed).
-                    Both are additive — they never delete files or existing links.
-                </div>
-                <div class="actions-row">
-                    <button class="btn btn-ghost btn-sm" onclick="recoverFromBackup()">Recover from backup</button>
-                    <button class="btn btn-secondary btn-sm" onclick="importFromDisk()">Scan &amp; Import from disk</button>
-                </div>
-                <div class="form-row" style="margin-top: 8px;">
-                    <span class="form-label"></span>
-                    <span class="field-hint" id="setRootsInfo">Detecting library roots…</span>
-                </div>
-
-                <div class="section-title" style="margin-top: 16px;">Twitter Authentication</div>
-                <div class="field-hint" style="margin-bottom: 12px;">Only needed when fetching Twitter content.</div>
-                <div class="radio-group">
-                    <div class="radio-option selected" data-auth="file" onclick="setAuthMethod('file')">
-                        <div class="radio-dot"></div>
-                        <span class="radio-label">Cookie File</span>
-                    </div>
-                    <div class="radio-option" data-auth="browser" onclick="setAuthMethod('browser')">
-                        <div class="radio-dot"></div>
-                        <span class="radio-label">Extract from Browser</span>
-                    </div>
-                </div>
-                <div class="auth-section active" id="authFile">
                     <div class="form-row">
-                        <span class="form-label">Cookie File</span>
-                        <input type="text" class="input-field" id="cookiesPath" placeholder="Select cookies.txt file…" readonly>
-                        <button class="btn btn-ghost btn-sm" onclick="browseCookies()">Browse</button>
+                        <span class="form-label">Motion</span>
+                        <label class="checkbox-option">
+                            <input type="checkbox" class="switch" id="themeReduceMotion"
+                                   onchange="Theme.set({motion: this.checked ? 'reduce' : 'auto'})">
+                            <span class="checkbox-label">Reduce motion</span>
+                        </label>
                     </div>
                     <div class="form-row">
                         <span class="form-label"></span>
-                        <span id="cookieStatus" class="status-badge status-idle">No cookies loaded</span>
+                        <span class="field-hint">Turns off transitions and animations everywhere. Windows' own “Animation effects” off setting does the same automatically.</span>
                     </div>
-                </div>
-                <div class="auth-section" id="authBrowser">
+                </section>
+
+                <section class="settings-section" id="set-sec-storage" aria-labelledby="set-h-storage">
+                    <h3 class="section-title" id="set-h-storage">Storage</h3>
                     <div class="form-row">
-                        <span class="form-label">Browser</span>
-                        <select class="select-field" id="browserSelect">
-                            <option value="chrome">Chrome</option>
-                            <option value="firefox">Firefox</option>
-                            <option value="edge">Edge</option>
-                            <option value="brave">Brave</option>
-                            <option value="opera">Opera</option>
-                            <option value="chromium">Chromium</option>
+                        <span class="form-label">Archive Dir</span>
+                        <input type="text" class="input-field" id="setArchiveDir" placeholder="Folder for archive .db files…" readonly aria-label="Archive folder">
+                        <button class="btn btn-ghost btn-sm" onclick="setBrowseArchive()">Browse</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint">Per-link download history (twitter_*.db, coomerfans_*.db), shared by both platforms.</span>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">Library Root</span>
+                        <input type="text" class="input-field" id="setLibraryRoot" placeholder="Parent folder for new creators (optional)…" readonly aria-label="Library root">
+                        <button class="btn btn-ghost btn-sm" onclick="setBrowseLibrary()">Browse</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">Concurrency</span>
+                        <input type="range" id="setConcurrency" class="slider-field" min="3" max="10" step="1" value="5" oninput="setUpdateConcurrency()" aria-label="Coomerfans concurrency">
+                        <span id="setConcurrencyVal" class="field-hint w-140">5 downloads at once</span>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint">Coomerfans simultaneous downloads. Raise for big cold-storage backfills; lower if rate-limited.</span>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-pawchive" aria-labelledby="set-h-pawchive">
+                    <h3 class="section-title" id="set-h-pawchive">Pawchive</h3>
+                    <div class="form-row">
+                        <span class="form-label">Concurrency</span>
+                        <input type="range" id="setPawConcurrency" class="slider-field" min="1" max="10" step="1" value="6" oninput="setUpdatePawConcurrency()" aria-label="Pawchive concurrency">
+                        <span id="setPawConcurrencyVal" class="field-hint w-140">6 downloads at once</span>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint">Pawchive simultaneous downloads. Its CDN caps each connection's speed, so more parallel downloads = faster overall (~6 is the sweet spot). Lower it only if you see repeated rate-limit blocks.</span>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">Cloudflare</span>
+                        <span id="pawCfStatus" class="status-badge status-idle">Checking…</span>
+                        <button class="btn btn-secondary btn-sm" id="pawCfConnectBtn" onclick="connectPawchive()">Connect</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint" id="pawCfHint">Pawchive now sits behind a Cloudflare check that blocks the app. Click <b>Connect</b> — a small window opens, clears the check automatically (usually a second or two), and the app remembers it. If a fetch later fails with a Cloudflare message, just click <b>Reconnect</b>.</span>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-pmvfeeds" aria-labelledby="set-h-pmvfeeds">
+                    <h3 class="section-title" id="set-h-pmvfeeds">PMV feed accounts</h3>
+                    <div class="field-hint mb-3">PMV ▸ Latest ▸ <b>Check for new</b> reads what's new from the creators you follow on each site, so only those creators get fetched. A site you're not signed in to still works — its creators are just checked one by one (slower). Sign-ins are kept locally — never copied to the archive folder.</div>
+                    <div class="form-row">
+                        <span class="form-label">rule34video</span>
+                        <span id="pmvAcct-rule34video" class="status-badge status-idle">Checking…</span>
+                        <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('rule34video', this)">Test</button>
+                        <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('rule34video')">Forget</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">pawchive</span>
+                        <span id="pmvAcct-pawchive" class="status-badge status-idle">Checking…</span>
+                        <button class="btn btn-secondary btn-sm" id="pmvAcctBtn-pawchive" onclick="pmvAccountLogin('pawchive')">Sign in</button>
+                        <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('pawchive', this)">Test</button>
+                        <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('pawchive')">Sign out</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">PMVHaven key</span>
+                        <input type="password" class="input-field" id="setPmvhavenKey" placeholder="pmvh_…" aria-label="PMVHaven API key"
+                               onchange="setUpdatePmvhavenKey()" onblur="setUpdatePmvhavenKey()">
+                        <span id="pmvAcct-pmvhaven" class="status-badge status-idle">Not set</span>
+                        <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('pmvhaven', this)">Test</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint">Sign in opens pawchive in a small window — log in normally (it closes by itself once you're in). rule34video allows only one session per account, so the app shares your browser's instead of logging in: with the PMV Prefix Chrome extension, click its toolbar icon ▸ <b>Send rule34video sign-in</b> while the app is open. Without it, rule34video creators are checked one by one. PMVHaven uses a personal API key instead: create one at <code>pmvhaven.com/api-keys</code> and paste it here. iwara uses the login under <b>Iwara</b>.</span>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-iwara" aria-labelledby="set-h-iwara">
+                    <h3 class="section-title" id="set-h-iwara">Iwara (PMV tab)</h3>
+                    <div class="form-row">
+                        <span class="form-label">Login</span>
+                        <input type="email" class="input-field" id="setIwaraEmail" placeholder="Email" aria-label="Iwara email"
+                               onchange="setUpdateIwaraCreds()" onblur="setUpdateIwaraCreds()">
+                        <input type="password" class="input-field" id="setIwaraPassword" placeholder="Password" aria-label="Iwara password"
+                               onchange="setUpdateIwaraCreds()" onblur="setUpdateIwaraCreds()">
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span id="iwaraStatus" class="status-badge status-idle">Not configured</span>
+                        <button class="btn btn-secondary btn-sm" id="iwaraTestBtn" onclick="testIwaraLogin()">Test login</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint">Optional. iwara lists most videos without an account, but some uploads only show for logged-in users. Saved locally in <code>app_state.json</code> like the Discord token — never copied to the archive folder.</span>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-derpibooru" aria-labelledby="set-h-derpibooru">
+                    <h3 class="section-title" id="set-h-derpibooru">Derpibooru</h3>
+                    <div class="form-row">
+                        <span class="form-label">API Key</span>
+                        <input type="password" class="input-field" id="setDerpiApiKey" aria-label="Derpibooru API key"
+                               placeholder="Your derpibooru API key…"
+                               onchange="setUpdateDerpiApiKey()" onblur="setUpdateDerpiApiKey()">
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint">Found on derpibooru under Account → Settings. Logs downloads in as your account (with the “Everything” filter) so gated images/videos are accessible. Without it, only logged-out content is fetched.</span>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-discord" aria-labelledby="set-h-discord">
+                    <h3 class="section-title" id="set-h-discord">Discord</h3>
+                    <div class="form-row">
+                        <span class="form-label">Token</span>
+                        <input type="password" class="input-field" id="setDiscordToken" aria-label="Discord token"
+                               placeholder="Your Discord token…"
+                               onchange="setUpdateDiscordToken()" onblur="setUpdateDiscordToken()">
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">Token type</span>
+                        <select class="input-field" id="setDiscordTokenType" onchange="setUpdateDiscordTokenType()" aria-label="Discord token type">
+                            <option value="user">User account token</option>
+                            <option value="bot">Bot token</option>
                         </select>
-                        <button class="btn btn-ghost btn-sm" id="extractBtn" onclick="extractBrowserCookies()">Extract</button>
                     </div>
-                    <div class="form-row">
+                    <div class="form-row align-start">
                         <span class="form-label"></span>
-                        <span id="browserStatus" class="status-badge status-idle">Not extracted</span>
+                        <div class="field-hint">
+                            Downloads media from a specific channel (paste its URL in Configure Links).
+                            <b>Get a user token from your browser:</b>
+                            <ol class="hint-steps">
+                                <li>Log in at discord.com, press <b>F12</b> → <b>Network</b> tab.</li>
+                                <li>Type <code>messages</code> in the filter, then click any channel.</li>
+                                <li>Click the <code>messages</code> request → <b>Headers</b> → copy the <code>authorization</code> value.</li>
+                                <li>Paste it above; set type to <b>User account</b>.</li>
+                            </ol>
+                            Read-only (never posts), but automating a user account breaks Discord's ToS — prefer a <b>secondary account</b> for servers you don't own. <b>Bot token:</b> only for servers you can add a bot to (create at discord.com/developers, enable the Message Content intent).
+                        </div>
                     </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-twitter" aria-labelledby="set-h-twitter">
+                    <h3 class="section-title" id="set-h-twitter">Twitter authentication</h3>
+                    <div class="field-hint mb-3">Only needed when fetching Twitter content.</div>
+                    <div class="radio-group" role="radiogroup" aria-label="Twitter authentication method">
+                        <div class="radio-option selected" data-auth="file" onclick="setAuthMethod('file')" role="radio" tabindex="0"
+                             onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();setAuthMethod('file')}">
+                            <div class="radio-dot"></div>
+                            <span class="radio-label">Cookie File</span>
+                        </div>
+                        <div class="radio-option" data-auth="browser" onclick="setAuthMethod('browser')" role="radio" tabindex="0"
+                             onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();setAuthMethod('browser')}">
+                            <div class="radio-dot"></div>
+                            <span class="radio-label">Extract from Browser</span>
+                        </div>
+                    </div>
+                    <div class="auth-section active" id="authFile">
+                        <div class="form-row">
+                            <span class="form-label">Cookie File</span>
+                            <input type="text" class="input-field" id="cookiesPath" placeholder="Select cookies.txt file…" readonly aria-label="Cookie file">
+                            <button class="btn btn-ghost btn-sm" onclick="browseCookies()">Browse</button>
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label"></span>
+                            <span id="cookieStatus" class="status-badge status-idle">No cookies loaded</span>
+                        </div>
+                    </div>
+                    <div class="auth-section" id="authBrowser">
+                        <div class="form-row">
+                            <span class="form-label">Browser</span>
+                            <select class="select-field" id="browserSelect" aria-label="Browser">
+                                <option value="chrome">Chrome</option>
+                                <option value="firefox">Firefox</option>
+                                <option value="edge">Edge</option>
+                                <option value="brave">Brave</option>
+                                <option value="opera">Opera</option>
+                                <option value="chromium">Chromium</option>
+                            </select>
+                            <button class="btn btn-ghost btn-sm" id="extractBtn" onclick="extractBrowserCookies()">Extract</button>
+                        </div>
+                        <div class="form-row">
+                            <span class="form-label"></span>
+                            <span id="browserStatus" class="status-badge status-idle">Not extracted</span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-filters" aria-labelledby="set-h-filters">
+                    <h3 class="section-title" id="set-h-filters">Pawchive link filters</h3>
+                    <div class="field-hint mb-3">
+                        Hide junk from the “Links needing attention” list. Enter a domain
+                        (<code>youtube.com</code> — also matches subdomains), a subdomain prefix
+                        ending in a dot (<code>shop.</code>), or part of a URL containing a slash
+                        (<code>patreon.com/posts/</code> hides paywalled posts but keeps profiles).
+                        Changes apply immediately — no re-download needed.
+                    </div>
+                    <div id="linkFilterList" class="filter-chips"></div>
+                    <div class="form-row mt-2">
+                        <input type="text" class="input-field" id="linkFilterInput" aria-label="New link filter"
+                               placeholder="Add a pattern (e.g. tiktok.com)…"
+                               onkeydown="if(event.key==='Enter'){event.preventDefault();addLinkFilter();}">
+                        <button class="btn btn-secondary btn-sm" onclick="addLinkFilter()">Add</button>
+                        <button class="btn btn-ghost btn-sm" onclick="resetLinkFilters()">Reset to defaults</button>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-library" aria-labelledby="set-h-library">
+                    <h3 class="section-title" id="set-h-library">Rebuild library</h3>
+                    <div class="field-hint mb-3">
+                        Recover creators whose folder↔link index was lost. <b>Recover from backup</b> restores
+                        mappings saved in earlier state files. <b>Scan &amp; Import</b> rebuilds from the NAS by
+                        matching archive DBs to creator folders (coomerfans names are looked up online as needed).
+                        Both are additive — they never delete files or existing links.
+                    </div>
+                    <div class="actions-row">
+                        <button class="btn btn-ghost btn-sm" onclick="recoverFromBackup()">Recover from backup</button>
+                        <button class="btn btn-secondary btn-sm" onclick="importFromDisk()">Scan &amp; Import from disk</button>
+                    </div>
+                    <div class="field-hint mt-2" id="setRootsInfo">Detecting library roots…</div>
+                </section>
+
                 </div>
             </div>
             <div class="modal-footer">
+                <span class="field-hint mr-auto">Changes save as you make them.</span>
                 <button class="btn btn-primary btn-sm" onclick="closeSettings()">Done</button>
             </div>
         </div>
     </div>
 
+    <script src="js/ui.js"></script>
     <script src="js/logger.js"></script>
     <script src="js/creators.js"></script>
     <script src="js/gallery.js"></script>

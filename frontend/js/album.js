@@ -34,9 +34,7 @@ function setAlbumMode(mode) {
 
 function setAlbumBusy(busy, label) {
     albumBusy = busy;
-    ['albumDownloadBtn', 'albumDownloadSelBtn'].forEach(id => {
-        const el = document.getElementById(id); if (el) el.disabled = busy;
-    });
+    ['albumDownloadBtn', 'albumDownloadSelBtn'].forEach(id => UI.busy(id, busy));
     document.getElementById('albumCancelBtn').style.display = busy ? '' : 'none';
     document.getElementById('albumStatus').textContent = label || '';
     const ta = document.getElementById('albumLinks'); if (ta) ta.disabled = busy;

@@ -139,7 +139,7 @@ async function refreshIwaraStatus() {
 async function testIwaraLogin() {
     const btn = document.getElementById('iwaraTestBtn');
     setUpdateIwaraCreds();
-    if (btn) btn.disabled = true;
+    UI.busy(btn, true);
     setIwaraBadge('status-idle', 'Logging in…');
     try {
         const res = await pywebview.api.iwara_test_login();
@@ -148,14 +148,14 @@ async function testIwaraLogin() {
     } catch (e) {
         setIwaraBadge('status-error', 'Login failed');
     } finally {
-        if (btn) btn.disabled = false;
+        UI.busy(btn, false);
     }
 }
 
 // ── Settings overlay ────────────────────────────────────────────
 
 async function openSettings() {
-    document.getElementById('settingsOverlay').classList.add('visible');
+    UI.openOverlay('settingsOverlay', '.settings-nav-item.active');
     loadLinkFilters();
     refreshPawCfStatus();
     refreshIwaraStatus();
@@ -167,6 +167,54 @@ async function openSettings() {
             : 'No library roots detected yet — add a creator first, then scan.';
     } catch (e) { /* ignore */ }
 }
+
+// ── Settings section nav (scroll-spy) ───────────────────────────
+// All sections stay in one scrolling body (every field keeps its handler);
+// the left nav jumps to a section and lights whichever one is in view.
+
+(function initSettingsNav() {
+    const nav = document.getElementById('settingsNav');
+    const body = document.getElementById('settingsBody');
+    if (!nav || !body) return;
+    const items = [...nav.querySelectorAll('.settings-nav-item')];
+    const light = id => items.forEach(b => {
+        const on = b.dataset.target === id;
+        b.classList.toggle('active', on);
+        if (on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
+    });
+    let jumping = 0;
+    items.forEach(b => b.addEventListener('click', () => {
+        const sec = document.getElementById(b.dataset.target);
+        if (!sec) return;
+        light(b.dataset.target);
+        jumping = Date.now();
+        body.scrollTo({ top: sec.offsetTop - body.offsetTop - 4,
+                        behavior: Theme.motionAllowed() ? 'smooth' : 'auto' });
+    }));
+    // ↑/↓ move through the nav like a list.
+    nav.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        const i = items.indexOf(document.activeElement);
+        if (i < 0) return;
+        e.preventDefault();
+        const n = items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+        n.focus();
+        n.click();
+    });
+    body.addEventListener('scroll', () => {
+        if (Date.now() - jumping < 600) return;     // let a nav jump settle first
+        const top = body.scrollTop + 40;
+        let cur = items[0].dataset.target;
+        items.forEach(b => {
+            const sec = document.getElementById(b.dataset.target);
+            if (sec && sec.offsetTop - body.offsetTop <= top) cur = b.dataset.target;
+        });
+        if (body.scrollTop + body.clientHeight >= body.scrollHeight - 2) {
+            cur = items[items.length - 1].dataset.target;
+        }
+        light(cur);
+    }, { passive: true });
+})();
 
 // ── Pawchive link filters (user-editable junk list) ─────────────
 Settings.linkFilters = [];
@@ -229,7 +277,7 @@ function resetLinkFilters() {
 
 function closeSettings() {
     persistSettings();
-    document.getElementById('settingsOverlay').classList.remove('visible');
+    UI.closeOverlay('settingsOverlay');
 }
 
 // ── Rebuild library ─────────────────────────────────────────────
@@ -294,8 +342,10 @@ function setUpdatePawConcurrency() {
 
 function setAuthMethod(method) {
     Settings.authMethod = method;
-    document.querySelectorAll('.radio-option').forEach(opt =>
-        opt.classList.toggle('selected', opt.dataset.auth === method));
+    document.querySelectorAll('.radio-option').forEach(opt => {
+        opt.classList.toggle('selected', opt.dataset.auth === method);
+        opt.setAttribute('aria-checked', String(opt.dataset.auth === method));
+    });
     document.getElementById('authFile').classList.toggle('active', method === 'file');
     document.getElementById('authBrowser').classList.toggle('active', method === 'browser');
 }
@@ -396,7 +446,7 @@ window.onPmvAccountStatus = function (d) {
 
 async function pmvAccountLogin(platform) {
     const btn = document.getElementById('pmvAcctBtn-' + platform);
-    if (btn) btn.disabled = true;
+    UI.busy(btn, true);
     setPmvAccountBadge(platform, null, 'Opening…');
     try {
         const res = await pywebview.api.pmv_account_login(platform);
@@ -404,17 +454,20 @@ async function pmvAccountLogin(platform) {
     } catch (e) {
         setPmvAccountBadge(platform, false, 'Sign-in failed');
     } finally {
-        if (btn) btn.disabled = false;
+        UI.busy(btn, false);
     }
 }
 
-async function pmvAccountTest(platform) {
+async function pmvAccountTest(platform, btn) {
+    UI.busy(btn, true);
     setPmvAccountBadge(platform, null, 'Testing…');
     try {
         const res = await pywebview.api.pmv_account_test(platform);
         setPmvAccountBadge(platform, res ? res.ok : null, (res && res.message) || '?');
     } catch (e) {
         setPmvAccountBadge(platform, null, 'Test failed');
+    } finally {
+        UI.busy(btn, false);
     }
 }
 
@@ -435,7 +488,7 @@ function setUpdatePmvhavenKey() {
 async function connectPawchive() {
     const btn = document.getElementById('pawCfConnectBtn');
     const badge = document.getElementById('pawCfStatus');
-    if (btn) btn.disabled = true;
+    UI.busy(btn, true);
     if (badge) {
         badge.textContent = 'Connecting…';
         badge.className = 'status-badge status-idle';
@@ -450,7 +503,7 @@ async function connectPawchive() {
     } catch (e) {
         setPawCfBadge(false, 'Connection failed', '');
     } finally {
-        if (btn) btn.disabled = false;
+        UI.busy(btn, false);
     }
 }
 
@@ -547,11 +600,11 @@ function openConfigureCommon() {
     document.getElementById('cfgNewLink').value = '';
     document.getElementById('cfgLinkPreview').textContent = '';
     renderCfgLinks();
-    document.getElementById('configureOverlay').classList.add('visible');
+    UI.openOverlay('configureOverlay');
 }
 
 function closeConfigure() {
-    document.getElementById('configureOverlay').classList.remove('visible');
+    UI.closeOverlay('configureOverlay');
 }
 
 async function cfgBrowseDest() {

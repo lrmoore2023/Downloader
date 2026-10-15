@@ -185,7 +185,10 @@ function setPmvBusy(busy, label) {
         const b = document.getElementById(id);
         if (b) b.disabled = busy;
     });
-    document.querySelectorAll('.pmv-fetch-btn').forEach(b => { b.disabled = busy; });
+    document.querySelectorAll('.pmv-fetch-btn').forEach(b => {
+        b.disabled = busy;
+        if (!busy) b.classList.remove('is-loading');
+    });
     ['pmvCancelBtn', 'pmvLatestCancelBtn'].forEach(id => {
         const c = document.getElementById(id);
         if (c) c.style.display = busy ? '' : 'none';
@@ -241,6 +244,11 @@ window.onPmvComplete = async function (r) {
 
 let pmvOpenSeq = 0;                // newest openPmvCreator request
 
+const PMV_SKELETON = `<div class="skeleton" aria-busy="true" aria-label="Loading">
+    <div class="skeleton-line lg"></div><div class="skeleton-line w-60"></div>
+    <div class="skeleton-line block"></div><div class="skeleton-line w-80"></div>
+    <div class="skeleton-line w-60"></div></div>`;
+
 async function openPmvCreator(id, keepScroll) {
     if (!id) return;
     pmvCurrentId = id;
@@ -249,6 +257,12 @@ async function openPmvCreator(id, keepScroll) {
     // of order: only the newest request may paint, or an older (pre-fetch) reply
     // overwrites the fresh one and the pane shows a list that is already stale.
     const seq = ++pmvOpenSeq;
+    const pane = document.getElementById('pmvDetail');
+    // Only show the skeleton when switching creators — a refresh of the open one
+    // keeps its rows on screen so nothing flickers.
+    if (pane && !keepScroll && (!pmvDetail || !pmvDetail.creator || pmvDetail.creator.id !== id)) {
+        pane.innerHTML = PMV_SKELETON;
+    }
     let data;
     try { data = await pywebview.api.get_pmv_items(id); }
     catch (e) { return; }
@@ -355,14 +369,14 @@ function renderPmvSite(s, idx, titleMap) {
     }
     let body;
     if (!items.length) {
-        body = `<div class="links-empty" style="padding: 10px 12px;">${(s.items || []).length ? 'Nothing matches the current filters.' : 'No videos recorded yet.'}</div>`;
+        body = `<div class="links-empty compact">${(s.items || []).length ? 'Nothing matches the current filters.' : 'No videos recorded yet.'}</div>`;
     } else {
         const open = pmvExpanded.has(s.link_key);
         const nOk = done.filter(it => it.status === 'downloaded' && !it.excluded).length;
         const nEx = done.filter(it => it.excluded).length;
         const nX = done.length - nOk - nEx;
         body = `<div class="pmv-table">${todo.map(it => renderPmvRow(it, s, titleMap)).join('')}</div>`
-            + (todo.length ? '' : '<div class="links-empty" style="padding: 8px 12px;">Nothing left to review here.</div>')
+            + (todo.length ? '' : '<div class="links-empty compact">Nothing left to review here.</div>')
             + (done.length ? `<div class="pmv-reviewed-toggle" onclick="pmvToggleReviewed('${s.link_key}')" title="${open ? 'Hide' : 'Show'} the videos you have already reviewed">
                     <span class="pmv-caret">${open ? '▾' : '▸'}</span>
                     Reviewed ${done.length} <span class="badge pmv-primary">✓ ${nOk}</span> <span class="badge badge-skipped">✗ ${nX}</span>${nEx ? ` <span class="badge badge-skipped" title="Not counted toward the catalogue numbers">∅ ${nEx} not counted</span>` : ''}
@@ -625,12 +639,11 @@ async function openPmvEditor(id) {
     document.getElementById('pmvEdDeleteBtn').style.display = rec ? '' : 'none';
     pmvEdLinks = rec ? (rec.links || []).map(l => ({ ...l })) : [];
     renderPmvEdLinks();
-    document.getElementById('pmvEditorOverlay').classList.add('visible');
-    setTimeout(() => document.getElementById(rec ? 'pmvEdNewLink' : 'pmvEdName').focus(), 50);
+    UI.openOverlay('pmvEditorOverlay', rec ? '#pmvEdNewLink' : '#pmvEdName');
 }
 
 function closePmvEditor() {
-    document.getElementById('pmvEditorOverlay').classList.remove('visible');
+    UI.closeOverlay('pmvEditorOverlay');
 }
 
 function pmvPlatformLabel(l) {
