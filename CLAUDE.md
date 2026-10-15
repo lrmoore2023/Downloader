@@ -156,6 +156,14 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   pawchive: `/api/v1/account/favorites?type=artist` (signed in; every favourite in
   one response) — `updated` = new content, `last_imported` = last import run; the
   public `/api/v1/<svc>/user/<id>/profile` carries `updated` too.
+  pmvhaven: notifications are **not** a coverage signal — measured 2026-10-14,
+  27 of 34 uploads from followed creators never produced one, and clearing
+  deletes them. Each tracked link is instead head-checked
+  (`/api/videos?uploader=<id>&limit=3&sort=-uploadDate`, public, no key) and
+  fetched only if an id is unknown; uploads only ever go on top, so that is
+  exact. Notifications just surface untracked uploaders. The API allows 120
+  requests/window (`X-RateLimit-Remaining`, `X-RateLimit-Reset` in epoch ms);
+  `pmvhaven_scraper._get` waits out the window instead of spending the last few.
 - **pawchive** — the API is behind a Cloudflare JS challenge; only `file.pawchive.pw`
   is not. The in-app solve is Settings ▸ Pawchive ▸ Connect, which captures
   `cf_clearance` + the browser UA (`backend/pawchive_cf.py`). `cf_clearance` is

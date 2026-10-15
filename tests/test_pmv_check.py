@@ -440,3 +440,61 @@ def test_untracked_only_recorded_from_the_start_date(tmp_path):
                                 item("iwara", "old", "yy", ago(days=5))]], following=["ua"])
     w.check({"iwara": src}, state_since=SINCE)
     assert set(w.state()["untracked"]) == {"iwara:zz"}
+
+
+class HeadSource(FakeSource):
+    """A feed that can also read each link's newest ids (PMVHaven)."""
+    def __init__(self, *a, heads=None, **k):
+        super().__init__(*a, **k)
+        self._heads = heads or {}
+        self.head_calls = []
+
+    def head(self, link):
+        self.head_calls.append(link["user_id"])
+        h = self._heads.get(link["user_id"], [])
+        if isinstance(h, Exception):
+            raise h
+        return h
+
+
+def test_head_catches_uploads_the_notifications_missed(tmp_path):
+    w = World(tmp_path)
+    a = w.add("pc_a", "pmvhaven", "aa", ["p1"])
+    b = w.add("pc_b", "pmvhaven", "bb", ["q1"])
+    w.site[a].append("p2")
+    # No notification for p2 at all; the feed reads fine and both are followed.
+    src = HeadSource("pmvhaven", [[item("pmvhaven", "z1", "zz", ago(hours=1))]], following=["aa", "bb"],
+                     heads={"aa": ["p2", "p1"], "bb": ["q1"]})
+    res = w.check({"pmvhaven": src}, state_since=SINCE)
+    assert w.jobs == [a]
+    assert res["reasons"][f"pc_a|{a}"] == "new on profile"
+    assert res["platforms"]["pmvhaven"]["heads"] == {"checked": 2, "new": 1, "failed": 0}
+    assert "pmvhaven:zz" in w.state()["untracked"]           # the feed still finds untracked uploaders
+
+
+def test_head_needs_no_feed_and_failed_heads_are_fetched(tmp_path):
+    w = World(tmp_path)
+    a = w.add("pc_a", "pmvhaven", "aa", ["p1"], last_fetch=ago(days=30))
+    b = w.add("pc_b", "pmvhaven", "bb", ["q1"])
+    c = w.add("pc_c", "pmvhaven", "cc", ["r1"])               # not followed: irrelevant now
+    src = HeadSource("pmvhaven", [], available=(False, "No PMVHaven API key in Settings"),
+                     heads={"aa": ["p1"], "bb": pf.FeedError("HTTP 500"), "cc": ["r1"]})
+    res = w.check({"pmvhaven": src}, state_since=SINCE)
+    assert w.jobs == [b]                     # a: stale but its head is known; c: unfollowed but known
+    assert res["reasons"][f"pc_b|{b}"].startswith("profile check failed")
+    assert res["platforms"]["pmvhaven"]["heads"]["failed"] == 1
+
+
+def test_head_skipped_for_links_the_feed_or_pending_already_flag(tmp_path):
+    w = World(tmp_path)
+    a = w.add("pc_a", "pmvhaven", "aa", ["p1"])
+    w.site[a].append("p2")
+    src = HeadSource("pmvhaven", [[item("pmvhaven", "p2", "aa", ago(hours=1), ref="n2")]], following=["aa"],
+                     heads={"aa": ["p2", "p1"]})
+    res = w.check({"pmvhaven": src}, state_since=SINCE)
+    assert w.jobs == [a] and src.head_calls == []
+    assert res["reasons"][f"pc_a|{a}"] == "new in feed"
+    # Sweep fetches everything without spending head requests.
+    src = HeadSource("pmvhaven", [], heads={"aa": ["p2"]})
+    w.check({"pmvhaven": src}, mode="sweep")
+    assert w.jobs == [a] and src.head_calls == []

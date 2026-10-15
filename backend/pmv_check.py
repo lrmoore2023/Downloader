@@ -10,6 +10,13 @@ link ends up in exactly one of these buckets on every check:
   errored, or the walk couldn't reach back to the cutoff → fetched directly
   (PmvRunner's `latest` mode: about one request per link)
 
+A source with `head(link)` (PMVHaven) can say exactly whether a tracked link
+has anything new — its newest few ids, one request — so its feed decides
+nothing about coverage: every tracked link is head-checked, and fetched only
+when the feed or the head shows an unknown video, it is pending, or the head
+couldn't be read. Its feed (notifications, which miss most uploads) only finds
+untracked uploaders.
+
 pawchive has no per-video feed; each tracked creator's `updated` time (from the
 account favourites, else the public profile) is compared with the value seen
 when it was last fetched successfully, and a change triggers the usual full walk.
@@ -270,6 +277,43 @@ class PmvCheck:
             if since is None or when is None or when >= since:
                 out["untracked"].append(it)
 
+    # ── heads ───────────────────────────────────────────────────────
+
+    def _heads(self, links, walks, st):
+        """→ {platform: {link_key: reason | None}} for every source with
+        `head(link)`. Links already flagged by the feed, pending, or never fully
+        fetched are left to step 3 without spending a request."""
+        out = {}
+        for platform in FEED_PLATFORMS:
+            src = self.sources.get(platform)
+            if src is None or not hasattr(src, "head"):
+                continue
+            flagged = (walks.get(platform) or {}).get("flagged") or {}
+            pending = {p["link_key"] for p in st["pending"].values()}
+            todo = [e for e in links if e["link"].get("platform") == platform
+                    and e["manifest"] is not None and e["manifest"].get("initial_complete")
+                    and e["key"] not in flagged and e["key"] not in pending]
+            res = out[platform] = {}
+            new = failed = 0
+            for i, e in enumerate(todo, 1):
+                if self._cancelled():
+                    break
+                if i == 1 or i % 10 == 0 or i == len(todo):
+                    self._emit(f"{platform}: checking profiles {i}/{len(todo)}…", platform=platform)
+                try:
+                    ids = src.head(e["link"])
+                except (pf.FeedError, pf.FeedAuthError) as ex:
+                    res[e["key"]] = f"profile check failed ({ex})"
+                    failed += 1
+                    continue
+                items = e["manifest"].get("items", {})
+                if any(v not in items for v in ids):
+                    res[e["key"]] = "new on profile"
+                    new += 1
+            w = walks.setdefault(platform, {"status": "off", "message": ""})
+            w["heads"] = {"checked": len(todo), "new": new, "failed": failed}
+        return out
+
     # ── pawchive ────────────────────────────────────────────────────
 
     def _pawchive(self, links, st, since):
@@ -359,6 +403,9 @@ class PmvCheck:
                 self._emit(f"{platform}: reading followed feed…", platform=platform)
                 walks[platform] = self._walk(src, cutoff, st, known, by_up)
 
+        # 1b. heads — exact per-link checks where the site can answer cheaply
+        heads = {} if sweep else self._heads(links, walks, st)
+
         # 2. pawchive signatures
         paw_sigs, paw_flagged, paw_msg = ({}, {}, "")
         if not sweep and not self._cancelled():
@@ -387,6 +434,14 @@ class PmvCheck:
                 reason = paw_flagged.get(key)
             elif platform == "hmvmania":
                 reason = "no feed"
+            elif platform in heads:
+                w = walks.get(platform) or {}
+                if key in (w.get("flagged") or {}):
+                    reason = "new in feed"
+                elif any(p["link_key"] == key for p in st["pending"].values()):
+                    reason = "pending"
+                else:
+                    reason = heads[platform].get(key)
             else:
                 w = walks.get(platform) or {"status": "off"}
                 if w["status"] != "ok":
@@ -410,7 +465,7 @@ class PmvCheck:
                 reasons[(e["cid"], key)] = reason
                 jobs.append({"creator": e["creator"], "link": e["link"], "mode": "latest"})
         result["fetched_links"] = len(jobs)
-        result["flagged_links"] = sum(1 for r in reasons.values() if r in ("new in feed", "updated",
+        result["flagged_links"] = sum(1 for r in reasons.values() if r in ("new in feed", "new on profile", "updated",
                                                                            "updated since last fetch", "pending"))
         result["direct_links"] = len(jobs) - result["flagged_links"]
 
@@ -503,6 +558,8 @@ class PmvCheck:
                 "flagged": sum(len(v) for v in (w.get("flagged") or {}).values()),
                 "untracked": len(w.get("untracked") or []), "pages": w.get("pages", 0),
                 "unresolved": len(w.get("unresolved") or [])}
+            if w.get("heads"):
+                result["platforms"][platform]["heads"] = w["heads"]
         if not sweep:
             result["platforms"]["pawchive"] = {"status": "ok", "message": paw_msg,
                                                "flagged": len(paw_flagged), "untracked": 0, "pages": 0,

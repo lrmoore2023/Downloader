@@ -153,6 +153,35 @@ def test_pmvh_iter_videos_follows_hasNext():
     assert list(pmvh.iter_videos(empty, UID, NoThrottle())) == []
 
 
+def test_pmvh_newest_ids_is_one_small_request():
+    url = f"{pmvh.API}/videos?uploader={UID}&limit=3&sort=-uploadDate"
+    s = FakeSession({url: FakeResp(200, json_data={"success": True, "videos": [V_NEW, V_4K, V_OLD]})})
+    assert pmvh.newest_ids(s, UID, 3, NoThrottle()) == [V_NEW["_id"], V_4K["_id"], V_OLD["_id"]]
+    assert s.calls == [url]
+
+
+def test_pmvh_waits_for_the_rate_window_when_nearly_spent(monkeypatch):
+    clock = {"t": 1000.0}
+    slept = []
+    monkeypatch.setattr(pmvh.time, "time", lambda: clock["t"])
+
+    def sleep(d):
+        slept.append(d)
+        clock["t"] += d
+    monkeypatch.setattr(pmvh.time, "sleep", sleep)
+    url = f"{pmvh.API}/users/{UID}"
+    reset_ms = str(int((1000.0 + 12) * 1000))
+    low = FakeSession({url: FakeResp(200, json_data={}, headers={"X-RateLimit-Remaining": "2",
+                                                                  "X-RateLimit-Reset": reset_ms})})
+    pmvh._get(low, url)
+    assert round(sum(slept)) == 12                   # waited out the window
+    slept.clear()
+    plenty = FakeSession({url: FakeResp(200, json_data={}, headers={"X-RateLimit-Remaining": "80",
+                                                                     "X-RateLimit-Reset": reset_ms})})
+    pmvh._get(plenty, url)
+    assert slept == []
+
+
 def test_pmvh_profile_and_username_resolution():
     s = FakeSession({f"{pmvh.API}/users/{UID}": FakeResp(200, json_data={"success": True, "data": {"_id": UID, "username": "LizzyKink"}})})
     assert pmvh.fetch_profile(s, UID, NoThrottle()) == {"id": UID, "name": "LizzyKink", "username": "LizzyKink"}

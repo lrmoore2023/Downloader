@@ -22,6 +22,10 @@ Verified live 2026-10-02:
   `PUT /api/notifications {notificationIds}` marks read. Following:
   `/api/users/<me>/subscriptions` → `data[].id` (me = `/api/user/profile` →
   `data.userId`).
+  Checked 2026-10-14 against every tracked creator: 27 of 34 uploads since
+  09-19 from *followed* creators had no notification at all, and clearing them
+  deletes them. So notifications only find untracked uploaders; tracked links
+  are covered by `head()` — each uploader's newest ids, one public request.
 * rule34video — signed-in session shared from Chrome (one session per account).
   `/my/subscriptions/?mode=async&function=get_block&block_id=
   list_videos_videos_from_my_subscriptions&sort_by=&from=N`, 24 per page, past
@@ -138,6 +142,7 @@ class PmvhavenFeed:
     history_complete = False  # only as far back as notifications are kept
     cheap_depth = True  # uploader is in the notification
     PAGE = 100
+    HEAD = 3
 
     def __init__(self, session, api_key, throttle=None, should_cancel=None):
         self.s, self.key, self.t, self.cancel = session, (api_key or "").strip(), throttle, should_cancel
@@ -209,6 +214,18 @@ class PmvhavenFeed:
                 break
             page += 1
         return ids
+
+    def head(self, link):
+        """The link's newest video ids (newest first). Public — works without
+        the API key. Covers a tracked link exactly, since an uploader's videos
+        are only ever added on top."""
+        uid = link.get("user_id") or ""
+        if not uid:
+            raise FeedError("pmvhaven: link has no user id")
+        try:
+            return pmvh.newest_ids(self.s, uid, self.HEAD, self.t, self.cancel)
+        except pmvh.SiteError as e:
+            raise FeedError(f"pmvhaven: {e}")
 
     def mark_read(self, refs):
         refs = [r for r in refs if r]

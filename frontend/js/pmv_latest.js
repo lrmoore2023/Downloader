@@ -186,6 +186,13 @@ function renderPmvFeedChips(d) {
         if (!r) {
             txt = signedIn ? 'not checked yet' : 'not signed in';
             cls = signedIn ? 'idle' : 'warn';
+        } else if (r.heads) {
+            // Every tracked profile was checked directly (newest uploads, one
+            // request each); the feed only adds untracked uploaders.
+            const h = r.heads;
+            cls = h.failed ? 'warn' : 'ok';
+            txt = `${h.checked} profiles checked · ${r.flagged + h.new} new`;
+            if (h.failed) txt += ` · ${h.failed} couldn't be read → fetched`;
         } else if (r.status === 'ok') {
             cls = 'ok';
             txt = p === 'pawchive' ? `${r.flagged} updated` : `feed ✓ · ${r.flagged} new`;
@@ -200,7 +207,7 @@ function renderPmvFeedChips(d) {
             cls = 'bad'; txt = 'feed error → checked one by one';
         }
         tip = (r && r.message) || '';
-        const fix = (cls === 'bad' || (!signedIn && p !== 'pawchive'))
+        const fix = (cls === 'bad' || (!signedIn && p !== 'pawchive' && !(r && r.heads)))
             ? ` <a href="#" onclick="openSettings(); return false;">Settings</a>` : '';
         return `<span class="pmv-feed-chip ${cls}" title="${escapeHtml(tip)}"><b>${PMV_SITE_LABEL[p]}</b> ${escapeHtml(txt)}${fix}</span>`;
     });

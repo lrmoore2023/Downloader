@@ -20,6 +20,7 @@ Nuxt payload (a `user-profile-…` entry holding `userId`).
 
 import json
 import re
+import time
 import unicodedata
 
 import requests
@@ -145,9 +146,36 @@ def user_id_from_profile_html(html):
 
 def _retry_after(resp, default):
     try:
-        return float(resp.headers.get("Retry-After") or default)
+        return float(resp.headers.get("Retry-After") or _until_reset(resp) or default)
     except (TypeError, ValueError):
         return default
+
+
+# The API allows 120 requests per window and says so on every response:
+# `X-RateLimit-Remaining`, `X-RateLimit-Reset` (epoch ms). Spending the last few
+# is pointless — the next would be a 429 — so wait for the window instead.
+RATE_RESERVE = 3
+
+
+def _until_reset(resp, cap=65.0):
+    """Seconds until the rate-limit window resets, or 0 when unknown/past."""
+    try:
+        reset = float(resp.headers.get("X-RateLimit-Reset") or 0) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(cap, reset - time.time())) if reset else 0.0
+
+
+def _pause_for_budget(resp, cancelled):
+    try:
+        left = int(resp.headers.get("X-RateLimit-Remaining"))
+    except (TypeError, ValueError):
+        return
+    if left > RATE_RESERVE:
+        return
+    end = time.time() + _until_reset(resp)
+    while time.time() < end and not cancelled():
+        time.sleep(min(0.5, end - time.time()))
 
 
 def _get(session, url, params=None, throttle=None, should_cancel=None, retries=3, timeout=(15, 60)):
@@ -176,6 +204,7 @@ def _get(session, url, params=None, throttle=None, should_cancel=None, retries=3
             raise SiteError(f"HTTP {r.status_code} for {url}")
         if throttle:
             throttle.on_success()
+        _pause_for_budget(r, cancelled)
         return r
     raise SiteError(f"{last} after {retries + 1} attempts: {url}")
 
@@ -199,6 +228,16 @@ def resolve_username(session, username, throttle=None, should_cancel=None):
     """username → 24-hex user id via the profile page, or '' when not found."""
     r = _get(session, f"{SITE}/profile/{username}", throttle=throttle, should_cancel=should_cancel)
     return user_id_from_profile_html(r.text)
+
+
+def newest_ids(session, user_id, n=3, throttle=None, should_cancel=None):
+    """The uploader's newest `n` video ids, newest first — one request. An
+    uploader's videos only ever go on in upload order (nothing back-fills), so
+    if these are all known, nothing newer exists."""
+    data = fetch_json(session, f"{API}/videos",
+                      params={"uploader": user_id, "limit": n, "sort": "-uploadDate"},
+                      throttle=throttle, should_cancel=should_cancel)
+    return [str(v.get("_id")) for v in (data or {}).get("videos") or [] if v.get("_id")]
 
 
 def iter_videos(session, user_id, throttle=None, should_cancel=None, limit=PAGE_LIMIT):
