@@ -1,7 +1,16 @@
 import json
 import os
 import sys
+from wsgiref.simple_server import WSGIServer
+
 import webview
+
+# pywebview serves frontend/ from a wsgiref server whose listen backlog is the
+# socketserver default of 5. WebView2 opens more connections than that at page
+# load, and on Windows the overflow is refused outright (status 0, no retry) —
+# a stylesheet dropped that way leaves the whole UI unstyled. pywebview builds
+# its server class internally, so raise the backlog on the base class it uses.
+WSGIServer.request_queue_size = 128
 
 # Ensure imports work when running from any directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

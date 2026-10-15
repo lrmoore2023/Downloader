@@ -12,6 +12,14 @@
     <link rel="stylesheet" href="css/main.css">
     <link rel="stylesheet" href="css/layout.css">
     <link rel="stylesheet" href="css/components.css">
+    <!-- Inline scripts run only after the stylesheets above have settled, so any
+         link without a .sheet here failed to load (e.g. a refused connection):
+         ask for it once more rather than leave the UI unstyled. -->
+    <script>
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(function (l) {
+            if (!l.sheet) l.href = l.href.split('?')[0] + '?retry=' + Date.now();
+        });
+    </script>
     <!-- Runs before first paint so the page never renders unthemed. -->
     <script src="js/theme-pref.js"></script>
     <script src="js/theme.js"></script>

@@ -165,6 +165,10 @@ class _QuietServer(ThreadingHTTPServer):
     """ThreadingHTTPServer that doesn't dump a traceback every time a media
     client aborts a connection (normal when a <video> seeks / closes)."""
 
+    # A gallery page requests dozens of thumbnails at once; the socketserver
+    # default backlog of 5 makes Windows refuse the overflow outright.
+    request_queue_size = 128
+
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
         if isinstance(exc, (ConnectionError, BrokenPipeError, TimeoutError)):
