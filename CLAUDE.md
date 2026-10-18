@@ -15,7 +15,7 @@ scripts with their own `main`; `pytest tests/` collects **zero** tests from them
 and will happily report all-green while they are broken. Always run them too:
 
 ```bash
-.venv/Scripts/python.exe tests/test_pawchive.py               # 93 checks
+.venv/Scripts/python.exe tests/test_pawchive.py               # 134 checks
 .venv/Scripts/python.exe tests/test_pawchive_cf.py            # 18 checks
 .venv/Scripts/python.exe tests/test_year_range.py             # 40 checks
 .venv/Scripts/python.exe tests/test_coomerfans_integrity.py   # 18 checks
@@ -36,6 +36,21 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   (pawchive, coomerfans, twitter, derpibooru, discord), plus the Albums tab
   (`album_runner`, `gofile_downloader`, `cyberdrop_dl_runner`, `filester_*`).
 - `backend/rate_limit.py` — `AdaptiveThrottle`, the shared AIMD request pacer.
+- **SimpCity + tracked albums** (Creator tab, **Real creators only** — destination
+  under `P:\Real\…`, enforced in `resolve_link`/`save_creator` via
+  `_is_real_dest`): `backend/simpcity_scraper.py` (thread URL/page parsing + link
+  classification), `simpcity_archive.py` (per-thread DB), `simpcity_runner.py`
+  (walk + embedded-media download), `album_track_runner.py` (bunkr/gofile/
+  cyberdrop/pixeldrain/filester/turbo/goonbox albums as creator links, plus the
+  review list's one-off downloads), host resolvers `turbo_host.py` /
+  `goonbox_host.py`, and `http_download.py` (shared resumable download verified by
+  size + MD5/ffprobe). UI: `frontend/js/simpcity.js` (the "SimpCity & albums"
+  panel under the links panel) + Settings ▸ SimpCity sign-in. Link platforms
+  `simpcity` and `album` (field `site`). Layout: `<dest>/Simpcity/<year>/` +
+  `Simpcity/Images/<year>/` for thread media (`YYYY.MM.DD - Simpcity - <name>`,
+  post date in local time), `<dest>/Simpcity/<Site>/<year>/` for album files
+  (`YYYY.MM.DD - Bunkr - <name>`, the host's upload date in UTC, falling back to
+  the post date the link came from).
 - **PMV tab** (metadata only, never downloads): `backend/pmv_tracker.py` (manifests +
   the two numbering rules), `backend/pmv_runner.py` (the fetch job),
   `backend/r34video_scraper.py`, `backend/iwara_scraper.py`,
@@ -110,6 +125,15 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   survives; the count includes every dated item, gone or excluded, so it doesn't
   move and the extension derives the same number. `iwara_email/iwara_password/iwara_token` are credentials — never in
   the NAS payload. Probe numbering read-only with `tools/pmv_probe.py <url>`.
+- **SimpCity thread DBs** are `<archive_dir>/simpcity_<thread_id>.db` (+ `.errors.db`):
+  walk state, every post, every embedded file (`media`, key `<host>:<ref>`) and
+  every external link with the user's review decision (`pending/dismissed/
+  downloaded/tracked`) and liveness. **Tracked albums** each get
+  `<archive_dir>/album_<site>_<id>.db` (files fetched by host file id, title,
+  `alive`, `dead_since`, `unreachable_since`/`fail_streak`). Both are keyed only
+  by the site's own ids, so re-adding never re-downloads. cyberdrop-dl's history
+  for tracked albums lives in `<archive_dir>/_engines/cyberdrop/`. SimpCity
+  cookies + UA (`simpcity_cookies_path`, `simpcity_user_agent`) are credentials.
 - **The creator index is also mirrored off-machine** to
   `<archive_dir>/.state-backups/` on every index change (last 20, written on a
   daemon thread so a slow NAS never stalls a save). `app_state.json` used to live
@@ -191,6 +215,28 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   rate — `AdaptiveThrottle.on_score` widens the interval as the score climbs and
   idles near the top. The User-Agent was never the cause. The CDN is unguarded, so
   don't throttle downloads.
+- **simpcity.cr** — XenForo 2.3 behind DDoS-Guard. **Threads are members-only**: a
+  guest gets 403 "Access Forbidden" on every `/threads/` URL (the index is public),
+  so everything runs on the Settings ▸ SimpCity sign-in (login form has a Turnstile
+  captcha → in-app window). Signed-in is read from `<html data-logged-in="true">`;
+  the cookie prefix (`data-cookie-prefix`) is rotated, so never key on cookie names.
+  DDoS-Guard cookies are UA-bound → the UA is kept with the jar. cyberdrop-dl
+  paces it at 1 request / 20 s; pages go through `AdaptiveThrottle`. Probe a thread
+  read-only with `tools/simpcity_probe.py <url> --pages 1,11 [--raw]`.
+- **turbo.cr** (SimpCity's video host, ex-saint) — the altcha proof-of-work only
+  gates the page button: `GET /api/sign?v=<id>` returns a signed, Range-capable CDN
+  URL anonymously. The `/d/<id>` page prints the exact size, MD5 and upload date.
+- **goonbox.cr** (SimpCity's image host, ex-jpg5/6) — pages are a Cloudflare
+  challenge, the Laravel API isn't: `GET /sanctum/csrf-cookie`, then
+  `/api/images/<id>` with `X-XSRF-TOKEN` → `original_url` on `simpN.cuckcapital.cr`.
+  Posts embed the thumbnail inside `<a href="goonbox.cr/img/<id>">`.
+- **bunkr** — answers a non-existent album with a gateway timeout (504), not a 404,
+  so "unreachable" is recorded as a streak, never as dead. Lone files land in
+  cyberdrop-dl's "Loose Files (Bunkr)" bucket.
+- **gofile** — the website-token salt rotates; when every listing returns
+  `error-notPremium` it's the salt (check the bundled gallery-dl/cyberdrop-dl
+  `gofile.py`). Account creation is rate-limited (429), so the guest token is
+  persisted in `.gofile_token.json`.
 - Availability on pawchive is `preview_state` (`scraped` = present, `pending` =
   not imported yet), **not** `has_full`.
 
