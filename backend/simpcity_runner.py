@@ -29,7 +29,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlsplit
 
+from backend import cyberdrop_host as cdh
 from backend import goonbox_host as gb
+from backend import redgifs_host as rg
 from backend import http_download as hd
 from backend import simpcity_scraper as sc
 from backend import turbo_host as th
@@ -325,7 +327,7 @@ class SimpcityRunner:
         dt = parse_post_date(row.get("post_date"))
         try:
             info = self._resolve(row)
-        except (th.TurboGone, gb.GoonboxGone, hd.Gone):
+        except (th.TurboGone, gb.GoonboxGone, cdh.CyberdropGone, rg.RedgifsGone, hd.Gone):
             self._gone(row, entry, None, "removed from the host")
             return
         except Exception as e:
@@ -389,6 +391,23 @@ class SimpcityRunner:
             mime = (img.get("mime") or "").lower()
             return {"url": img["url"], "filename": img["filename"], "size": img.get("size"),
                     "media": "video" if mime.startswith("video/") else "image"}
+        if host == "cyberdrop":
+            r = cdh.resolve(self._turbo, ref)
+
+            def refresh_cd():
+                try:
+                    return cdh.sign(self._turbo, ref)
+                except cdh.CyberdropGone:
+                    raise hd.Gone()
+            return {"url": r["url"], "filename": r["filename"], "size": r["size"],
+                    "media": "image" if r["mime"].startswith("image/") else "video",
+                    "refresh": refresh_cd}
+        if host == "redgifs":
+            r = rg.resolve(self._turbo, ref)
+            return {"url": r["url"], "filename": r["filename"], "headers": rg.DOWNLOAD_HEADERS}
+        if host == "twitter":
+            fmt = re.search(r"format=(\w+)", url)
+            return {"url": url, "filename": f"{ref}.{fmt.group(1) if fmt else 'jpg'}"}
         if host == "simpcity" and ref.startswith("att"):
             return {"url": url, "filename": attachment_name(url, ref)}
         return {"url": url, "filename": _name_from_url(url, f"{ref[-16:]}.bin")}

@@ -150,6 +150,13 @@ def normalize_url(url, base_url=None):
     if is_simpcity_host(p.netloc) and p.path.rstrip("/").endswith(("/redirect", "/goto/link")):
         q = parse_qs(p.query)
         inner = (q.get("to") or q.get("url") or [None])[0]
+        if inner and (q.get("m") or [""])[0] == "b64":
+            # SimpCity base64s the target: /redirect/?to=aHR0cHM6Ly9…&e=1&m=b64
+            import base64
+            try:
+                inner = base64.urlsafe_b64decode(inner + "=" * (-len(inner) % 4)).decode("utf-8")
+            except Exception:
+                inner = None
         if inner:
             return normalize_url(inner)
     return url
@@ -192,6 +199,29 @@ def classify(url):
             return {"kind": "media", "media": media_kind_of(fpath) or "image",
                     "host": "goonbox", "ref": fpath, "url": full, "direct": True}
         return {"kind": "album", "host": "goonbox", "ref": ident, "url": url}
+
+    if host == "pbs.twimg.com" and path.startswith("/media/"):
+        # Twitter images carry no extension: /media/<id>?format=jpg&name=large.
+        # name=orig is the original upload.
+        from urllib.parse import parse_qs
+        mid = path.rsplit("/", 1)[-1].split(".")[0]
+        fmt = (parse_qs(p.query).get("format") or ["jpg"])[0]
+        if "." in path.rsplit("/", 1)[-1]:
+            fmt = path.rsplit(".", 1)[-1]
+        return {"kind": "media", "media": "image", "host": "twitter", "ref": mid,
+                "url": f"https://pbs.twimg.com/media/{mid}?format={fmt}&name=orig",
+                "filename": f"{mid}.{fmt}"}
+
+    from backend import redgifs_host as rg
+    gid = rg.parse_url(url)
+    if gid:
+        return {"kind": "media", "media": "video", "host": "redgifs", "ref": gid, "url": url}
+
+    from backend import cyberdrop_host as cdh
+    if re.search(r"(?:^|\.)cyberdrop\.[a-z]+$", host) and path.startswith("/e/"):
+        fid = cdh.parse_file_url(url)
+        if fid:   # an /e/ URL is cyberdrop's embedded player — content of the post
+            return {"kind": "media", "media": "video", "host": "cyberdrop", "ref": fid, "url": url}
 
     if is_simpcity_host(host):
         m = re.search(r"/attachments/([^/]*?)\.?(\d+)/?$", path)
@@ -295,10 +325,37 @@ _JUNK = ("blockquote, .bbCodeBlock--quote, .message-signature, .message-footer, 
          ".reactionsBar, img.smilie, .avatar, a.username")
 
 
+_SAINT_RE = re.compile(r"\[MEDIA=saint_vid\]([A-Za-z0-9_-]+)\[/MEDIA\]", re.I)
+
+
+def _split_urls(raw):
+    """One href can hold several URLs pasted on separate lines (%0A-joined)."""
+    from urllib.parse import unquote
+    if not raw:
+        return []
+    if "%0a" in raw.lower() or "\n" in raw:
+        parts = re.split(r"(?:%0a|%0d|\s)+", raw, flags=re.I)
+        return [p for p in parts if p]
+    return [raw]
+
+
 def extract_items(body, article=None, base_url=None):
     """Ordered, de-duplicated content items of one post body (a bs4 Tag)."""
+    from urllib.parse import unquote
     for junk in body.select(_JUNK):
         junk.decompose()
+    # A link preview card ("unfurl") stands for exactly one link: its data-url.
+    # Its logo/favicon images are the target site's branding, not content.
+    for card in body.select(".bbCodeBlock--unfurl"):
+        target = card.get("data-url")
+        if target:
+            a = body.new_tag("a", href=target)
+            card.replace_with(a)
+        else:
+            card.decompose()
+    # Old posts: [MEDIA=saint_vid]ID[/MEDIA] that XenForo no longer renders.
+    # saint's video ids live on at turbo.cr.
+    saint_ids = _SAINT_RE.findall(unquote(str(body)))
 
     out, seen = [], set()
 
@@ -312,13 +369,19 @@ def extract_items(body, article=None, base_url=None):
         out.append(item)
 
     def from_url(raw, embedded=False):
-        u = normalize_url(raw, base_url)
-        if not u:
-            return
-        item = classify(u)
-        if item and item["kind"] == "other" and embedded:
-            item = direct_media(u) or dict(item, kind="embed")
-        add(item)
+        for part in _split_urls(raw):
+            if _SAINT_RE.search(unquote(part)):
+                continue                    # broken saint BBCode, handled below
+            u = normalize_url(part, base_url)
+            if not u:
+                continue
+            item = classify(u)
+            if item and item["kind"] == "other":
+                # A link straight to an image/video file is the post's content
+                # (e.g. an i.redd.it gif); embedded media we can't resolve is
+                # kept for review rather than dropped.
+                item = direct_media(u) or (dict(item, kind="embed") if embedded else item)
+            add(item)
 
     # Document order, so items keep the post's order.
     for el in body.find_all(["img", "a", "iframe", "video", "source", "span", "div"]):
@@ -345,6 +408,10 @@ def extract_items(body, article=None, base_url=None):
             m = re.search(r"loadMedia\(this,\s*'([^']+)'", el.get("onclick") or "")
             if m:
                 from_url(m.group(1), embedded=True)
+
+    for sid in saint_ids:
+        add({"kind": "media", "media": "video", "host": "turbo", "ref": sid,
+             "url": f"https://turbo.cr/d/{sid}"})
 
     if article is not None:
         for a in article.select(".message-attachments a[href]"):

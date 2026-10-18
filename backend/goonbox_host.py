@@ -50,6 +50,8 @@ def parse_url(url):
         return "direct", url
     if not is_host(p.netloc):
         return None
+    if p.path.startswith("/images/"):
+        return "direct", url        # legacy chevereto file path on the main host
     m = _IMG_RE.match(p.path)
     if m:
         return "image", m.group(1)

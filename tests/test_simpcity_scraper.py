@@ -49,7 +49,7 @@ Here you go
 <a href="https://simpcity.cr/members/bob.1/" class="username">bob</a>
 <img class="smilie" src="https://simpcity.cr/styles/smilie.png">
 <img class="bbImage" src="https://i.unknownhost.example/full/pic.png">
-<iframe src="https://www.redgifs.com/ifr/someclip"></iframe>
+<iframe src="https://streamable.com/e/someclip"></iframe>
 <blockquote class="bbCodeBlock bbCodeBlock--quote"><a href="https://turbo.cr/d/QUOTED">quoted</a></blockquote>
 """
 
@@ -119,7 +119,7 @@ def test_parse_page_extracts_content_only():
         ("album", "gofile", "ESrvqaG1"),                 # redirect unwrapped
         ("other", "mega", "https://mega.nz/folder/abc#key"),
         ("media", "unknownhost", "https://i.unknownhost.example/full/pic.png"),
-        ("embed", "redgifs", "https://www.redgifs.com/ifr/someclip"),
+        ("embed", "streamable", "https://streamable.com/e/someclip"),
         ("media", "simpcity", "att991"),                 # attachment
     ]
     urls = " ".join(i["url"] for i in only["items"])
@@ -177,3 +177,47 @@ def test_threaddb_media_lifecycle(tmp_path):
     db.set(last_page=4, title="T")
     assert db.get("last_page") == "4" and db.state()["title"] == "T"
     db.close()
+
+
+# ── markup measured on real thread pages (2026-10-17) ───────────────
+
+REAL_BODY = """
+<div class="bbCodeBlock bbCodeBlock--unfurl js-unfurl fauxBlockLink" data-host="gofile.io" data-url="https://gofile.io/d/ESrvqaG1">
+  <div class="contentRow"><div class="contentRow-figure"><img alt="gofile.io" src="https://gofile.io/assets/img/logo-small-og.png"/></div>
+  <div class="contentRow-main"><h3><a class="link link--external fauxBlockLink-blockLink" href="/redirect/?to=aHR0cHM6Ly9nb2ZpbGUuaW8vZC9FU3J2cWFHMQ&amp;e=1&amp;m=b64">Gofile</a></h3>
+  <span class="js-unfurl-favicon"><img class="bbCodeBlockUnfurl-icon" src="https://gofile.io/assets/img/favicon16.png"/></span></div></div>
+</div>
+<a class="link link--external" href="/redirect/?to=aHR0cHM6Ly9jb29tZXIuc3Qvb25seWZhbnMvdXNlci9hdG93ZXJzcw&amp;e=1&amp;m=b64">coomer</a>
+<div class="bbImageWrapper js-lbImage" data-src="https://pbs.twimg.com/media/GW6SB9kX0AAYvWt?format=jpg&amp;name=large">
+  <img class="bbImage" data-url="https://pbs.twimg.com/media/GW6SB9kX0AAYvWt?format=jpg&amp;name=large" src="https://pbs.twimg.com/media/GW6SB9kX0AAYvWt?format=jpg&amp;name=large"/></div>
+<div class="generic2wide-iframe-div"><iframe class="saint-iframe" src="https://cyberdrop.cr/e/ZpqWkU8hr9JPH"></iframe></div>
+<img class="bbImage" src="https://simp6.cuckcapital.cr/images3/IMG_27120b4432253d122084.md.png" data-url="https://simp6.cuckcapital.cr/images3/IMG_27120b4432253d122084.md.png"/>
+<a class="link link--external" href="https://simp6.cuckcapital.cr/images4/aaa.jpg%0Ahttps://simp6.cuckcapital.cr/images4/bbb.jpg">two</a>
+<a class="link link--internal" href="https://simpcity.cr/[MEDIA=saint_vid]FUGnMPVMHsO[/MEDIA]%20[MEDIA=saint_vid]urwP21LChmU[/MEDIA]">x</a>
+<a class="link link--external" href="https://i.redd.it/u48vrq5lo3yf1.gif">gif</a>
+<iframe src="https://redgifs.com/ifr/exaltedspeedyinexpectatumpleco"></iframe>
+<img class="smilie smilie--emoji" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f642.png"/>
+"""
+
+
+def test_real_markup():
+    html = page([post(51960587, 1789000000, REAL_BODY, sig="")], cur=1, last=1)
+    [p] = sc.parse_page(html, base_url="https://simpcity.cr/threads/t.1/")["posts"]
+    got = [(i["kind"], i["host"], i["ref"]) for i in p["items"]]
+    assert got == [
+        ("album", "gofile", "ESrvqaG1"),            # the unfurl card → its link only
+        ("other", "coomer", "https://coomer.st/onlyfans/user/atowerss"),   # base64 redirect
+        ("media", "twitter", "GW6SB9kX0AAYvWt"),
+        ("media", "cyberdrop", "ZpqWkU8hr9JPH"),     # /e/ = embedded player
+        ("media", "goonbox", "/images3/IMG_27120b4432253d122084.png"),     # .md. thumb → original
+        ("media", "goonbox", "/images4/aaa.jpg"),    # %0A-joined URLs split
+        ("media", "goonbox", "/images4/bbb.jpg"),
+        ("media", "redd", "https://i.redd.it/u48vrq5lo3yf1.gif"),          # direct file link
+        ("media", "redgifs", "exaltedspeedyinexpectatumpleco"),
+        ("media", "turbo", "FUGnMPVMHsO"),           # broken saint BBCode → turbo
+        ("media", "turbo", "urwP21LChmU"),
+    ]
+    tw = next(i for i in p["items"] if i["host"] == "twitter")
+    assert tw["url"].endswith("name=orig")
+    urls = " ".join(i["url"] for i in p["items"])
+    assert "logo-small-og" not in urls and "favicon" not in urls and "twemoji" not in urls
