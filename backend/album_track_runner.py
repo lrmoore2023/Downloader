@@ -19,10 +19,13 @@ its files and history but is flagged.
 Engines:
   gofile                     GofileRunner.list_folder + http_download (4 workers)
   turbo / goonbox            native resolvers + http_download
-  bunkr / cyberdrop / pixeldrain   cyberdrop-dl into a staging folder, then each
-                             finished file is moved to its dated name (cyberdrop-dl
-                             can't template filenames); its history DB lives in
-                             the archive dir so it survives a dead app drive
+  bunkr                      native (bunkr_host): album listing with sizes + upload
+                             times, at most 2 downloads per CDN node (the 3rd gets a
+                             503), cold-storage files warmed and retried later in the
+                             same run
+  cyberdrop / pixeldrain     cyberdrop-dl into a staging folder, then each finished
+                             file is moved to its dated name (cyberdrop-dl can't
+                             template filenames)
   filester                   FilesterRunner into staging, same move step
 """
 
@@ -35,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from backend import album_sites
+from backend import bunkr_host as bh
 from backend import goonbox_host as gb
 from backend import http_download as hd
 from backend import turbo_host as th
@@ -46,7 +50,9 @@ STAGING = ".incoming"
 SITE_LABELS = {"bunkr": "Bunkr", "gofile": "Gofile", "cyberdrop": "Cyberdrop",
                "pixeldrain": "Pixeldrain", "filester": "Filester", "turbo": "Turbo",
                "goonbox": "GoonBox"}
-CYBERDROP_SITES = ("bunkr", "cyberdrop", "pixeldrain")
+CYBERDROP_SITES = ("cyberdrop", "pixeldrain")
+COLD_ROUNDS = 3          # bunkr: passes over files that didn't start (cold storage)
+COLD_WAIT = 60           # seconds between those passes
 TRACKABLE_SITES = tuple(SITE_LABELS)
 
 
@@ -274,6 +280,8 @@ class AlbumTrackRunner:
                 alive, title = self._run_turbo()
             elif site == "goonbox":
                 alive, title = self._run_goonbox()
+            elif site == "bunkr":
+                alive, title = self._run_bunkr()
             elif site in CYBERDROP_SITES:
                 alive, title = self._run_cyberdrop(engine_state_dir, force)
             elif site == "filester":
@@ -340,13 +348,16 @@ class AlbumTrackRunner:
     # ── shared native download step ─────────────────────────────────
 
     def _fetch(self, key, original, url, size=None, md5=None, dt=None, session=None,
-               headers=None, refresh=None, page_url=None):
+               headers=None, refresh=None, page_url=None, defer=False, attempts=8):
+        """Download one host file to its dated name. Returns the outcome:
+        ok / skipped / failed / gone / cancelled, or "retry" when `defer` is set and
+        it failed — the caller comes back to it later instead of recording an error."""
         if self._cancel.is_set():
-            return
+            return "cancelled"
         if self._have(key):
             with self._lock:
                 self.skipped_count += 1
-            return
+            return "skipped"
         rec = self._db.file(key)
         if rec and rec["path_key"]:                     # recorded but missing → same name
             rel = rec["path_key"]
@@ -359,14 +370,15 @@ class AlbumTrackRunner:
                                 dt.isoformat() if dt else None)
                 with self._lock:
                     self.skipped_count += 1
-                return
+                return "skipped"
         name = os.path.basename(path)
         entry = f"album_{self._site}_{key}"
         self._progress({"type": "dl_start", "id": entry, "message": name})
         try:
             res = hd.download(session, url, path, expected_size=size or None, md5=md5,
                               headers=headers, refresh=refresh, cancelled=self._cancel.is_set,
-                              skip=lambda: self._skip_requested(entry), on_info=self._info)
+                              skip=lambda: self._skip_requested(entry), on_info=self._info,
+                              max_attempts=attempts)
         finally:
             self._progress({"type": "dl_stop", "id": entry})
             with self._lock:
@@ -378,7 +390,10 @@ class AlbumTrackRunner:
             with self._lock:
                 self.downloaded_count += 1
             self._progress({"type": "download", "message": name, "path": path})
-        elif res.status in ("failed", "gone"):
+            return "ok"
+        if res.status == "failed" and defer:
+            return "retry"
+        if res.status in ("failed", "gone"):
             with self._lock:
                 self.error_count += 1
             if self._store:
@@ -388,6 +403,7 @@ class AlbumTrackRunner:
                 if res.status == "gone":
                     self._store.mark_gone(entry)
             self._error(f"{'Gone' if res.status == 'gone' else 'Failed'} ({res.reason}): {name}")
+        return res.status
 
     def _pool(self, jobs):
         with ThreadPoolExecutor(max_workers=self.workers) as ex:
@@ -475,6 +491,134 @@ class AlbumTrackRunner:
                 for im in images if im.get("url")]
         self._pool(jobs)
         return True, title
+
+    def _run_bunkr(self):
+        """Native bunkr: list → for each new file resolve, warm, download — at most
+        two at once per CDN node, and files that won't start (cold storage) are
+        warmed and retried in later passes instead of failing."""
+        s = bh.make_session()
+        item = self._item
+        try:
+            if item["kind"] == "album":
+                title, files = bh.album(s, item["ref"])
+                jobs = [{"key": str(f["id"]), "file_id": str(f["id"]),
+                         "name": f["original"] or f["name"] or f["slug"], "size": f["size"],
+                         "dt": f["uploaded"], "page": f"https://bunkr.cr/f/{f['slug']}"}
+                        for f in files]
+            else:
+                info = bh.file_info(s, item["ref"])
+                title = None
+                jobs = [{"key": info["id"], "file_id": info["id"],
+                         "name": info["name"] or item["ref"], "size": None, "dt": None,
+                         "page": item["url"]}]
+        except bh.BunkrGone as e:
+            raise AlbumGone(f"404 {e}")
+        except bh.BunkrUnavailable as e:
+            with self._lock:
+                self.error_count += 1
+            self._error(f"Bunkr: {e} — try again later")
+            return None, None
+        todo = [j for j in jobs if not self._have(j["key"])]
+        with self._lock:
+            self.skipped_count += len(jobs) - len(todo)
+        self._info(f"Reading the {'album' if item['kind'] == 'album' else 'file'}… "
+                   f"{len(jobs)} file(s), {len(todo)} new")
+        limiter = bh.NodeLimiter()
+        sessions = threading.local()
+
+        def session():
+            ss = getattr(sessions, "s", None)
+            if ss is None:
+                ss = sessions.s = bh.make_session()
+            return ss
+
+        def one(job, final):
+            if self._cancel.is_set() or self._have(job["key"]):
+                return "skipped"
+            ss = session()
+            try:
+                r = bh.resolve(ss, job["file_id"])
+            except bh.BunkrGone:
+                return self._bunkr_gone(job)
+            except Exception as e:
+                if final:
+                    return self._bunkr_failed(job, f"couldn't get a download link: {e}")
+                return "retry"
+            if r["node"].endswith("scdn.st"):
+                self._info(f"{job['name']}: bunkr serves this one from cold storage — the "
+                           "first download can be slow (it speeds up once warmed)")
+            with limiter(r["node"]):
+                # The first byte pulls a cold file out of storage (seconds); it also
+                # gives the real size and the upload time for a lone file.
+                status, total, modified = None, None, None
+                for _ in range(4):
+                    status, total, modified = bh.warm(ss, r["url"])
+                    if status != 503 or self._cancel.is_set():
+                        break
+                    bh.sleep_cancellable(8, self._cancel.is_set)   # node busy
+                if status == 404:
+                    return self._bunkr_gone(job)
+                if status is None or status >= 400:
+                    if final:
+                        return self._bunkr_failed(job, f"bunkr CDN didn't serve it "
+                                                       f"({'timeout' if status is None else status})")
+                    return "retry"
+
+                def refresh():
+                    try:
+                        return bh.resolve(ss, job["file_id"])["url"]
+                    except bh.BunkrGone:
+                        raise hd.Gone()
+                return self._fetch(job["key"], job["name"], r["url"],
+                                   size=job["size"] or total, dt=job["dt"] or modified,
+                                   session=ss, headers=bh.DOWNLOAD_HEADERS, refresh=refresh,
+                                   page_url=job["page"], defer=not final,
+                                   attempts=8 if final else 3)
+
+        for rnd in range(COLD_ROUNDS):
+            if not todo or self._cancel.is_set():
+                break
+            final = rnd == COLD_ROUNDS - 1
+            retry = []
+            with ThreadPoolExecutor(max_workers=self.workers) as ex:
+                futs = {ex.submit(one, j, final): j for j in todo}
+                for f, j in futs.items():
+                    try:
+                        if f.result() == "retry":
+                            retry.append(j)
+                    except Exception as e:
+                        with self._lock:
+                            self.error_count += 1
+                        self._error(f"{self._label}: {e}")
+            todo = retry
+            if todo and not final and not self._cancel.is_set():
+                self._info(f"{len(todo)} file(s) didn't start — bunkr is probably pulling them "
+                           f"out of cold storage; trying them again in {COLD_WAIT}s")
+                bh.sleep_cancellable(COLD_WAIT, self._cancel.is_set)
+        return True, title
+
+    def _bunkr_gone(self, job):
+        entry = f"album_bunkr_{job['key']}"
+        with self._lock:
+            self.error_count += 1
+        if self._store:
+            self._store.record_failure(entry, platform="album", filename=job["name"],
+                                       url=job["page"], page_url=self._item["url"],
+                                       status=404, reason="removed from bunkr")
+            self._store.mark_gone(entry)
+        self._error(f"Gone (removed from bunkr): {job['name']}")
+        return "gone"
+
+    def _bunkr_failed(self, job, reason):
+        entry = f"album_bunkr_{job['key']}"
+        with self._lock:
+            self.error_count += 1
+        if self._store:
+            self._store.record_failure(entry, platform="album", filename=job["name"],
+                                       url=job["page"], page_url=self._item["url"],
+                                       reason=reason)
+        self._error(f"Failed ({reason}): {job['name']}")
+        return "failed"
 
     def _run_cyberdrop(self, state_dir, force):
         from backend.cyberdrop_dl_runner import CyberdropDlRunner
@@ -645,6 +789,8 @@ def probe_alive(url, timeout=(15, 30)):
                 return False
             except gf.GofilePassword:
                 return True
+        if info and info["site"] == "bunkr":
+            return bh.probe_alive(bh.make_session(), url)
         if info and info["site"] == "pixeldrain":
             from backend.pawchive_scraper import make_session
             api = (f"https://pixeldrain.com/api/list/{info['ref']}" if info["kind"] == "album"

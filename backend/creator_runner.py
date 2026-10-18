@@ -606,12 +606,11 @@ class CreatorRunner:
 
     @staticmethod
     def _engine_state_dir(archive_dir):
-        """cyberdrop-dl's history DB for tracked albums. In the archive dir (the
-        NAS) when there is one, so — like every archive DB — it outlives the app's
-        own drive; losing it would re-download every tracked bunkr album."""
-        archive_dir = (archive_dir or "").strip()
-        if archive_dir and os.path.isdir(archive_dir):
-            return os.path.join(archive_dir, "_engines", "cyberdrop")
+        """cyberdrop-dl's state for tracked cyberdrop/pixeldrain albums — on the
+        app's own drive. On the NAS its SQLite schema setup alone took 41 s and its
+        log writer broke ("A record has been lost"), which silenced live progress.
+        Losing it only costs a re-fetch: the per-album DB in the archive dir still
+        knows every filed file and drops the duplicate."""
         app = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(app, ".album_state", "tracked", "cyberdrop")
 

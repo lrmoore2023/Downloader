@@ -185,18 +185,18 @@ def test_cyberdrop_staging_files_to_dated_names(sandbox, monkeypatch, tmp_path):
     FakeCyberdrop.scrape_error = None
     monkeypatch.setattr(cdr, "CyberdropDlRunner", FakeCyberdrop)
     os.makedirs(sandbox["arch"])
-    item = at.parse_album_url("https://bunkr.cr/a/ALB")
+    item = at.parse_album_url("https://cyberdrop.cr/a/ALB")
     done, errs = run(sandbox, item, engine_state_dir=str(tmp_path / "eng"),
                      origin_date="2024-05-05T12:00:00+00:00")
     assert done["downloaded"] == 2 and done["title"] == "Album", errs
-    root = os.path.join(sandbox["dest"], "Simpcity", "Bunkr")
-    assert os.path.isfile(os.path.join(root, "2025", "2025.10.27 - Bunkr - clip.mp4"))
-    assert os.path.isfile(os.path.join(root, "2024", "2024.05.05 - Bunkr - pic.jpg"))  # post-date fallback
+    root = os.path.join(sandbox["dest"], "Simpcity", "Cyberdrop")
+    assert os.path.isfile(os.path.join(root, "2025", "2025.10.27 - Cyberdrop - clip.mp4"))
+    assert os.path.isfile(os.path.join(root, "2024", "2024.05.05 - Cyberdrop - pic.jpg"))  # post-date fallback
     assert os.listdir(os.path.join(root, ".incoming")) == []                        # staging emptied
     # the same files again (history overlap) are not filed twice
     done, _ = run(sandbox, item, engine_state_dir=str(tmp_path / "eng"))
     assert done["downloaded"] == 0 and done["file_count"] == 2
-    assert sorted(os.listdir(os.path.join(root, "2025"))) == ["2025.10.27 - Bunkr - clip.mp4"]
+    assert sorted(os.listdir(os.path.join(root, "2025"))) == ["2025.10.27 - Cyberdrop - clip.mp4"]
 
 
 def test_cyberdrop_404_scrape_is_gone(sandbox, monkeypatch, tmp_path):
@@ -205,7 +205,7 @@ def test_cyberdrop_404_scrape_is_gone(sandbox, monkeypatch, tmp_path):
     FakeCyberdrop.scrape_error = "404 Not Found"
     monkeypatch.setattr(cdr, "CyberdropDlRunner", FakeCyberdrop)
     os.makedirs(sandbox["arch"])
-    done, _ = run(sandbox, at.parse_album_url("https://bunkr.cr/a/DEAD"),
+    done, _ = run(sandbox, at.parse_album_url("https://cyberdrop.cr/a/DEAD"),
                   engine_state_dir=str(tmp_path / "eng"))
     assert done["alive"] is False
 
@@ -216,6 +216,6 @@ def test_cyberdrop_transient_scrape_is_unknown(sandbox, monkeypatch, tmp_path):
     FakeCyberdrop.scrape_error = "504 Gateway Timeout"
     monkeypatch.setattr(cdr, "CyberdropDlRunner", FakeCyberdrop)
     os.makedirs(sandbox["arch"])
-    done, _ = run(sandbox, at.parse_album_url("https://bunkr.cr/a/SLOW"),
+    done, _ = run(sandbox, at.parse_album_url("https://cyberdrop.cr/a/SLOW"),
                   engine_state_dir=str(tmp_path / "eng"))
     assert done["alive"] is None
