@@ -39,7 +39,9 @@ from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
     pawchive_archive_path, twitter_archive_path, derpibooru_archive_path,
     discord_archive_path, errors_db_path, extract_into_folders, fetch_prefs, is_track_only,
+    simpcity_archive_path, LINK_COLLECTING,
 )
+from backend import simpcity_scraper as simpcity
 from backend.download_errors import open_readonly as open_errors_store
 from backend import album_sites
 from backend.album_runner import AlbumRunner, album_state_dir, album_errors_db
@@ -1026,12 +1028,32 @@ class Api:
 
     # ── Link parsing ────────────────────────────────────────────────
 
-    def resolve_link(self, url):
+    # SimpCity threads (and the albums found in them) are only tracked for
+    # creators filed under P:\Real — the user's call; other libraries never
+    # see these link types.
+    REAL_ONLY_PLATFORMS = ("simpcity", "album")
+    REAL_ONLY_MSG = ("SimpCity threads and tracked albums are only available for "
+                     "creators under P:\\Real (Real\\Creators, Real\\Furry).")
+
+    def _is_real_dest(self, destination):
+        return bool(destination) and self._derive_category_pair(destination)[0] == "Real"
+
+    def resolve_link(self, url, destination=None):
         """Validate/parse a pasted link for the Configure Links overlay.
 
-        Returns {valid, platform, ...platform fields, url} or {valid: False}.
+        Returns {valid, platform, ...platform fields, url} or {valid: False[, reason]}.
+        `destination` (the creator's folder, when known) enforces the Real-only
+        rule for SimpCity/album links so the overlay can explain a refusal.
         """
         url = (url or "").strip()
+        info = self._resolve_link(url)
+        if (info.get("valid") and destination is not None
+                and info["platform"] in self.REAL_ONLY_PLATFORMS
+                and not self._is_real_dest(self._fwd(destination))):
+            return {"valid": False, "reason": self.REAL_ONLY_MSG}
+        return info
+
+    def _resolve_link(self, url):
         cf = parse_creator_url(url)
         if cf:
             return {"valid": True, "platform": "coomerfans", "service": cf["service"],
@@ -1072,6 +1094,11 @@ class Api:
                         pass
                 return {"valid": True, "platform": "discord", "guild_id": dc["guild_id"],
                         "channel_id": dc["channel_id"], "name": name, "url": url}
+        thread = simpcity.parse_thread_url(url)
+        if thread:
+            name = (thread["slug"] or thread["thread_id"]).replace("-", " ").strip()
+            return {"valid": True, "platform": "simpcity", "thread_id": thread["thread_id"],
+                    "name": name, "url": thread["canonical"]}
         username = self._extract_username(url)
         if username:
             return {"valid": True, "platform": "twitter", "username": username, "url": url}
@@ -1079,7 +1106,7 @@ class Api:
 
     def _link_from_url(self, url):
         """Build a normalized link record from a URL, or None if unrecognized."""
-        info = self.resolve_link(url)
+        info = self._resolve_link((url or "").strip())
         if not info.get("valid"):
             return None
         if info["platform"] == "coomerfans":
@@ -1103,6 +1130,10 @@ class Api:
             return {"platform": "discord", "guild_id": info["guild_id"],
                     "channel_id": info["channel_id"], "name": info.get("name") or "",
                     "url": dc_channel_url(info["guild_id"], info["channel_id"])}
+        if info["platform"] == "simpcity":
+            # Canonical first-page URL, so any page/post link of a thread dedupes.
+            return {"platform": "simpcity", "thread_id": info["thread_id"],
+                    "name": info["name"], "url": info["url"]}
         return {"platform": "twitter", "username": info["username"], "url": info["url"]}
 
     # ── Creator CRUD ────────────────────────────────────────────────
@@ -1110,9 +1141,11 @@ class Api:
     @staticmethod
     def _summary(links):
         s = {"onlyfans": 0, "fansly": 0, "twitter": 0, "patreon": 0, "fanbox": 0,
-             "derpibooru": 0, "discord": 0}
+             "derpibooru": 0, "discord": 0, "simpcity": 0, "album": 0}
         for l in links or []:
-            if l.get("platform") == "twitter":
+            if l.get("platform") in ("simpcity", "album"):
+                s[l["platform"]] += 1
+            elif l.get("platform") == "twitter":
                 s["twitter"] += 1
             elif l.get("platform") == "derpibooru":
                 s["derpibooru"] += 1
@@ -1882,6 +1915,7 @@ class Api:
         if not destination and not (creator.get("name") or "").strip():
             return {"error": "A name is required for a creator without a folder"}
 
+        prior_links = {(pl.get("url") or "").lower(): pl for pl in (prior or {}).get("links", [])}
         links, seen = [], set()
         for l in creator.get("links", []):
             built = self._link_from_url((l or {}).get("url", ""))
@@ -1891,6 +1925,14 @@ class Api:
             if key in seen:
                 continue
             seen.add(key)
+            if built["platform"] in self.REAL_ONLY_PLATFORMS and not self._is_real_dest(destination):
+                return {"error": self.REAL_ONLY_MSG}
+            # Fields only the app sets (an album tracked from a thread's review
+            # list remembers the post it came from) survive a plain edit.
+            for k in ("origin_date", "origin_thread"):
+                v = (l or {}).get(k) or prior_links.get(key, {}).get(k)
+                if v:
+                    built[k] = v
             # A discord link can carry a filename tag ("patreon"/"fanbox"/…) so
             # its downloads blend with the creator's other-platform files. Only
             # persist a recognized value; anything else means the default (Discord).
@@ -2024,6 +2066,8 @@ class Api:
                 return derpibooru_archive_path(archive_dir, link, dest)
             if platform == "discord":
                 return discord_archive_path(archive_dir, link, dest)
+            if platform == "simpcity":
+                return simpcity_archive_path(archive_dir, link, dest)
         except Exception:
             return None
         return None
@@ -2235,10 +2279,10 @@ class Api:
         # external links without downloading — a scope with no pawchive link
         # would be a no-op, so say so instead of running an empty pass.
         if is_track_only(c) and not any(
-                l.get("platform") == "pawchive"
+                l.get("platform") in LINK_COLLECTING
                 for l in filter_links(c["links"], scope)):
-            return {"error": "This creator is links-only — only its pawchive links "
-                             "collect external links, and this scope has none."}
+            return {"error": "This creator is links-only — only its pawchive/SimpCity "
+                             "links collect external links, and this scope has none."}
 
         try:
             workers = max(3, min(10, int(state.get("cf_concurrency") or 5)))
@@ -2295,6 +2339,8 @@ class Api:
             cookies_browser=state.get("cookies_browser") or "",
             pawchive_cookies_path=state.get("pawchive_cookies_path") or "",
             pawchive_user_agent=state.get("pawchive_user_agent") or "",
+            simpcity_cookies_path=state.get("simpcity_cookies_path") or "",
+            simpcity_user_agent=state.get("simpcity_user_agent") or "",
             derpibooru_api_key=state.get("derpibooru_api_key") or "",
             derpibooru_filter_id=state.get("derpibooru_filter_id") or "",
             discord_token=state.get("discord_token") or "",

@@ -17,6 +17,8 @@
         neutral    --neutral-soft --neutral-line   (quiet chips / idle badges)
         brands     --brand-paw(-soft/-line) --brand-derpi(-soft/-line)
                    --brand-discord(-soft/-line)
+                   --brand-simpcity(-soft/-line)
+                   --brand-album(-soft/-line)
         misc       --focus-ring --overlay-bg --scrim --lightbox-bg --skeleton
                    --shadow-sm --shadow-md --shadow-lg  --select-chevron (colour)
 

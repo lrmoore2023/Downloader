@@ -33,6 +33,7 @@ from backend.derpibooru_scraper import (
     query_label as db_query_label, query_slug as db_query_slug,
 )
 from backend.discord_runner import DiscordRunner
+from backend.simpcity_runner import SimpcityRunner
 from backend.config_builder import (
     build_config, build_latest_config, build_redownload_config, cleanup_config,
 )
@@ -74,6 +75,10 @@ def is_track_only(creator):
     return not (p["images"] or p["videos"])
 
 
+# Platforms whose engine records external links even when nothing is downloaded.
+LINK_COLLECTING = ("pawchive", "simpcity")
+
+
 # ── scope → link filtering ──────────────────────────────────────────
 
 def filter_links(links, scope):
@@ -102,6 +107,8 @@ def filter_links(links, scope):
         return [l for l in links if l.get("platform") == "derpibooru"]
     if scope == "discord":
         return [l for l in links if l.get("platform") == "discord"]
+    if scope == "simpcity":
+        return [l for l in links if l.get("platform") == "simpcity"]
     if scope and scope.startswith("link:"):
         target = scope[len("link:"):]
         return [l for l in links if (l.get("url") or "") == target]
@@ -116,6 +123,8 @@ def link_label(link):
         return f"Derpibooru {link.get('name') or db_query_label(link.get('query'))}"
     if link.get("platform") == "discord":
         return f"Discord {link.get('name') or link.get('channel_id') or '?'}"
+    if link.get("platform") == "simpcity":
+        return f"SimpCity {link.get('name') or link.get('thread_id') or '?'}"
     name = link.get("name") or link.get("user_id") or "?"
     if link.get("platform") == "pawchive":
         return f"{pw_site_code(link.get('service'))} {name}"
@@ -158,6 +167,16 @@ def discord_archive_path(archive_dir, link, destination):
     if archive_dir and os.path.isdir(archive_dir):
         return os.path.join(archive_dir, f"discord_{cid}.db")
     return os.path.join(destination, f".discord-{cid}-archive.db")
+
+
+def simpcity_archive_path(archive_dir, link, destination):
+    """Per-thread SimpCity DB, keyed by the thread id alone (so a re-added
+    creator, or a new record on the same folder, finds the same record)."""
+    archive_dir = (archive_dir or "").strip()
+    tid = link.get("thread_id") or "unknown"
+    if archive_dir and os.path.isdir(archive_dir):
+        return os.path.join(archive_dir, f"simpcity_{tid}.db")
+    return os.path.join(destination, f".simpcity-{tid}-archive.db")
 
 
 def twitter_archive_path(archive_dir, username, twitter_dest):
@@ -226,7 +245,8 @@ class CreatorRunner:
             derpibooru_api_key=None, derpibooru_filter_id=None,
             discord_token=None, discord_token_type=None, refresh_links=True,
             error_entries=None, pawchive_cookies_path=None,
-            pawchive_user_agent=None, year_range=None, links_root=None):
+            pawchive_user_agent=None, year_range=None, links_root=None,
+            simpcity_cookies_path=None, simpcity_user_agent=None):
         # A targeted 'errors' recheck (specific pawchive failures the user picked in
         # the panel — a file/post/year). Only pawchive uses the per-entry failure
         # store, so a targeted run skips other platforms (which treat 'errors' as a
@@ -245,6 +265,9 @@ class CreatorRunner:
         # "Just a moment…" challenge; empty when the user hasn't connected yet.
         self._pawchive_cookies_path = pawchive_cookies_path or None
         self._pawchive_user_agent = pawchive_user_agent or None
+        # SimpCity sign-in (threads are members-only), captured at Settings ▸ SimpCity.
+        self._simpcity_cookies_path = simpcity_cookies_path or None
+        self._simpcity_user_agent = simpcity_user_agent or None
         # Inclusive year-range for a 'Fetch Latest' run (pawchive/coomerfans only);
         # None = all years. Resolved by the API layer (one-off vs saved default).
         self._year_range = year_range
@@ -265,6 +288,7 @@ class CreatorRunner:
         self._running = True
         self._cancel.clear()
         self._needs_cf_auth = False
+        self._needs_simpcity_auth = False
         self.downloaded_count = self.skipped_count = self.error_count = 0
         try:
             links = filter_links(creator.get("links", []), scope)
@@ -288,12 +312,12 @@ class CreatorRunner:
                 if error_entries is not None and link.get("platform") != "pawchive":
                     continue
                 # A links-only creator downloads nothing, and only the pawchive
-                # engine collects external links without downloading — the other
-                # platforms have nothing to do for it.
-                if self._track_only and link.get("platform") != "pawchive":
+                # and SimpCity engines collect external links without downloading
+                # — the other platforms have nothing to do for it.
+                if self._track_only and link.get("platform") not in LINK_COLLECTING:
                     on_progress({"type": "info",
                                  "message": f"[{link_label(link)}] links-only creator — "
-                                            "skipped (only pawchive links collect external links)."})
+                                            "skipped (only pawchive/SimpCity links collect external links)."})
                     continue
                 on_progress({"type": "info", "message": f"──── {link_label(link)} ────"})
                 try:
@@ -312,6 +336,9 @@ class CreatorRunner:
                     elif link.get("platform") == "discord":
                         self._run_discord(link, creator, mode, year, archive_dir,
                                           on_progress, on_error)
+                    elif link.get("platform") == "simpcity":
+                        self._run_simpcity(link, creator, mode, archive_dir,
+                                           on_progress, on_error)
                     else:
                         on_progress({"type": "info",
                                      "message": f"Unknown platform '{link.get('platform')}', skipped."})
@@ -503,6 +530,42 @@ class CreatorRunner:
         )
         self._accumulate(stats)
 
+    def _run_simpcity(self, link, creator, mode, archive_dir, on_progress, on_error):
+        # Thread media goes to <dest>/Simpcity/<year>/ + Simpcity/Images/<year>/;
+        # the review links live in the per-thread DB. 'redownload_year' has no
+        # meaning for a thread — it walks everything like 'full'. 'latest' on a
+        # thread never walked is a first full walk (the runner decides).
+        if mode == "redownload_year":
+            mode = "full"
+        destination = creator["destination"] or self._links_root
+        archive_path = simpcity_archive_path(archive_dir, link, destination)
+        errors_path = errors_db_path(archive_path)
+        prog = self._prefix(link, on_progress)
+        err = self._prefix(link, on_error)
+        if mode == "errors" and self._track_only:
+            prog({"type": "info",
+                  "message": "links-only creator — no downloadable files to recheck."})
+            return
+        runner = SimpcityRunner(workers=min(3, self.workers))
+        self._current = runner
+        stats = {}
+        runner.run(
+            link=link,
+            destination=creator["destination"],
+            mode=mode,
+            archive_path=archive_path,
+            on_progress=prog,
+            on_complete=lambda d: stats.update(d),
+            on_error=err,
+            errors_path=errors_path,
+            cookies_path=self._simpcity_cookies_path,
+            user_agent=self._simpcity_user_agent,
+            include_images=self._fetch["images"] and bool(creator["destination"]),
+            include_videos=self._fetch["videos"] and bool(creator["destination"]),
+            collect_links=True,
+        )
+        self._accumulate(stats)
+
     def _run_twitter(self, link, creator, mode, year, archive_dir,
                      cookies_path, cookies_browser, on_progress, on_error):
         # Twitter content nests under <creator>/Twitter/ (images in Twitter/Images/).
@@ -605,6 +668,8 @@ class CreatorRunner:
         # so the UI can prompt a one-click "Reconnect pawchive".
         if stats.get("needs_cf_auth"):
             self._needs_cf_auth = True
+        if stats.get("needs_simpcity_auth"):
+            self._needs_simpcity_auth = True
 
     def _stats(self):
         return {
@@ -613,4 +678,5 @@ class CreatorRunner:
             "errors": self.error_count,
             "cancelled": self._cancel.is_set(),
             "needs_cf_auth": getattr(self, "_needs_cf_auth", False),
+            "needs_simpcity_auth": getattr(self, "_needs_simpcity_auth", False),
         }

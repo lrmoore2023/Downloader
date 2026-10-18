@@ -34,9 +34,11 @@ function onSortChange() {
 // ── Summary helpers ────────────────────────────────────────────
 
 function summarize(links) {
-    const s = { onlyfans: 0, fansly: 0, twitter: 0, patreon: 0, fanbox: 0, derpibooru: 0, discord: 0 };
+    const s = { onlyfans: 0, fansly: 0, twitter: 0, patreon: 0, fanbox: 0, derpibooru: 0, discord: 0,
+                simpcity: 0, album: 0 };
     (links || []).forEach(l => {
-        if (l.platform === 'twitter') s.twitter += 1;
+        if (l.platform === 'simpcity' || l.platform === 'album') s[l.platform] += 1;
+        else if (l.platform === 'twitter') s.twitter += 1;
         else if (l.platform === 'derpibooru') s.derpibooru += 1;
         else if (l.platform === 'discord') s.discord += 1;
         else if (l.platform === 'coomerfans' || l.platform === 'pawchive')
@@ -894,6 +896,8 @@ function renderChips() {
     if (s.twitter) chips.push('<span class="chip chip-twitter">Twitter</span>');
     if (s.derpibooru) chips.push(chipHtml('Derpibooru', s.derpibooru));
     if (s.discord) chips.push('<span class="chip chip-discord">Discord</span>');
+    if (s.simpcity) chips.push(chipHtml('SimpCity', s.simpcity).replace('class="chip"', 'class="chip chip-simpcity"'));
+    if (s.album) chips.push(chipHtml('Albums', s.album).replace('class="chip"', 'class="chip chip-album"'));
     const fc = fetchChip(currentCreator.fetch);
     if (fc) chips.push(fc);
     el.innerHTML = chips.join('');
@@ -939,6 +943,8 @@ function buildScopeControl() {
     if (s.twitter) opts.push(['twitter', 'Twitter']);
     if (s.derpibooru) opts.push(['derpibooru', 'Derpibooru']);
     if (s.discord) opts.push(['discord', 'Discord']);
+    if (s.simpcity) opts.push(['simpcity', 'SimpCity']);
+    if (s.album) opts.push(['album', 'Albums']);
 
     opts.forEach(([val, label]) => {
         const b = document.createElement('button');
@@ -965,7 +971,11 @@ function buildLinkScope() {
                 ? `Derpibooru ${l.name || l.query}`
                 : (l.platform === 'discord')
                     ? `Discord ${l.name || l.channel_id}`
-                    : `${svcLabel(l.service)} ${l.name || l.user_id}`;
+                    : (l.platform === 'simpcity')
+                        ? `SimpCity ${l.name || l.thread_id}`
+                        : (l.platform === 'album')
+                            ? `${albumSiteLabel(l.site)} ${l.name || l.album_id}`
+                            : `${svcLabel(l.service)} ${l.name || l.user_id}`;
         sel.appendChild(o);
     });
 }

@@ -106,6 +106,12 @@
     --brand-discord: #c9c2ff;
     --brand-discord-soft: rgba(120, 110, 255, 0.16);
     --brand-discord-line: rgba(120, 110, 255, 0.5);
+    --brand-simpcity: #9ff0ff;
+    --brand-simpcity-soft: rgba(60, 220, 255, 0.16);
+    --brand-simpcity-line: rgba(60, 220, 255, 0.5);
+    --brand-album: #ffd88a;
+    --brand-album-soft: rgba(255, 190, 80, 0.16);
+    --brand-album-line: rgba(255, 190, 80, 0.5);
 
     /* Active = a lit tube: tinted fill, bright edge, bloom. */
     --seg-active-bg: rgba(255, 45, 149, 0.16);

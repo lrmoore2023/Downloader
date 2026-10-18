@@ -639,10 +639,23 @@ function platformLabel(link) {
     if (link.platform === 'twitter') return { badge: 'Twitter', cls: 'badge-twitter', name: '@' + (link.username || '?') };
     if (link.platform === 'derpibooru') return { badge: 'Derpibooru', cls: 'badge-derpibooru', name: link.name || link.query || '?' };
     if (link.platform === 'discord') return { badge: 'Discord', cls: 'badge-discord', name: link.name || link.channel_id || '?' };
+    if (link.platform === 'simpcity') return { badge: 'SimpCity', cls: 'badge-simpcity', name: link.name || ('thread ' + (link.thread_id || '?')) };
+    if (link.platform === 'album') return { badge: albumSiteLabel(link.site), cls: 'badge-album', name: link.name || link.album_id || '?' };
     const svc = { onlyfans: 'OF', fansly: 'Fansly', patreon: 'Patreon', fanbox: 'Fanbox' }[link.service]
         || (link.service || '?');
     const cls = link.platform === 'pawchive' ? 'badge-pawchive' : '';
     return { badge: svc, cls, name: link.name || link.user_id || '?' };
+}
+
+const ALBUM_SITE_LABELS = { bunkr: 'Bunkr', gofile: 'Gofile', cyberdrop: 'Cyberdrop', pixeldrain: 'Pixeldrain',
+    filester: 'Filester', turbo: 'Turbo', goonbox: 'GoonBox' };
+function albumSiteLabel(site) { return ALBUM_SITE_LABELS[site] || (site || 'Album'); }
+
+// The Real-only rule (SimpCity/albums) needs the folder; an empty folder field
+// defers the check to Save rather than refusing a paste before a folder is picked.
+function cfgDestForResolve() {
+    const d = (document.getElementById('cfgDest').value || '').trim();
+    return d || null;
 }
 
 function renderCfgLinks() {
@@ -716,9 +729,9 @@ async function cfgPreviewLink() {
     const url = document.getElementById('cfgNewLink').value.trim();
     const preview = document.getElementById('cfgLinkPreview');
     if (!url) { preview.textContent = ''; return; }
-    const info = await pywebview.api.resolve_link(url);
+    const info = await pywebview.api.resolve_link(url, cfgDestForResolve());
     if (!info.valid) {
-        preview.textContent = 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, derpibooru.org/search?q=…, discord.com/channels/…, or x.com/…';
+        preview.textContent = info.reason || 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, derpibooru.org/search?q=…, discord.com/channels/…, simpcity.cr/threads/…, a bunkr/gofile album, or x.com/…';
         return;
     }
     if (info.platform === 'coomerfans') {
@@ -731,6 +744,10 @@ async function cfgPreviewLink() {
         preview.textContent = `Detected: Derpibooru — ${info.query}  ·  click Add Link`;
     } else if (info.platform === 'discord') {
         preview.textContent = `Detected: Discord — ${info.name || ('channel ' + info.channel_id)}  ·  click Add Link`;
+    } else if (info.platform === 'simpcity') {
+        preview.textContent = `Detected: SimpCity thread — ${info.name}  ·  click Add Link`;
+    } else if (info.platform === 'album') {
+        preview.textContent = `Detected: ${albumSiteLabel(info.site)} album — tracked for new files  ·  click Add Link`;
     } else {
         preview.textContent = `Detected: Twitter — @${info.username}  ·  click Add Link`;
     }
@@ -740,9 +757,9 @@ async function cfgAddLink() {
     const input = document.getElementById('cfgNewLink');
     const url = input.value.trim();
     if (!url) return;
-    const info = await pywebview.api.resolve_link(url);
+    const info = await pywebview.api.resolve_link(url, cfgDestForResolve());
     if (!info.valid) {
-        showToast('Unrecognized URL', 'error');
+        showToast(info.reason || 'Unrecognized URL', 'error');
         return;
     }
     if (cfgLinksData.some(l => (l.url || '').toLowerCase() === info.url.toLowerCase())) {

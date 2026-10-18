@@ -56,6 +56,13 @@ window.onCreatorComplete = function (data) {
         showToast('Pawchive needs a Cloudflare reconnect — opening Settings…', 'error');
         if (typeof openSettings === 'function') openSettings();
         if (typeof refreshPawCfStatus === 'function') refreshPawCfStatus();
+    } else if (data.needs_simpcity_auth) {
+        showToast('SimpCity needs you to sign in again — opening Settings…', 'error');
+        if (typeof openSettings === 'function') {
+            openSettings();
+            const sec = document.getElementById('set-sec-simpcity');
+            if (sec) setTimeout(() => sec.scrollIntoView({ block: 'start' }), 60);
+        }
     } else if (data.cancelled) {
         showToast('Cancelled', 'info');
     } else if (data.errors === 0) {

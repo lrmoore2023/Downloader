@@ -115,6 +115,12 @@
     --brand-discord: #4d58a4;
     --brand-discord-soft: #e9ecfa;
     --brand-discord-line: #c7cdf0;
+    --brand-simpcity: #2f7f99;
+    --brand-simpcity-soft: #e3f4fa;
+    --brand-simpcity-line: #b9e1ee;
+    --brand-album: #8a5a12;
+    --brand-album-soft: #fbf0dc;
+    --brand-album-line: #efd6a6;
 
     /* Selected = a raised white pillow in a recessed track. */
     --seg-active-bg: #ffffff;

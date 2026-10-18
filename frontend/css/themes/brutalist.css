@@ -104,6 +104,12 @@
     --brand-discord: #2f39c9;
     --brand-discord-soft: rgba(47, 57, 201, 0.09);
     --brand-discord-line: #2f39c9;
+    --brand-simpcity: #0b7fa8;
+    --brand-simpcity-soft: rgba(11, 127, 168, 0.09);
+    --brand-simpcity-line: #0b7fa8;
+    --brand-album: #9a5b00;
+    --brand-album-soft: rgba(154, 91, 0, 0.09);
+    --brand-album-line: #9a5b00;
 
     --seg-active-bg: #0b0b0b;
     --seg-active-fg: #ffffff;
@@ -182,6 +188,12 @@
     --brand-discord: #9fa9ff;
     --brand-discord-soft: rgba(159, 169, 255, 0.12);
     --brand-discord-line: #9fa9ff;
+    --brand-simpcity: #6fd3f5;
+    --brand-simpcity-soft: rgba(111, 211, 245, 0.12);
+    --brand-simpcity-line: #6fd3f5;
+    --brand-album: #ffc46b;
+    --brand-album-soft: rgba(255, 196, 107, 0.12);
+    --brand-album-line: #ffc46b;
 
     --seg-active-bg: #ece9e2;
     --seg-active-fg: #0a0a0a;
