@@ -240,10 +240,20 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   challenge, the Laravel API isn't: `GET /sanctum/csrf-cookie`, then
   `/api/images/<id>` with `X-XSRF-TOKEN` → `original_url` on `simpN.cuckcapital.cr`.
   Posts embed the thumbnail inside `<a href="goonbox.cr/img/<id>">`.
-- **bunkr** — goes down for stretches (the user saw bunkr.cr dead on 2026-10-17, the
-  same evening a made-up album id timed out with a 504), so a timeout/5xx proves
-  nothing: "unreachable" is recorded as a streak, only a definite 404/notFound as
-  dead. Lone files land in cyberdrop-dl's "Loose Files (Bunkr)" bucket.
+- **bunkr** — native engine `backend/bunkr_host.py` (cyberdrop-dl no longer used for
+  bunkr). Measured 2026-10-18: `/a/<id>?advanced=1` embeds `window.albumFiles` (id,
+  original name, exact size, upload time UTC); a lone `/f/` page has the dl id
+  (`dl.bunkr.cr/file/<id>`) but no date — the CDN's `Last-Modified` equals the upload
+  time. `POST dl.bunkr.cr/api/_001_v2 {"id": "<id>"}` (**string** id; an int is "400
+  Invalid JSON payload") + `glb-apisign.cdn.cr/sign?path=` give the signed CDN URL.
+  **A CDN node serves two downloads per client; the third gets an instant 503** — the
+  engine caps per node (`NodeLimiter`) and waits out 503s. Cold storage: files served
+  from `psu.scdn.st` take 1–11 s to the first byte and their first full transfer can be
+  very slow (68 MB took 146 s cold, 9 s warm); the engine warms each file, waits
+  patiently, and re-tries files that won't start in later passes (`COLD_ROUNDS`). A
+  removed album/file is a clean 404 in 0.1 s; during outages (2026-10-17) requests time
+  out/5xx instead — never "gone". cyberdrop-dl's state must stay off the NAS: its
+  SQLite schema setup there took 41 s and its log writer broke, silencing progress.
 - **gofile** — the website-token salt rotates; when every listing returns
   `error-notPremium` it's the salt (check the bundled gallery-dl/cyberdrop-dl
   `gofile.py`). Account creation is rate-limited (429), so the guest token is
