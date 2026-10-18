@@ -230,6 +230,10 @@ class Api:
             "r34video_signed_in_at": "",
             "pawchive_signed_in_at": "",
             "pmvhaven_api_key": "",
+            # SimpCity sign-in (Creator tab thread tracking). Local only.
+            "simpcity_cookies_path": "",
+            "simpcity_signed_in_at": "",
+            "simpcity_user_agent": "",
             "window": {},
         }
 
@@ -852,6 +856,10 @@ class Api:
                                            and state.get("pawchive_signed_in_at")),
                          "at": state.get("pawchive_signed_in_at") or ""},
             "pmvhaven": {"signed_in": bool((state.get("pmvhaven_api_key") or "").strip()), "at": ""},
+            "simpcity": {"signed_in": bool(state.get("simpcity_cookies_path")
+                                           and os.path.isfile(state.get("simpcity_cookies_path"))
+                                           and state.get("simpcity_signed_in_at")),
+                         "at": state.get("simpcity_signed_in_at") or ""},
             "iwara": {"signed_in": bool(iw_status.get("configured")), "at": ""},
         }
 
@@ -879,8 +887,8 @@ class Api:
         path = state.get(site_login.SITES[platform]["state_key"]) or ""
         if not (path and os.path.isfile(path)):
             return {"ok": False, "message": "Not signed in"}
-        ok, msg = site_login.verify(platform, path, state.get("pawchive_user_agent") or None
-                                    if platform == "pawchive" else None)
+        ua_key = site_login.SITES[platform].get("ua_key")
+        ok, msg = site_login.verify(platform, path, (state.get(ua_key) or None) if ua_key else None)
         return {"ok": ok, "message": msg}
 
     def pmv_account_login(self, platform):
@@ -920,11 +928,12 @@ class Api:
         if res.get("ok"):
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             upd = {cfg["state_key"]: res.get("cookies_path") or "", cfg["signed_in_key"]: now}
+            # The login window also cleared the site's bot check (Cloudflare on
+            # pawchive, DDoS-Guard on SimpCity), whose cookies are bound to the
+            # browser UA — keep it so every later request replays it.
+            if cfg.get("ua_key") and res.get("user_agent"):
+                upd[cfg["ua_key"]] = res["user_agent"]
             if platform == "pawchive":
-                # The login window also cleared Cloudflare: this jar + UA now back
-                # every pawchive request, exactly like a Connect.
-                if res.get("user_agent"):
-                    upd["pawchive_user_agent"] = res["user_agent"]
                 upd["pawchive_cf_captured_at"] = now
             self.save_state(upd)
         return res

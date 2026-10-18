@@ -667,6 +667,7 @@
                     <button type="button" class="settings-nav-item active" data-target="set-sec-appearance">Appearance</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-storage">Storage</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-pawchive">Pawchive</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-simpcity">SimpCity</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-pmvfeeds">PMV feeds</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-iwara">Iwara</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-derpibooru">Derpibooru</button>
@@ -749,6 +750,21 @@
                     <div class="form-row">
                         <span class="form-label"></span>
                         <span class="field-hint" id="pawCfHint">Pawchive now sits behind a Cloudflare check that blocks the app. Click <b>Connect</b> — a small window opens, clears the check automatically (usually a second or two), and the app remembers it. If a fetch later fails with a Cloudflare message, just click <b>Reconnect</b>.</span>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-simpcity" aria-labelledby="set-h-simpcity">
+                    <h3 class="section-title" id="set-h-simpcity">SimpCity</h3>
+                    <div class="form-row">
+                        <span class="form-label">Account</span>
+                        <span id="pmvAcct-simpcity" class="status-badge status-idle">Checking…</span>
+                        <button class="btn btn-secondary btn-sm" id="pmvAcctBtn-simpcity" onclick="pmvAccountLogin('simpcity')">Sign in</button>
+                        <button class="btn btn-ghost btn-sm" onclick="pmvAccountTest('simpcity', this)">Test</button>
+                        <button class="btn btn-ghost btn-sm" onclick="pmvAccountLogout('simpcity')">Forget</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span class="field-hint">SimpCity threads are members-only, so tracking a thread on a Real creator needs your account. <b>Sign in</b> opens simpcity.cr in a small window — log in normally (it closes by itself once you're in). If a thread fetch later stops with a sign-in message, sign in again here. Kept locally — never copied to the archive folder.</span>
                     </div>
                 </section>
 

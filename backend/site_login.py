@@ -43,6 +43,20 @@ SITES = {
         "cookies_file": ".pawchive_cookies.txt",
         "state_key": "pawchive_cookies_path",
         "signed_in_key": "pawchive_signed_in_at",
+        "ua_key": "pawchive_user_agent",
+    },
+    # SimpCity (XenForo behind DDoS-Guard): threads are members-only — a guest
+    # gets 403 on every /threads/ page — so the Creator tab's thread tracking
+    # needs this sign-in. The DDoS-Guard cookies are UA-bound like pawchive's
+    # Cloudflare clearance, so the browser UA is kept alongside the jar.
+    "simpcity": {
+        "label": "SimpCity",
+        "domains": ("simpcity.cr", "simpcity.su"),
+        "login_url": "https://simpcity.cr/login/",
+        "cookies_file": ".simpcity_cookies.txt",
+        "state_key": "simpcity_cookies_path",
+        "signed_in_key": "simpcity_signed_in_at",
+        "ua_key": "simpcity_user_agent",
     },
 }
 
@@ -97,6 +111,9 @@ def make_feed_session(platform, cookies_path=None, user_agent=None):
     if platform == "pawchive":
         from backend import pawchive_scraper as pw
         return pw.make_session(user_agent=user_agent or None, cookies_path=cookies_path)
+    if platform == "simpcity":
+        from backend import simpcity_scraper as sc
+        return sc.make_session(cookies_path=cookies_path, user_agent=user_agent or None)
     raise ValueError(platform)
 
 
@@ -122,6 +139,9 @@ def verify(platform, cookies_path, user_agent=None, session=None):
             if r.status_code in (401, 403):
                 return False, "Not signed in"
             return None, f"HTTP {r.status_code}"
+        if platform == "simpcity":
+            from backend import simpcity_scraper as sc
+            return sc.check_signed_in(s)
     except Exception as e:
         return None, f"{e.__class__.__name__}: {e}"
     raise ValueError(platform)
