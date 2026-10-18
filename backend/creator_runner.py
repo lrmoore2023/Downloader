@@ -540,7 +540,7 @@ class CreatorRunner:
         self._accumulate(stats)
 
     def _run_simpcity(self, link, creator, mode, archive_dir, on_progress, on_error):
-        # Thread media goes to <dest>/Simpcity/<year>/ + Simpcity/Images/<year>/;
+        # Thread media goes to <dest>/Unsorted/<year>/ + Unsorted/Images/<year>/;
         # the review links live in the per-thread DB. 'redownload_year' has no
         # meaning for a thread — it walks everything like 'full'. 'latest' on a
         # thread never walked is a first full walk (the runner decides).
@@ -578,7 +578,7 @@ class CreatorRunner:
     def _run_album(self, link, creator, mode, archive_dir, on_progress, on_error):
         # A tracked album (bunkr/gofile/…): every run re-reads it, fetches only
         # files not yet recorded, and records whether it is still there. Files go
-        # to <dest>/Simpcity/<Site>/<year>/.
+        # to <dest>/Unsorted/<year>/ (images: Unsorted/Images/<year>/).
         destination = creator["destination"]
         prog = self._prefix(link, on_progress)
         err = self._prefix(link, on_error)

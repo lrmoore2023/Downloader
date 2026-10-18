@@ -4,8 +4,8 @@ One run = walk the thread's pages (sequential, paced — SimpCity rate-limits
 hard), and for every post:
   * download each embedded media item (turbo.cr videos, goonbox images, forum
     attachments, other direct images/videos) into
-        <dest>/Simpcity/<year>/YYYY.MM.DD - Simpcity - <original name>
-        <dest>/Simpcity/Images/<year>/…           (images)
+        <dest>/Unsorted/<year>/YYYY.MM.DD - Simpcity - <original name>
+        <dest>/Unsorted/Images/<year>/…           (images)
     dated by the post the item first appeared in;
   * record every other link (bunkr / gofile / … albums and files, anything
     else) in the thread DB's review list.
@@ -40,8 +40,8 @@ from backend.download_errors import FailureStore
 from backend.pawchive_scraper import add_index_suffix, sanitize_filename
 from backend.rate_limit import AdaptiveThrottle
 from backend.simpcity_archive import ThreadDB
+from backend import unsorted_layout as layout
 
-SUBDIR = "Simpcity"
 SITE_LABEL = "Simpcity"
 
 # Page pacing. SimpCity sits behind DDoS-Guard and rate-limits page loads.
@@ -131,7 +131,7 @@ class SimpcityRunner:
         self._claimed = set()
         self._include = {"image": bool(include_images), "video": bool(include_videos)}
         self._collect_links = bool(collect_links)
-        self._root = os.path.join(destination, SUBDIR) if destination else ""
+        self._root = layout.root_of(destination)
         self._db = None
         self._store = None
         new_links = []
@@ -306,7 +306,13 @@ class SimpcityRunner:
                 self._submit(row)
 
     def _file_present(self, row):
-        return bool(row.get("path_key")) and os.path.isfile(os.path.join(self._root, row["path_key"]))
+        """Recorded file still on disk — also when it was moved to its canonical
+        Unsorted spot by hand (the record is re-pointed, nothing re-downloaded)."""
+        rel = layout.locate(self._root, row.get("path_key"))
+        if rel and rel != row.get("path_key"):
+            self._db.set_path_key(row["key"], rel)
+            row["path_key"] = rel
+        return bool(rel) or layout.legacy_present(self._root, row.get("path_key"))
 
     # ── downloading one item ────────────────────────────────────────
 

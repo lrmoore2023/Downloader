@@ -46,11 +46,14 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   `goonbox_host.py`, and `http_download.py` (shared resumable download verified by
   size + MD5/ffprobe). UI: `frontend/js/simpcity.js` (the "SimpCity & albums"
   panel under the links panel) + Settings ▸ SimpCity sign-in. Link platforms
-  `simpcity` and `album` (field `site`). Layout: `<dest>/Simpcity/<year>/` +
-  `Simpcity/Images/<year>/` for thread media (`YYYY.MM.DD - Simpcity - <name>`,
-  post date in local time), `<dest>/Simpcity/<Site>/<year>/` for album files
-  (`YYYY.MM.DD - Bunkr - <name>`, the host's upload date in UTC, falling back to
-  the post date the link came from).
+  `simpcity` and `album` (field `site`). Layout (`backend/unsorted_layout.py`):
+  everything goes flat into `<dest>/Unsorted/<year>/` (videos/other) and
+  `<dest>/Unsorted/Images/<year>/` (images) — **no per-site folders** (user's call);
+  the site is in the filename: `YYYY.MM.DD - Simpcity - <name>` (post date, local
+  time) or `YYYY.MM.DD - Bunkr - <name>` (host upload date in UTC, else the post
+  date). Records store paths relative to `Unsorted`; `locate()` follows files the
+  user moved by hand, and `legacy_present()` still counts files in the first
+  layout (`<dest>/Simpcity/…`) so nothing is fetched twice.
 - **PMV tab** (metadata only, never downloads): `backend/pmv_tracker.py` (manifests +
   the two numbering rules), `backend/pmv_runner.py` (the fetch job),
   `backend/r34video_scraper.py`, `backend/iwara_scraper.py`,

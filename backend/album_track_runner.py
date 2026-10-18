@@ -5,7 +5,7 @@ An album can be a creator link (added in Configure, or "Download & track" from
 a SimpCity thread's review list) or a one-off "Download" from that list. Either
 way its files land in
 
-    <dest>/Simpcity/<Site>/<year>/YYYY.MM.DD - <Site> - <original name>
+    <dest>/Unsorted/<year>/YYYY.MM.DD - <Site> - <original name>     (Images/<year> for images)
 
 dated by the host's upload date when it publishes one (bunkr, gofile, turbo,
 goonbox), else the date of the post the link came from, else today.
@@ -44,8 +44,8 @@ from backend import http_download as hd
 from backend import turbo_host as th
 from backend.download_errors import FailureStore
 from backend.pawchive_scraper import add_index_suffix, sanitize_filename
+from backend import unsorted_layout as layout
 
-SUBDIR = "Simpcity"
 STAGING = ".incoming"
 SITE_LABELS = {"bunkr": "Bunkr", "gofile": "Gofile", "cyberdrop": "Cyberdrop",
                "pixeldrain": "Pixeldrain", "filester": "Filester", "turbo": "Turbo",
@@ -264,7 +264,7 @@ class AlbumTrackRunner:
         self._item = item
         self._site = item["site"]
         self._label = site_label(self._site)
-        self._root = os.path.join(destination, SUBDIR, self._label)
+        self._root = layout.root_of(destination)
         self._origin = _to_local(origin_date, local=True)
         self._claimed = set()
         self._db = AlbumDB(archive_path)
@@ -327,14 +327,13 @@ class AlbumTrackRunner:
         already there under that name (adopted)."""
         dt = dt or self._origin or datetime.now().astimezone()
         base = f"{dt:%Y.%m.%d} - {self._label} - {sanitize_filename(original)}"
-        year = f"{dt:%Y}"
         taken = self._db.path_keys()
         n = 1
         with self._lock:
             while True:
                 name = base if n == 1 else add_index_suffix(base, n)
-                rel = f"{year}/{name}"
-                path = os.path.join(self._root, year, name)
+                path = layout.target(self._root, dt, name)
+                rel = layout.relkey(self._root, path)
                 if path.lower() in self._claimed or rel in taken:
                     n += 1
                     continue
@@ -347,10 +346,16 @@ class AlbumTrackRunner:
                 return rel, path
 
     def _have(self, key):
-        """True if this host file was fetched before and is still on disk."""
+        """True if this host file was fetched before and is still on disk — also
+        when it was moved by hand to its canonical Unsorted spot (the record is
+        re-pointed so it isn't fetched again)."""
         rec = self._db.file(key)
-        return bool(rec) and bool(rec["path_key"]) and \
-            os.path.isfile(os.path.join(self._root, rec["path_key"]))
+        if not rec:
+            return False
+        rel = layout.locate(self._root, rec["path_key"])
+        if rel and rel != rec["path_key"]:
+            self._db.record(key, rel.rsplit("/", 1)[-1], rel, rec["size"])
+        return bool(rel) or layout.legacy_present(self._root, rec["path_key"])
 
     # ── shared native download step ─────────────────────────────────
 

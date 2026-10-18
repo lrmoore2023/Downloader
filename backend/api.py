@@ -1907,7 +1907,7 @@ class Api:
     def simpcity_download_links(self, creator_id, items):
         """Download several review-list links in ONE run ("Download all" / a post's
         "Download all"): each album/file is fetched once into
-        <dest>/Simpcity/<Site>/<year>/, one after another (bunkr only serves two
+        <dest>/Unsorted/<year>/, one after another (bunkr only serves two
         downloads per node at once, so links never run in parallel with each other).
         Links the app can't download are skipped; each link is marked downloaded
         once the run actually reached it."""
@@ -1968,7 +1968,7 @@ class Api:
 
     def simpcity_link_action(self, creator_id, thread_id, url, action):
         """Review-list buttons. action "download": fetch the album/file once into
-        <dest>/Simpcity/<Site>/<year>/; "track": also add the album to the creator
+        <dest>/Unsorted/<year>/; "track": also add the album to the creator
         so every later run re-checks it for new files (and notices if it dies)."""
         if action not in ("download", "track"):
             return {"error": "bad action"}

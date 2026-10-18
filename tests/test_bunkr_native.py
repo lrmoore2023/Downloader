@@ -142,7 +142,7 @@ def test_album_dates_node_limit_and_rerun(sandbox, monkeypatch):
     done, errs = run(sandbox, at.parse_album_url("https://bunkr.si/a/ALB"))
     assert done["downloaded"] == 6 and done["errors"] == 0 and done["title"] == "atowerss", errs
     assert 1 < fake.peak <= bh.PER_NODE             # parallel, but never a 3rd on a node
-    root = os.path.join(sandbox["dest"], "Simpcity", "Bunkr", "2025")
+    root = os.path.join(sandbox["dest"], "Unsorted", "2025")
     assert "2025.10.27 - Bunkr - clip0.mp4" in os.listdir(root)
     done, _ = run(sandbox, at.parse_album_url("https://bunkr.si/a/ALB"))
     assert done["downloaded"] == 0 and done["skipped"] == 6
@@ -200,5 +200,5 @@ def test_single_file_dated_by_last_modified(sandbox, monkeypatch):
     done, errs = run(sandbox, at.parse_album_url("https://bunkr.pk/f/E4ZM1KwzCWSAc"),
                      origin_date="2026-09-01T12:00:00+00:00")
     assert done["downloaded"] == 1, errs
-    assert os.path.isfile(os.path.join(sandbox["dest"], "Simpcity", "Bunkr", "2026",
+    assert os.path.isfile(os.path.join(sandbox["dest"], "Unsorted", "2026",
                                        "2026.09.28 - Bunkr - lone.mp4"))

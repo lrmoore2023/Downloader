@@ -97,7 +97,7 @@ def test_turbo_album_dated_and_incremental(sandbox, monkeypatch):
     item = at.parse_album_url("https://turbo.cr/a/ALB")
     done, errs = run(sandbox, item)
     assert done["downloaded"] == 2 and done["alive"] is True and done["title"] == "My Album", errs
-    root = os.path.join(sandbox["dest"], "Simpcity", "Turbo", "2025")
+    root = os.path.join(sandbox["dest"], "Unsorted", "2025")
     assert sorted(os.listdir(root)) == ["2025.10.27 - Turbo - a1.mp4", "2025.10.27 - Turbo - b2.mp4"]
     ids.append("c3")
     sandbox["calls"].clear()
@@ -135,7 +135,7 @@ def test_gofile_engine_uses_listing_dates(sandbox, monkeypatch):
     item = at.parse_album_url("https://gofile.io/d/ABC")
     done, errs = run(sandbox, item)
     assert done["downloaded"] == 1 and done["errors"] == 1 and done["title"] == "Folder"
-    assert os.path.isfile(os.path.join(sandbox["dest"], "Simpcity", "Gofile", "2025",
+    assert os.path.isfile(os.path.join(sandbox["dest"], "Unsorted", "Images", "2025",
                                        "2025.01.01 - Gofile - one.jpg"))
 
 
@@ -189,9 +189,9 @@ def test_cyberdrop_staging_files_to_dated_names(sandbox, monkeypatch, tmp_path):
     done, errs = run(sandbox, item, engine_state_dir=str(tmp_path / "eng"),
                      origin_date="2024-05-05T12:00:00+00:00")
     assert done["downloaded"] == 2 and done["title"] == "Album", errs
-    root = os.path.join(sandbox["dest"], "Simpcity", "Cyberdrop")
+    root = os.path.join(sandbox["dest"], "Unsorted")
     assert os.path.isfile(os.path.join(root, "2025", "2025.10.27 - Cyberdrop - clip.mp4"))
-    assert os.path.isfile(os.path.join(root, "2024", "2024.05.05 - Cyberdrop - pic.jpg"))  # post-date fallback
+    assert os.path.isfile(os.path.join(root, "Images", "2024", "2024.05.05 - Cyberdrop - pic.jpg"))  # post-date fallback
     assert os.listdir(os.path.join(root, ".incoming")) == []                        # staging emptied
     # the same files again (history overlap) are not filed twice
     done, _ = run(sandbox, item, engine_state_dir=str(tmp_path / "eng"))
@@ -254,7 +254,7 @@ def test_filester_single_file(sandbox, monkeypatch):
     done, errs = run(sandbox, item, origin_date="2026-08-30T12:00:00+00:00")
     assert done["downloaded"] == 1 and done["errors"] == 0 and done["file_count"] == 1, errs
     assert sandbox["calls"][0].startswith("https://fsc3.cdn.cr/v2/uuid.mp4?token=T&download=true")
-    assert os.path.isfile(os.path.join(sandbox["dest"], "Simpcity", "Filester", "2026",
+    assert os.path.isfile(os.path.join(sandbox["dest"], "Unsorted", "2026",
                                        "2026.08.30 - Filester - clip_source.mp4"))
 
 
@@ -284,3 +284,59 @@ def test_engine_that_fetches_nothing_is_an_error(sandbox, monkeypatch):
     monkeypatch.setattr(fsd, "FilesterRunner", Quiet)
     done, errs = run(sandbox, at.parse_album_url("https://filester.gg/f/850ce01ea5967b08"))
     assert done["errors"] == 1 and any("nothing was downloaded" in e["message"] for e in errs)
+
+
+
+# ── Unsorted layout: hand-moved files are recognised ───────────────
+
+from backend import unsorted_layout as layout  # noqa: E402
+
+
+def test_layout_locate(tmp_path):
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, "2026"))
+    os.makedirs(os.path.join(root, "Images", "2025"))
+    open(os.path.join(root, "2026", "2026.09.28 - Bunkr - a.mp4"), "wb").close()
+    open(os.path.join(root, "Images", "2025", "2025.01.01 - Gofile - b.jpg"), "wb").close()
+    assert layout.locate(root, "2026/2026.09.28 - Bunkr - a.mp4") == "2026/2026.09.28 - Bunkr - a.mp4"
+    # recorded under the old per-site layout / wrong kind folder → found where it is now
+    assert layout.locate(root, "Bunkr/2026/2026.09.28 - Bunkr - a.mp4") == "2026/2026.09.28 - Bunkr - a.mp4"
+    assert layout.locate(root, "2025/2025.01.01 - Gofile - b.jpg") == "Images/2025/2025.01.01 - Gofile - b.jpg"
+    assert layout.locate(root, "2024/missing.mp4") is None
+    assert layout.kind_of("x.JPG") == "image" and layout.kind_of("x.zip") == "video"
+
+
+def test_album_file_moved_by_hand_is_not_refetched(sandbox, monkeypatch):
+    """The first batch was filed under Simpcity/<Site>/<year>; the user moved them
+    into Unsorted/<year>. The old record must follow the file, not re-download it."""
+    os.makedirs(sandbox["arch"])
+    monkeypatch.setattr(at.th, "make_session", lambda: object())
+    monkeypatch.setattr(at.th, "album_files", lambda s, ref: ("A", ["a1"]))
+    monkeypatch.setattr(at.th, "resolve", lambda s, fid: {
+        "url": f"https://cdn/{fid}", "filename": f"{fid}.mp4", "size": 5, "md5": None,
+        "upload_date": "2025-10-27"})
+    item = at.parse_album_url("https://turbo.cr/a/ALB")
+    dbp = at.album_archive_path(sandbox["arch"], "turbo", "ALB", sandbox["dest"])
+    db = at.AlbumDB(dbp)
+    db.record("a1", "2025.10.27 - Turbo - a1.mp4", "2025/2025.10.27 - Turbo - a1.mp4", 5)  # old relative key
+    db.close()
+    moved = os.path.join(sandbox["dest"], "Unsorted", "2025")
+    os.makedirs(moved)
+    with open(os.path.join(moved, "2025.10.27 - Turbo - a1.mp4"), "wb") as f:
+        f.write(b"x" * 5)
+    done, _ = run(sandbox, item)
+    assert done["downloaded"] == 0 and done["skipped"] == 1 and sandbox["calls"] == []
+
+
+
+def test_layout_legacy_present(tmp_path):
+    dest = tmp_path / "Creator"
+    (dest / "Simpcity" / "2024").mkdir(parents=True)
+    (dest / "Simpcity" / "Bunkr" / "2026").mkdir(parents=True)
+    (dest / "Simpcity" / "2024" / "a.mp4").write_bytes(b"x")
+    (dest / "Simpcity" / "Bunkr" / "2026" / "b.mp4").write_bytes(b"x")
+    root = layout.root_of(str(dest))
+    assert layout.legacy_present(root, "2024/a.mp4")                # Simpcity/<year>
+    assert layout.legacy_present(root, "2026/b.mp4")                # Simpcity/<Site>/<year>
+    assert not layout.legacy_present(root, "2025/c.mp4")
+    assert not layout.legacy_present(layout.root_of(str(tmp_path / "Other")), "2024/a.mp4")

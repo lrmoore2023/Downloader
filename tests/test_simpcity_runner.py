@@ -95,7 +95,7 @@ def test_full_walk_downloads_and_records(env):
     forum = Forum({1: P1, 2: P2})
     done, events, errors = run(env, forum)
     assert done["downloaded"] == 2 and done["errors"] == 0, errors
-    root = os.path.join(env["dest"], "Simpcity")
+    root = os.path.join(env["dest"], "Unsorted")
     assert os.path.isfile(os.path.join(root, "Images", "2024", "2024.01.01 - Simpcity - IMG1.jpg"))
     assert os.path.isfile(os.path.join(root, "2025", "2025.01.01 - Simpcity - VID1.mp4"))
     db = ThreadDB(env["db"])
@@ -124,7 +124,7 @@ def test_latest_resumes_from_last_page_and_skips_known(env):
 def test_missing_file_is_refetched_on_full(env):
     forum = Forum({1: P1, 2: P2})
     run(env, forum)
-    os.remove(os.path.join(env["dest"], "Simpcity", "2025", "2025.01.01 - Simpcity - VID1.mp4"))
+    os.remove(os.path.join(env["dest"], "Unsorted", "2025", "2025.01.01 - Simpcity - VID1.mp4"))
     env["calls"].clear()
     done, _, _ = run(env, forum)
     assert done["downloaded"] == 1 and env["calls"] == ["https://tcdn/VID1.mp4"]
@@ -183,7 +183,7 @@ def test_no_cookies_needs_auth(env, tmp_path):
 
 
 def test_existing_identical_file_is_adopted(env):
-    root = os.path.join(env["dest"], "Simpcity", "2025")
+    root = os.path.join(env["dest"], "Unsorted", "2025")
     os.makedirs(root)
     with open(os.path.join(root, "2025.01.01 - Simpcity - VID1.mp4"), "wb") as f:
         f.write(b"abc")
@@ -198,7 +198,7 @@ def test_existing_identical_file_is_adopted(env):
 
 
 def test_name_collision_gets_suffix(env):
-    root = os.path.join(env["dest"], "Simpcity", "2025")
+    root = os.path.join(env["dest"], "Unsorted", "2025")
     os.makedirs(root)
     with open(os.path.join(root, "2025.01.01 - Simpcity - VID1.mp4"), "wb") as f:
         f.write(b"different-size")
@@ -206,3 +206,21 @@ def test_name_collision_gets_suffix(env):
                            cur=1, last=1)})
     run(env, forum)
     assert os.path.isfile(os.path.join(root, "2025.01.01 - Simpcity - VID1_2.mp4"))
+
+
+
+def test_thread_file_moved_into_images_is_recognised(env):
+    """A recorded thread file the user moved (e.g. into Images/<year>) is found and
+    its record re-pointed — not downloaded again."""
+    forum = Forum({1: P1, 2: P2})
+    run(env, forum)
+    root = os.path.join(env["dest"], "Unsorted")
+    src = os.path.join(root, "2025", "2025.01.01 - Simpcity - VID1.mp4")
+    os.makedirs(os.path.join(root, "Images", "2025"), exist_ok=True)
+    os.replace(src, os.path.join(root, "Images", "2025", "2025.01.01 - Simpcity - VID1.mp4"))
+    env["calls"].clear()
+    done, _, _ = run(env, forum)
+    assert env["calls"] == [] and done["downloaded"] == 0
+    db = ThreadDB(env["db"])
+    assert db.media("turbo:VID1")["path_key"] == "Images/2025/2025.01.01 - Simpcity - VID1.mp4"
+    db.close()

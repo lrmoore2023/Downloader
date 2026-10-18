@@ -144,6 +144,13 @@ class ThreadDB:
                              ("gone" if gone else "failed", str(reason)[:500], _now(), key))
             self._db.commit()
 
+    def set_path_key(self, key, path_key):
+        """Re-point a downloaded file's record after it was moved by hand."""
+        with self._lock:
+            self._db.execute("UPDATE media SET path_key=?, filename=?, updated=? WHERE key=?",
+                             (path_key, path_key.rsplit("/", 1)[-1], _now(), key))
+            self._db.commit()
+
     def mark_skipped(self, key):
         """The user skipped this file mid-download: never fetch it again."""
         with self._lock:

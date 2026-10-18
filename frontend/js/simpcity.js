@@ -171,7 +171,7 @@ function scRow(r, dis) {
     const actions = [];
     if (r.status === 'pending' && r.can_download) {
         actions.push(`<button class="btn-tiny" ${dis} onclick="scDownload('${encodeURIComponent(JSON.stringify([{ thread_id: r.thread_id, url: r.url }]))}')"
-            title="Download once into Simpcity\\${escapeHtml(r.host)}\\<year>">Download</button>`);
+            title="Download once into Unsorted\\<year> (images: Unsorted\\Images\\<year>)">Download</button>`);
     }
     if ((r.status === 'pending' || r.status === 'downloaded') && r.can_track) {
         actions.push(`<button class="btn-tiny" ${dis} onclick="scTrack('${r.thread_id}','${enc}')"
