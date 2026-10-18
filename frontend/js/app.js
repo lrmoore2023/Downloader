@@ -37,6 +37,7 @@ window.onCreatorComplete = function (data) {
     refreshYears();
     if (typeof renderPendingLinks === 'function') renderPendingLinks();
     if (typeof renderErrorLinks === 'function') renderErrorLinks();
+    if (typeof renderSimpcityPanel === 'function') { simpcityLastSig = null; renderSimpcityPanel(); }
 
     // Authoritative final counts from the runner. The live stats bar is driven by
     // per-file progress events, and not every backend emits one for skips (the

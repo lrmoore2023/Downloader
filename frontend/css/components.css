@@ -2648,3 +2648,48 @@ h3.section-title { line-height: 1.3; }
     border-color: var(--brand-album-line);
     color: var(--brand-album);
 }
+
+.badge.badge-sc-live {
+    background: var(--ok-soft);
+    border: 1px solid var(--ok-line);
+    color: var(--ok);
+}
+.sc-thread {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: var(--space-2, 8px) 0;
+    border-bottom: 1px solid var(--border);
+}
+.sc-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+.sc-bad { color: var(--danger); }
+.sc-warn { color: var(--warn); }
+.sc-subhead {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: var(--space-3, 12px);
+    margin-bottom: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+.sc-toggle {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.sc-empty { padding: 4px 0 8px; }
+.sc-actions {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+.sc-album .sc-meta { margin-left: auto; }

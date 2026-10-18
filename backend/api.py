@@ -41,6 +41,7 @@ from backend.creator_runner import (
     discord_archive_path, errors_db_path, extract_into_folders, fetch_prefs, is_track_only,
     simpcity_archive_path, LINK_COLLECTING,
 )
+from backend import album_track_runner as album_track
 from backend import simpcity_scraper as simpcity
 from backend.download_errors import open_readonly as open_errors_store
 from backend import album_sites
@@ -1094,6 +1095,14 @@ class Api:
                         pass
                 return {"valid": True, "platform": "discord", "guild_id": dc["guild_id"],
                         "channel_id": dc["channel_id"], "name": name, "url": url}
+        album = album_track.parse_album_url(url)
+        if album:
+            if album["kind"] != "album":
+                return {"valid": False,
+                        "reason": "That's a single file, not an album — it can't be tracked. "
+                                  "Download it from the thread's review list instead."}
+            return {"valid": True, "platform": "album", "site": album["site"],
+                    "album_id": album["ref"], "name": "", "url": album["url"]}
         thread = simpcity.parse_thread_url(url)
         if thread:
             name = (thread["slug"] or thread["thread_id"]).replace("-", " ").strip()
@@ -1130,6 +1139,9 @@ class Api:
             return {"platform": "discord", "guild_id": info["guild_id"],
                     "channel_id": info["channel_id"], "name": info.get("name") or "",
                     "url": dc_channel_url(info["guild_id"], info["channel_id"])}
+        if info["platform"] == "album":
+            return {"platform": "album", "site": info["site"], "album_id": info["album_id"],
+                    "name": info.get("name") or "", "url": info["url"]}
         if info["platform"] == "simpcity":
             # Canonical first-page URL, so any page/post link of a thread dedupes.
             return {"platform": "simpcity", "thread_id": info["thread_id"],
@@ -1787,6 +1799,234 @@ class Api:
         self.save_state(state)
         return {"ok": True, "filters": clean}
 
+    # ── SimpCity review list + tracked albums (Real creators) ───────
+
+    def _simpcity_ctx(self, creator_id):
+        """(creator, archive_dir, dest) or (None, …) for a creator id."""
+        state = self.load_state()
+        c = state.get("creators", {}).get(creator_id)
+        archive_dir = (state.get("archive_dir") or "").strip()
+        dest = (c or {}).get("destination", "") or (
+            self._manifest_root(creator_id, c, state) if c else "")
+        return c, archive_dir, dest
+
+    def _thread_db(self, creator, archive_dir, dest, thread_id, create=False):
+        from backend.simpcity_archive import ThreadDB, open_readonly
+        link = next((l for l in creator.get("links", [])
+                     if l.get("platform") == "simpcity" and l.get("thread_id") == str(thread_id)),
+                    {"platform": "simpcity", "thread_id": str(thread_id)})
+        path = simpcity_archive_path(archive_dir, link, dest)
+        return ThreadDB(path) if create else open_readonly(path)
+
+    def list_simpcity(self, creator_id):
+        """Everything the Creator view's SimpCity panel shows: each thread's walk
+        summary, the review list (every link found in its posts, with the user's
+        decision and liveness), and the creator's tracked albums."""
+        c, archive_dir, dest = self._simpcity_ctx(creator_id)
+        if not c:
+            return {"threads": [], "review": [], "albums": []}
+        links = c.get("links", [])
+        tracked = {(l.get("site"), l.get("album_id")) for l in links if l.get("platform") == "album"}
+        threads, review = [], []
+        for l in links:
+            if l.get("platform") != "simpcity":
+                continue
+            db = None
+            try:
+                db = self._thread_db(c, archive_dir, dest, l.get("thread_id"))
+                if db is None:
+                    threads.append({"url": l["url"], "thread_id": l.get("thread_id"),
+                                    "name": l.get("name"), "walked": False})
+                    continue
+                st = db.state()
+                threads.append({
+                    "url": l["url"], "thread_id": l.get("thread_id"), "name": l.get("name"),
+                    "walked": bool(st.get("last_walk")), "title": st.get("title") or l.get("name"),
+                    "last_walk": st.get("last_walk"), "last_page": st.get("last_page"),
+                    "pages_total": st.get("pages_total"), "posts": db.post_count(),
+                    "media": db.media_counts(), "links": db.link_counts()})
+                for r in db.links():
+                    album = album_track.parse_album_url(r["url"])
+                    is_tracked = bool(album) and (album["site"], album["ref"]) in tracked
+                    review.append({
+                        "thread_id": l.get("thread_id"), "url": r["url"], "host": r["host"],
+                        "kind": r["kind"], "post_id": r["post_id"], "post_date": r["post_date"],
+                        "post_url": r["post_url"],
+                        "status": "tracked" if is_tracked else r["status"],
+                        "alive": r["alive"], "last_checked": r["last_checked"],
+                        "dead_since": r["dead_since"],
+                        "can_download": bool(album),
+                        "can_track": bool(album) and album["kind"] == "album"})
+            except Exception:
+                continue
+            finally:
+                if db is not None:
+                    db.close()
+        review.sort(key=lambda r: (r.get("post_date") or ""), reverse=True)
+        albums = []
+        for l in links:
+            if l.get("platform") != "album":
+                continue
+            st = album_track.read_status(album_track.album_archive_path(
+                archive_dir, l.get("site"), l.get("album_id"), dest)) or {}
+            albums.append({"url": l["url"], "site": l.get("site"), "album_id": l.get("album_id"),
+                           "label": album_track.site_label(l.get("site")),
+                           "title": st.get("title") or l.get("name") or "",
+                           "origin_date": l.get("origin_date"), **st})
+        busy = bool(self._creator_runner and self._creator_runner.is_running)
+        return {"threads": threads, "review": review, "albums": albums, "busy": busy}
+
+    def set_simpcity_link_status(self, creator_id, thread_id, url, status):
+        """Dismiss / restore one review-list link (sticky across re-walks)."""
+        if status not in ("pending", "dismissed"):
+            return {"error": "bad status"}
+        c, archive_dir, dest = self._simpcity_ctx(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        db = self._thread_db(c, archive_dir, dest, thread_id)
+        if db is None:
+            return {"error": "Thread not read yet"}
+        try:
+            return {"ok": db.set_link_status(url, status)}
+        finally:
+            db.close()
+
+    def simpcity_link_action(self, creator_id, thread_id, url, action):
+        """Review-list buttons. action "download": fetch the album/file once into
+        <dest>/Simpcity/<Site>/<year>/; "track": also add the album to the creator
+        so every later run re-checks it for new files (and notices if it dies)."""
+        if action not in ("download", "track"):
+            return {"error": "bad action"}
+        if self._creator_runner and self._creator_runner.is_running:
+            return {"error": "A download is already in progress"}
+        if self._creator_aux_thread and self._creator_aux_thread.is_alive():
+            return {"error": "Another operation (verify/import/duplicates) is in progress"}
+        state = self.load_state()
+        creators = state.get("creators", {})
+        c = creators.get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        if not self._is_real_dest(c.get("destination", "")):
+            return {"error": self.REAL_ONLY_MSG}
+        album = album_track.parse_album_url(url)
+        if not album:
+            return {"error": "The app can't download from that site — open it in the browser."}
+        if action == "track" and album["kind"] != "album":
+            return {"error": "That's a single file — use Download."}
+        archive_dir = (state.get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        post_date = None
+        db = self._thread_db(c, archive_dir, dest, thread_id)
+        if db is not None:
+            row = db.link(url) or {}
+            post_date = row.get("post_date")
+            db.close()
+        link = {"platform": "album", "site": album["site"], "album_id": album["ref"],
+                "kind": album["kind"], "name": "", "url": album["url"]}
+        if post_date:
+            link["origin_date"] = post_date
+        link["origin_thread"] = str(thread_id)
+
+        if action == "track":
+            existing = next((l for l in c.get("links", []) if l.get("platform") == "album"
+                             and l.get("site") == album["site"]
+                             and l.get("album_id") == album["ref"]), None)
+            if existing is None:
+                stored = {k: v for k, v in link.items() if k != "kind"}
+                c.setdefault("links", []).append(stored)
+                self.save_state({"creators": creators})
+            run_creator = dict(c)
+            scope = "link:" + (existing or link)["url"]
+        else:
+            run_creator = dict(c, links=[link])
+            scope = "everything"
+
+        def after(runner, stats):
+            # Record the decision on the thread's link once the run says the
+            # album was actually reached (a dead album stays actionable).
+            res = next((r for r in getattr(runner, "album_results", [])
+                        if r.get("url") == album["url"]), None)
+            if res is None or res.get("alive") is False:
+                return
+            tdb = self._thread_db(c, archive_dir, dest, thread_id)
+            if tdb is None:
+                return
+            try:
+                tdb.set_link_status(url, "tracked" if action == "track" else "downloaded")
+                tdb.set_link_alive(url, res.get("alive"), title=res.get("title"),
+                                   file_count=res.get("file_count"))
+            finally:
+                tdb.close()
+
+        self._launch_creator_run(creator_id, run_creator, scope, "full", after=after)
+        return {"status": "started", "url": album["url"]}
+
+    def untrack_album(self, creator_id, url):
+        """Stop tracking an album. Its files and record stay; re-adding resumes."""
+        state = self.load_state()
+        creators = state.get("creators", {})
+        c = creators.get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        before = len(c.get("links", []))
+        c["links"] = [l for l in c.get("links", [])
+                      if not (l.get("platform") == "album" and l.get("url") == url)]
+        if len(c["links"]) == before:
+            return {"ok": False}
+        self.save_state({"creators": creators})
+        return {"ok": True}
+
+    def check_simpcity_links(self, creator_id, urls=None, limit=25):
+        """Re-check whether review-list links still exist (one light request each,
+        paced). Without `urls`: the never-checked links first, then the oldest
+        checks. Blocks the calling js_api worker; returns {checked, dead}."""
+        c, archive_dir, dest = self._simpcity_ctx(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        todo = []
+        for l in c.get("links", []):
+            if l.get("platform") != "simpcity":
+                continue
+            db = self._thread_db(c, archive_dir, dest, l.get("thread_id"))
+            if db is None:
+                continue
+            try:
+                for r in db.links(statuses=("pending", "downloaded", "tracked")):
+                    if r["kind"] in ("album", "file", "other") and (not urls or r["url"] in urls):
+                        todo.append((r.get("last_checked") or "", l.get("thread_id"), r["url"]))
+            finally:
+                db.close()
+        todo.sort()
+        todo = todo[:max(1, int(limit or 25))]
+        checked = dead = 0
+        for _, tid, u in todo:
+            alive = album_track.probe_alive(u)
+            db = self._thread_db(c, archive_dir, dest, tid)
+            if db is None:
+                continue
+            try:
+                db.set_link_alive(u, alive)
+            finally:
+                db.close()
+            checked += 1
+            dead += alive is False
+            time.sleep(0.5)
+        return {"checked": checked, "dead": dead}
+
+    def _launch_creator_run(self, creator_id, creator, scope, mode, after=None):
+        """Start a CreatorRunner for an ad-hoc creator view (review-list actions)."""
+        state = self.load_state()
+        try:
+            workers = max(3, min(10, int(state.get("cf_concurrency") or 5)))
+        except (TypeError, ValueError):
+            workers = 5
+        self._creator_runner = CreatorRunner(workers=workers)
+        self._creator_thread = threading.Thread(
+            target=self._run_creator_download,
+            args=(creator_id, creator, scope, mode, None, True, None, None, after),
+            daemon=True)
+        self._creator_thread.start()
+
     def set_link_resolved(self, creator_id, key, resolved=True):
         """Mark a pending external link resolved (the UI checkbox) so it stops
         appearing; persisted so re-scans never resurrect it."""
@@ -2068,6 +2308,9 @@ class Api:
                 return discord_archive_path(archive_dir, link, dest)
             if platform == "simpcity":
                 return simpcity_archive_path(archive_dir, link, dest)
+            if platform == "album":
+                return album_track.album_archive_path(
+                    archive_dir, link.get("site"), link.get("album_id"), dest)
         except Exception:
             return None
         return None
@@ -2323,8 +2566,18 @@ class Api:
 
     def _run_creator_download(self, creator_id, creator, scope, mode, year,
                               refresh_links=True, error_entries=None,
-                              year_range=None):
+                              year_range=None, after=None):
         state = self.load_state()
+        runner = self._creator_runner
+
+        def _complete(d):
+            if after is not None:
+                try:
+                    after(runner, d)
+                except Exception:
+                    pass
+            self._push_js("onCreatorComplete", d)
+
         self._creator_runner.run(
             creator=creator,
             scope=scope,
@@ -2346,7 +2599,7 @@ class Api:
             discord_token=state.get("discord_token") or "",
             discord_token_type=state.get("discord_token_type") or "user",
             on_progress=lambda d: self._push_js("onCreatorProgress", d),
-            on_complete=lambda d: self._push_js("onCreatorComplete", d),
+            on_complete=_complete,
             on_error=lambda d: self._push_js("onCreatorError", d),
         )
 

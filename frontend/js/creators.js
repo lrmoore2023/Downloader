@@ -187,6 +187,7 @@ async function onCreatorChange() {
     lastPendingSig = null;
     renderPendingLinks();
     renderErrorLinks();
+    if (typeof renderSimpcityPanel === 'function') { simpcityLastSig = null; renderSimpcityPanel(); }
     persistLastCreator(currentCreatorId);
 }
 
@@ -1270,5 +1271,6 @@ function setDownloadingState(downloading) {
         clearInterval(pendingPollTimer);
         pendingPollTimer = null;
     }
+    if (typeof simpcitySetPolling === 'function') simpcitySetPolling(downloading);
     updateActionAvailability();
 }
