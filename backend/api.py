@@ -1877,19 +1877,91 @@ class Api:
         return {"threads": threads, "review": review, "albums": albums, "busy": busy}
 
     def set_simpcity_link_status(self, creator_id, thread_id, url, status):
-        """Dismiss / restore one review-list link (sticky across re-walks)."""
+        """Check off / restore one review-list link (sticky across re-walks)."""
+        return self.set_simpcity_links_status(
+            creator_id, [{"thread_id": thread_id, "url": url}], status)
+
+    def set_simpcity_links_status(self, creator_id, items, status):
+        """Check off ("dismissed") or restore ("pending") several review-list links
+        at once — the post check-all, "Resolve all", and Ctrl+Z undo."""
         if status not in ("pending", "dismissed"):
             return {"error": "bad status"}
         c, archive_dir, dest = self._simpcity_ctx(creator_id)
         if not c:
             return {"error": "Creator not found"}
-        db = self._thread_db(c, archive_dir, dest, thread_id)
-        if db is None:
-            return {"error": "Thread not read yet"}
-        try:
-            return {"ok": db.set_link_status(url, status)}
-        finally:
-            db.close()
+        by_thread = {}
+        for it in items or []:
+            by_thread.setdefault(str(it.get("thread_id")), []).append(it.get("url"))
+        changed = 0
+        for tid, urls in by_thread.items():
+            db = self._thread_db(c, archive_dir, dest, tid)
+            if db is None:
+                continue
+            try:
+                for u in urls:
+                    changed += bool(u) and db.set_link_status(u, status)
+            finally:
+                db.close()
+        return {"ok": changed > 0, "changed": changed}
+
+    def simpcity_download_links(self, creator_id, items):
+        """Download several review-list links in ONE run ("Download all" / a post's
+        "Download all"): each album/file is fetched once into
+        <dest>/Simpcity/<Site>/<year>/, one after another (bunkr only serves two
+        downloads per node at once, so links never run in parallel with each other).
+        Links the app can't download are skipped; each link is marked downloaded
+        once the run actually reached it."""
+        if self._creator_runner and self._creator_runner.is_running:
+            return {"error": "A download is already in progress"}
+        if self._creator_aux_thread and self._creator_aux_thread.is_alive():
+            return {"error": "Another operation (verify/import/duplicates) is in progress"}
+        state = self.load_state()
+        c = state.get("creators", {}).get(creator_id)
+        if not c:
+            return {"error": "Creator not found"}
+        if not self._is_real_dest(c.get("destination", "")):
+            return {"error": self.REAL_ONLY_MSG}
+        archive_dir = (state.get("archive_dir") or "").strip()
+        dest = c.get("destination", "")
+        links, origin = [], {}            # album url → (thread_id, review url)
+        for it in items or []:
+            url, tid = it.get("url"), str(it.get("thread_id"))
+            album = album_track.parse_album_url(url or "")
+            if not album or album["url"] in origin:
+                continue
+            post_date = None
+            db = self._thread_db(c, archive_dir, dest, tid)
+            if db is not None:
+                post_date = (db.link(url) or {}).get("post_date")
+                db.close()
+            link = {"platform": "album", "site": album["site"], "album_id": album["ref"],
+                    "kind": album["kind"], "name": "", "url": album["url"],
+                    "origin_thread": tid}
+            if post_date:
+                link["origin_date"] = post_date
+            links.append(link)
+            origin[album["url"]] = (tid, url)
+        if not links:
+            return {"error": "None of those links can be downloaded by the app."}
+
+        def after(runner, stats):
+            for res in getattr(runner, "album_results", []):
+                tid, review_url = origin.get(res.get("url"), (None, None))
+                if not review_url or res.get("alive") is False or res.get("errors"):
+                    continue          # gone or incomplete: stays on the list
+                tdb = self._thread_db(c, archive_dir, dest, tid)
+                if tdb is None:
+                    continue
+                try:
+                    tdb.set_link_status(review_url, "downloaded")
+                    tdb.set_link_alive(review_url, res.get("alive"), title=res.get("title"),
+                                       file_count=res.get("file_count"))
+                finally:
+                    tdb.close()
+
+        self._launch_creator_run(creator_id, dict(c, links=links), "everything", "full",
+                                 after=after)
+        return {"status": "started", "count": len(links)}
 
     def simpcity_link_action(self, creator_id, thread_id, url, action):
         """Review-list buttons. action "download": fetch the album/file once into
@@ -1897,6 +1969,12 @@ class Api:
         so every later run re-checks it for new files (and notices if it dies)."""
         if action not in ("download", "track"):
             return {"error": "bad action"}
+        if action == "download":
+            res = self.simpcity_download_links(creator_id, [{"thread_id": thread_id, "url": url}])
+            if res.get("status") == "started":
+                album = album_track.parse_album_url(url)
+                res["url"] = album["url"] if album else url
+            return res
         if self._creator_runner and self._creator_runner.is_running:
             return {"error": "A download is already in progress"}
         if self._creator_aux_thread and self._creator_aux_thread.is_alive():

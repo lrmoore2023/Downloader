@@ -247,3 +247,44 @@ def test_album_link_in_configure(app, tmp_path):
     single = app.resolve_link("https://bunkr.pk/f/E4ZM1KwzCWSAc", dest)
     assert single["valid"] is False and "single file" in single["reason"]
     assert app.resolve_link("https://gofile.io/d/abc", _dest(tmp_path, "Hentai", "2D", "A"))["valid"] is False
+
+
+def test_batch_download_one_run_and_marks_each(real, monkeypatch):
+    a, cid = real["app"], real["id"]
+    db = ThreadDB(os.path.join(real["arch"], "simpcity_244743.db"))
+    db.upsert_link({"url": "https://bunkr.pk/f/SECOND", "host": "bunkr", "kind": "file",
+                    "ref": "SECOND"}, "78", "2026-09-28T10:00:00+00:00",
+                   "https://simpcity.cr/posts/78/", 11)
+    db.close()
+    launched = {}
+    monkeypatch.setattr(a, "_launch_creator_run",
+                        lambda cid_, creator, scope, mode, after=None:
+                        launched.update(creator=creator, after=after), raising=False)
+    items = [{"thread_id": "244743", "url": u} for u in (
+        "https://bunkr.pk/f/E4ZM1KwzCWSAc", "https://bunkr.pk/f/SECOND", "https://mega.nz/folder/x")]
+    res = a.simpcity_download_links(cid, items)
+    assert res == {"status": "started", "count": 2}               # mega can't be downloaded
+    links = launched["creator"]["links"]
+    assert [l["url"] for l in links] == ["https://bunkr.cr/f/E4ZM1KwzCWSAc", "https://bunkr.cr/f/SECOND"]
+    assert links[1]["origin_date"].startswith("2026-09-28")
+    runner = type("R", (), {"album_results": [
+        {"url": "https://bunkr.cr/f/E4ZM1KwzCWSAc", "alive": True, "errors": 0},
+        {"url": "https://bunkr.cr/f/SECOND", "alive": True, "errors": 1}]})()
+    launched["after"](runner, {})
+    st = {r["url"]: r["status"] for r in a.list_simpcity(cid)["review"]}
+    assert st["https://bunkr.pk/f/E4ZM1KwzCWSAc"] == "downloaded"
+    assert st["https://bunkr.pk/f/SECOND"] == "pending"            # incomplete: stays listed
+    assert "error" in a.simpcity_download_links(cid, [{"thread_id": "244743",
+                                                       "url": "https://mega.nz/folder/x"}])
+
+
+def test_batch_check_off_and_undo(real):
+    a, cid = real["app"], real["id"]
+    items = [{"thread_id": "244743", "url": "https://mega.nz/folder/x"},
+             {"thread_id": "244743", "url": "https://bunkr.pk/a/7Z7niuP1"}]
+    assert a.set_simpcity_links_status(cid, items, "dismissed")["changed"] == 2
+    st = {r["url"]: r["status"] for r in a.list_simpcity(cid)["review"]}
+    assert st["https://mega.nz/folder/x"] == st["https://bunkr.pk/a/7Z7niuP1"] == "dismissed"
+    assert a.set_simpcity_links_status(cid, items, "pending")["changed"] == 2
+    st = {r["url"]: r["status"] for r in a.list_simpcity(cid)["review"]}
+    assert st["https://mega.nz/folder/x"] == "pending"

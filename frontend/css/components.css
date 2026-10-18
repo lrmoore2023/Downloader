@@ -2668,28 +2668,12 @@ h3.section-title { line-height: 1.3; }
 }
 .sc-bad { color: var(--danger); }
 .sc-warn { color: var(--warn); }
-.sc-subhead {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: var(--space-3, 12px);
-    margin-bottom: 4px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-}
 .sc-toggle {
     font-weight: 400;
     text-transform: none;
     letter-spacing: 0;
 }
 .sc-empty { padding: 4px 0 8px; }
-.sc-actions {
-    display: inline-flex;
-    gap: 4px;
-    margin-left: auto;
-    flex-shrink: 0;
-}
-.sc-album .sc-meta { margin-left: auto; }
+.sc-toggle { margin: var(--space-2) 0; }
+.sc-check-spacer { width: 13px; flex-shrink: 0; }
+.sc-albums-title { cursor: default; }

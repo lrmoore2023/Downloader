@@ -184,6 +184,7 @@ async function onCreatorChange() {
     await refreshYears();
     pendingUndo = [];          // undo history is per-creator
     errorsUndo = [];
+    if (typeof scUndo !== 'undefined') scUndo = [];
     lastPendingSig = null;
     renderPendingLinks();
     renderErrorLinks();
@@ -754,9 +755,12 @@ document.addEventListener('keydown', (e) => {
             && el.type !== 'checkbox') return;
         // Undo whichever panel action was the most recent (across both stacks).
         const p = _topUndo(pendingUndo), er = _topUndo(errorsUndo);
+        const sc = typeof scUndo !== 'undefined' ? _topUndo(scUndo) : null;
+        const newest = [p, er, sc].filter(Boolean).sort((a, b) => b.seq - a.seq)[0];
         let handled = false;
-        if (p && (!er || p.seq > er.seq)) handled = undoPendingResolve();
-        else if (er) handled = undoErrorsDismiss();
+        if (newest && newest === sc) handled = undoSimpcityCheckOff();
+        else if (newest && newest === p) handled = undoPendingResolve();
+        else if (newest) handled = undoErrorsDismiss();
         if (handled) e.preventDefault();
     }
 });
