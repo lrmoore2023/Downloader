@@ -34,6 +34,7 @@ from backend.derpibooru_scraper import (
 )
 from backend.discord_runner import DiscordRunner
 from backend.simpcity_runner import SimpcityRunner
+from backend.album_track_runner import AlbumTrackRunner, album_archive_path, site_label
 from backend.config_builder import (
     build_config, build_latest_config, build_redownload_config, cleanup_config,
 )
@@ -109,6 +110,8 @@ def filter_links(links, scope):
         return [l for l in links if l.get("platform") == "discord"]
     if scope == "simpcity":
         return [l for l in links if l.get("platform") == "simpcity"]
+    if scope == "album":
+        return [l for l in links if l.get("platform") == "album"]
     if scope and scope.startswith("link:"):
         target = scope[len("link:"):]
         return [l for l in links if (l.get("url") or "") == target]
@@ -125,6 +128,8 @@ def link_label(link):
         return f"Discord {link.get('name') or link.get('channel_id') or '?'}"
     if link.get("platform") == "simpcity":
         return f"SimpCity {link.get('name') or link.get('thread_id') or '?'}"
+    if link.get("platform") == "album":
+        return f"{site_label(link.get('site'))} {link.get('name') or link.get('album_id') or '?'}"
     name = link.get("name") or link.get("user_id") or "?"
     if link.get("platform") == "pawchive":
         return f"{pw_site_code(link.get('service'))} {name}"
@@ -289,6 +294,7 @@ class CreatorRunner:
         self._cancel.clear()
         self._needs_cf_auth = False
         self._needs_simpcity_auth = False
+        self.album_results = []
         self.downloaded_count = self.skipped_count = self.error_count = 0
         try:
             links = filter_links(creator.get("links", []), scope)
@@ -339,6 +345,9 @@ class CreatorRunner:
                     elif link.get("platform") == "simpcity":
                         self._run_simpcity(link, creator, mode, archive_dir,
                                            on_progress, on_error)
+                    elif link.get("platform") == "album":
+                        self._run_album(link, creator, mode, archive_dir,
+                                        on_progress, on_error)
                     else:
                         on_progress({"type": "info",
                                      "message": f"Unknown platform '{link.get('platform')}', skipped."})
@@ -565,6 +574,46 @@ class CreatorRunner:
             collect_links=True,
         )
         self._accumulate(stats)
+
+    def _run_album(self, link, creator, mode, archive_dir, on_progress, on_error):
+        # A tracked album (bunkr/gofile/…): every run re-reads it, fetches only
+        # files not yet recorded, and records whether it is still there. Files go
+        # to <dest>/Simpcity/<Site>/<year>/.
+        destination = creator["destination"]
+        prog = self._prefix(link, on_progress)
+        err = self._prefix(link, on_error)
+        if not destination:
+            prog({"type": "info", "message": "no folder — albums need a destination."})
+            return
+        archive_path = album_archive_path(archive_dir, link.get("site"),
+                                          link.get("album_id"), destination)
+        runner = AlbumTrackRunner(workers=4)
+        self._current = runner
+        stats = {}
+        runner.run(
+            {"site": link.get("site"), "kind": link.get("kind") or "album",
+             "ref": link.get("album_id"), "url": link["url"],
+             "password": link.get("password")},
+            destination, mode, archive_path,
+            on_progress=prog, on_complete=lambda d: stats.update(d), on_error=err,
+            errors_path=errors_db_path(archive_path),
+            engine_state_dir=self._engine_state_dir(archive_dir),
+            origin_date=link.get("origin_date"),
+        )
+        self._accumulate(stats)
+        self.album_results.append({"url": link["url"], **{k: stats.get(k) for k in (
+            "alive", "title", "file_count", "downloaded", "errors")}})
+
+    @staticmethod
+    def _engine_state_dir(archive_dir):
+        """cyberdrop-dl's history DB for tracked albums. In the archive dir (the
+        NAS) when there is one, so — like every archive DB — it outlives the app's
+        own drive; losing it would re-download every tracked bunkr album."""
+        archive_dir = (archive_dir or "").strip()
+        if archive_dir and os.path.isdir(archive_dir):
+            return os.path.join(archive_dir, "_engines", "cyberdrop")
+        app = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(app, ".album_state", "tracked", "cyberdrop")
 
     def _run_twitter(self, link, creator, mode, year, archive_dir,
                      cookies_path, cookies_browser, on_progress, on_error):

@@ -11,6 +11,8 @@ re-mint, cancel behaviour, and AlbumRunner dispatch. Run directly:
 """
 import hashlib
 import os
+
+import pytest
 import sys
 import tempfile
 import threading
@@ -127,6 +129,13 @@ def _server(**over):
 def _reset_token():
     gofile_downloader._TOKEN_CACHE["token"] = None
     gofile_downloader._TOKEN_CACHE["ts"] = 0.0
+
+
+@pytest.fixture(autouse=True)
+def _isolated_token_file(tmp_path, monkeypatch):
+    """Never read or write the app's real persisted guest token."""
+    monkeypatch.setattr(gofile_downloader, "_TOKEN_FILE", str(tmp_path / "gofile_token.json"))
+    _reset_token()
 
 
 def run_gofile(url, server, password=None, force=False, want_errors=False,

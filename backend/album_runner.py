@@ -28,6 +28,7 @@ from backend.config_builder import build_album_config, cleanup_config
 from backend.cyberdrop_dl_runner import CyberdropDlRunner
 from backend.download_errors import FailureStore
 from backend.filester_downloader import FilesterRunner
+from backend.filester_unlock import unlock_to_cookies
 from backend.gallery_dl_runner import GalleryDlRunner
 from backend.gofile_downloader import GofileRunner
 

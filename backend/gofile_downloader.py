@@ -51,12 +51,20 @@ _API = "https://api.gofile.io"
 # Must match the UA hashed into the website token AND the UA header we send.
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-_SALT = "9844d94d963d30"        # gofile wt.obf.js salt (see module docstring)
+# gofile wt.obf.js salt (see module docstring). Rotated 2026: the old value
+# (9844d94d963d30) now gets `error-notPremium` on every listing; this matches the
+# bundled gallery-dl 1.32 / cyberdrop-dl 10.9 implementations.
+_SALT = "12af056dacea0b"
 _LANG = "en-US"
 _CONCURRENCY = 4                # safe ceiling for gofile CDN before drops/429s
 _TOKEN_TTL = 86400              # reuse one guest token for ~24h
 
 _INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# The guest token survives app restarts: gofile rate-limits account creation
+# (429 `error-rateLimit` after a couple of mints), so minting one per launch
+# is how a run fails before it starts.
+_TOKEN_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           ".gofile_token.json")
 
 # Module-level guest-token cache, shared across runs/links in one app session.
 _TOKEN_LOCK = threading.Lock()
@@ -65,10 +73,35 @@ _TOKEN_CACHE = {"token": None, "ts": 0.0}
 _thread_local = threading.local()
 
 
+def _load_token_file():
+    try:
+        import json
+        with open(_TOKEN_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        if d.get("token") and float(d.get("ts") or 0):
+            return d["token"], float(d["ts"])
+    except Exception:
+        pass
+    return None, 0.0
+
+
+def _save_token_file(token, ts):
+    try:
+        import json
+        tmp = _TOKEN_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"token": token, "ts": ts}, f)
+        os.replace(tmp, _TOKEN_FILE)
+    except Exception:
+        pass
+
+
 def _get_token(session, force_new=False):
     """Return a (cached) gofile guest token, minting a fresh one if needed."""
     with _TOKEN_LOCK:
         now = time.time()
+        if not _TOKEN_CACHE["token"]:
+            _TOKEN_CACHE["token"], _TOKEN_CACHE["ts"] = _load_token_file()
         cached = _TOKEN_CACHE["token"]
         if (not force_new and cached
                 and (now - _TOKEN_CACHE["ts"]) < _TOKEN_TTL):
@@ -82,6 +115,7 @@ def _get_token(session, force_new=False):
         token = r["data"]["token"]
         _TOKEN_CACHE["token"] = token
         _TOKEN_CACHE["ts"] = now
+        _save_token_file(token, now)
         return token
 
 
@@ -174,6 +208,9 @@ class GofileRunner:
                        else "This gofile folder is locked — add its password")
                 on_error({"type": "error", "message": msg})
                 return
+            except GofileGone:
+                on_error({"type": "error", "message": "This gofile folder no longer exists"})
+                return
             except Exception as e:
                 on_error({"type": "error", "message": f"gofile listing failed: {e}"})
                 return
@@ -205,6 +242,7 @@ class GofileRunner:
         rel_dir preserves nested subfolders relative to the album root.
         """
         files, seen = [], set()
+        self._file_meta = {}
         folder_name = root_id
         stack = [(root_id, "")]         # (content_id, rel_dir)
         first = True
@@ -224,6 +262,8 @@ class GofileRunner:
                         raise _PasswordError(status)
                     if "wrongtoken" in low:
                         raise _TokenError(status)
+                    if "notfound" in low:
+                        raise GofileGone(status)
                     raise RuntimeError(status or "unknown error")
                 data = resp.get("data") or {}
                 if first:
@@ -247,6 +287,8 @@ class GofileRunner:
                             files.append((fid, rel_dir,
                                           child.get("name") or fid,
                                           child.get("size") or 0, link))
+                            self._file_meta[fid] = {"createTime": child.get("createTime"),
+                                                    "md5": child.get("md5")}
                     elif ctype == "folder":
                         name = self._safe(child.get("name") or child.get("id"))
                         sub_rel = os.path.join(rel_dir, name) if rel_dir else name
@@ -275,6 +317,32 @@ class GofileRunner:
         }
         return session.get(f"{_API}/contents/{content_id}",
                           params=params, headers=headers, timeout=30).json()
+
+    def list_folder(self, url, password=None):
+        """Read a folder for callers that download files themselves (tracked
+        albums). → {"token", "name", "files": [{id, rel_dir, name, size, link,
+        create_time, md5}]}. Raises GofileGone when the folder no longer exists,
+        GofilePassword when it is locked/wrong."""
+        m = re.search(r"/d/([^/?#]+)", urlparse((url or "").strip()).path or "")
+        if not m:
+            raise ValueError("Not a gofile folder link")
+        session = make_session()
+        pw_hash = hashlib.sha256(password.encode("utf-8")).hexdigest() if password else None
+        token = _get_token(session)
+        try:
+            name, files = self._enumerate(session, m.group(1), token, pw_hash)
+        except _TokenError:
+            token = _get_token(session, force_new=True)
+            name, files = self._enumerate(session, m.group(1), token, pw_hash)
+        except _PasswordError as e:
+            raise GofilePassword(str(e))
+        out = []
+        for fid, rel_dir, fname, size, link in files:
+            meta = self._file_meta.get(fid) or {}
+            out.append({"id": fid, "rel_dir": rel_dir, "name": fname, "size": size,
+                        "link": link, "create_time": meta.get("createTime"),
+                        "md5": meta.get("md5")})
+        return {"token": token, "name": name, "files": out}
 
     # ── downloading ─────────────────────────────────────────────────────
     def _download_all(self, token, files, dest_dir, page_url):
@@ -440,3 +508,24 @@ class _PasswordError(Exception):
 
 class _TokenError(Exception):
     pass
+
+
+class GofileGone(Exception):
+    """The folder was deleted (`error-notFound`)."""
+
+
+class GofilePassword(Exception):
+    """The folder is password-protected and no/the wrong password was given."""
+
+
+def make_session():
+    """A session whose UA matches the one hashed into the website token."""
+    s = _rq.Session(impersonate=_IMPERSONATE) if _IMPERSONATE else _rq.Session()
+    s.headers["User-Agent"] = _UA
+    return s
+
+
+def download_headers(token):
+    """Headers the gofile CDN needs (a bare GET 401/403s without the cookie)."""
+    return {"Referer": "https://gofile.io/", "Origin": "https://gofile.io",
+            "Cookie": f"accountToken={token}"}
