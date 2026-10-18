@@ -221,8 +221,18 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   captcha → in-app window). Signed-in is read from `<html data-logged-in="true">`;
   the cookie prefix (`data-cookie-prefix`) is rotated, so never key on cookie names.
   DDoS-Guard cookies are UA-bound → the UA is kept with the jar. cyberdrop-dl
-  paces it at 1 request / 20 s; pages go through `AdaptiveThrottle`. Probe a thread
-  read-only with `tools/simpcity_probe.py <url> --pages 1,11 [--raw]`.
+  paces it at 1 request / 20 s; we measured 11 pages at a 4 s pace with no pushback;
+  pages go through `AdaptiveThrottle`. Probe a thread read-only with
+  `tools/simpcity_probe.py <url> --pages 1,11 [--raw]`. Real post markup (measured
+  on a full 11-page thread): turbo videos are `iframe.saint-iframe` `/embed/<id>`;
+  goonbox images are `img.bbImage` thumbs inside `<a href=goonbox.cr/img/<id>>`, older
+  ones bare `simpN.cuckcapital.cr/images3/x.md.png` (drop `.md.` → original);
+  `cyberdrop.cr/e/<id>` iframes (api.cyberdrop.cr `file/info` + `file/auth`);
+  `pbs.twimg.com/media/<id>?format=` images (`name=orig`); redgifs `/ifr/<id>`
+  (temp-token API, CDN needs a redgifs Referer); old posts carry unrendered
+  `[MEDIA=saint_vid]<id>[/MEDIA]` in hrefs — saint ids resolve on turbo. External
+  links are `/redirect/?to=<base64>&m=b64`; link previews are
+  `.bbCodeBlock--unfurl[data-url]` whose images are site logos, not content.
 - **turbo.cr** (SimpCity's video host, ex-saint) — the altcha proof-of-work only
   gates the page button: `GET /api/sign?v=<id>` returns a signed, Range-capable CDN
   URL anonymously. The `/d/<id>` page prints the exact size, MD5 and upload date.
@@ -230,9 +240,10 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   challenge, the Laravel API isn't: `GET /sanctum/csrf-cookie`, then
   `/api/images/<id>` with `X-XSRF-TOKEN` → `original_url` on `simpN.cuckcapital.cr`.
   Posts embed the thumbnail inside `<a href="goonbox.cr/img/<id>">`.
-- **bunkr** — answers a non-existent album with a gateway timeout (504), not a 404,
-  so "unreachable" is recorded as a streak, never as dead. Lone files land in
-  cyberdrop-dl's "Loose Files (Bunkr)" bucket.
+- **bunkr** — goes down for stretches (the user saw bunkr.cr dead on 2026-10-17, the
+  same evening a made-up album id timed out with a 504), so a timeout/5xx proves
+  nothing: "unreachable" is recorded as a streak, only a definite 404/notFound as
+  dead. Lone files land in cyberdrop-dl's "Loose Files (Bunkr)" bucket.
 - **gofile** — the website-token salt rotates; when every listing returns
   `error-notPremium` it's the salt (check the bundled gallery-dl/cyberdrop-dl
   `gofile.py`). Account creation is rate-limited (429), so the guest token is
