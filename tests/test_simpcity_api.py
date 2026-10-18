@@ -212,7 +212,14 @@ def test_download_once_does_not_track(real, monkeypatch):
     launched["after"](dead, {})
     st = {r["url"]: r["status"] for r in a.list_simpcity(cid)["review"]}
     assert st["https://bunkr.pk/f/E4ZM1KwzCWSAc"] == "pending"
-    ok = type("R", (), {"album_results": [{"url": "https://bunkr.cr/f/E4ZM1KwzCWSAc", "alive": True}]})()
+    # the filester bug: reachable, no error reported, but nothing arrived
+    empty = type("R", (), {"album_results": [{"url": "https://bunkr.cr/f/E4ZM1KwzCWSAc", "alive": True,
+                                              "errors": 0, "file_count": 0}]})()
+    launched["after"](empty, {})
+    st = {r["url"]: r["status"] for r in a.list_simpcity(cid)["review"]}
+    assert st["https://bunkr.pk/f/E4ZM1KwzCWSAc"] == "pending"
+    ok = type("R", (), {"album_results": [{"url": "https://bunkr.cr/f/E4ZM1KwzCWSAc", "alive": True,
+                                           "file_count": 1}]})()
     launched["after"](ok, {})
     st = {r["url"]: r["status"] for r in a.list_simpcity(cid)["review"]}
     assert st["https://bunkr.pk/f/E4ZM1KwzCWSAc"] == "downloaded"
@@ -268,8 +275,8 @@ def test_batch_download_one_run_and_marks_each(real, monkeypatch):
     assert [l["url"] for l in links] == ["https://bunkr.cr/f/E4ZM1KwzCWSAc", "https://bunkr.cr/f/SECOND"]
     assert links[1]["origin_date"].startswith("2026-09-28")
     runner = type("R", (), {"album_results": [
-        {"url": "https://bunkr.cr/f/E4ZM1KwzCWSAc", "alive": True, "errors": 0},
-        {"url": "https://bunkr.cr/f/SECOND", "alive": True, "errors": 1}]})()
+        {"url": "https://bunkr.cr/f/E4ZM1KwzCWSAc", "alive": True, "errors": 0, "file_count": 1},
+        {"url": "https://bunkr.cr/f/SECOND", "alive": True, "errors": 1, "file_count": 0}]})()
     launched["after"](runner, {})
     st = {r["url"]: r["status"] for r in a.list_simpcity(cid)["review"]}
     assert st["https://bunkr.pk/f/E4ZM1KwzCWSAc"] == "downloaded"

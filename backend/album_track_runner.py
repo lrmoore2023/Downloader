@@ -297,6 +297,13 @@ class AlbumTrackRunner:
                 self.error_count += 1
             self._error(f"{self._label}: {e}")
         finally:
+            if (not self._cancel.is_set() and alive is not False and self.error_count == 0
+                    and self.downloaded_count == 0 and self._db.count() == 0):
+                # Nothing arrived and nothing is on record: whatever the engine
+                # said, that is not a successful download.
+                with self._lock:
+                    self.error_count += 1
+                self._error(f"{self._label}: nothing was downloaded from {item['url']}")
             if not self._cancel.is_set():
                 self._db.mark_alive(alive, title)
                 self._db.set(last_run=_now())
@@ -719,6 +726,56 @@ class AlbumTrackRunner:
                     pass
 
     def _run_filester(self):
+        if self._item["kind"] == "file":
+            return self._run_filester_file()
+        return self._run_filester_folder()
+
+    def _run_filester_file(self):
+        """A lone filester file (`/d/<slug>`): the slug is the file_slug of the same
+        public download API the folder engine uses (filester's own file_dl.js does
+        exactly this). Missing file → 404 "File not found". No upload date is
+        published, so the file takes the date of the post it came from."""
+        from urllib.parse import urlsplit
+        from backend import filester_downloader as fsd
+        p = urlsplit(self._item["url"])
+        root = f"https://{p.netloc or 'filester.me'}"
+        slug = self._item["ref"]
+        s = fsd._rq.Session(impersonate=fsd._IMPERSONATE) if fsd._IMPERSONATE else fsd._rq.Session()
+
+        def resolve():
+            r = s.post(f"{root}/v2/api/public/download", json={"file_slug": slug},
+                       headers={"content-type": "application/json"}, timeout=30)
+            if r.status_code == 404:
+                raise AlbumGone("404 File not found")
+            d = r.json()
+            if not d.get("success"):
+                raise RuntimeError(d.get("message") or "filester download API error")
+            from urllib.parse import quote
+            name = d.get("name") or slug
+            return (f"{d['server']}/v2/{d['file']}?token={quote(str(d['token']))}"
+                    f"&download=true&n={quote(name)}", name)
+
+        url, name = resolve()
+        size = None
+        try:
+            r = s.get(url, headers={"referer": root + "/", "Range": "bytes=0-0"}, timeout=60)
+            import re as _re
+            m = _re.search(r"/\s*(\d+)\s*$", r.headers.get("Content-Range") or "")
+            size = int(m.group(1)) if m else None
+            r.close()
+        except Exception:
+            pass
+
+        def refresh():
+            try:
+                return resolve()[0]
+            except AlbumGone:
+                raise hd.Gone()
+        self._fetch(slug, name, url, size=size, session=s, headers={"referer": root + "/"},
+                    refresh=refresh, page_url=self._item["url"])
+        return True, None
+
+    def _run_filester_folder(self):
         from backend.filester_downloader import FilesterRunner
         staging = os.path.join(self._root, STAGING)
         os.makedirs(staging, exist_ok=True)
@@ -729,6 +786,8 @@ class AlbumTrackRunner:
 
         def on_err(d):
             errs.append(d.get("message") or "")
+            with self._lock:
+                self.error_count += 1          # the engine reports some failures only here
             self._error(d.get("message") or "")
         runner.run(self._item["url"], staging,
                    on_progress=self._staged_progress,
@@ -737,7 +796,8 @@ class AlbumTrackRunner:
         self._sub = None
         self._file_staging(staging, {})
         with self._lock:
-            self.error_count += stats.get("errors", 0) or 0
+            # Per-file failures are counted by the engine AND reported via on_err.
+            self.error_count = max(self.error_count, stats.get("errors", 0) or 0)
         if any("404" in e or "not found" in e.lower() for e in errs):
             raise AlbumGone("not found")
         title = (stats.get("subfolder") or "").rsplit(" (", 1)[0] or None

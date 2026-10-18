@@ -219,3 +219,68 @@ def test_cyberdrop_transient_scrape_is_unknown(sandbox, monkeypatch, tmp_path):
     done, _ = run(sandbox, at.parse_album_url("https://cyberdrop.cr/a/SLOW"),
                   engine_state_dir=str(tmp_path / "eng"))
     assert done["alive"] is None
+
+
+
+# ── filester single files ───────────────────────────────────────────
+
+class FakeFilester:
+    """filester's public download API + CDN for one slug."""
+
+    def __init__(self, exists=True):
+        self.exists = exists
+        self.headers = {}
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        if not self.exists:
+            return type("R", (), {"status_code": 404, "json": lambda s: {"success": False}})()
+        return type("R", (), {"status_code": 200, "json": lambda s: {
+            "success": True, "server": "https://fsc3.cdn.cr", "file": "uuid.mp4",
+            "token": "T", "name": "clip_source.mp4"}})()
+
+    def get(self, url, headers=None, timeout=None, **kw):
+        return type("R", (), {"status_code": 206, "headers": {"Content-Range": "bytes 0-0/5"},
+                              "close": lambda s: None})()
+
+
+def test_filester_single_file(sandbox, monkeypatch):
+    os.makedirs(sandbox["arch"])
+    from backend import filester_downloader as fsd
+    fake = FakeFilester()
+    monkeypatch.setattr(fsd._rq, "Session", lambda **kw: fake)
+    item = at.parse_album_url("https://filester.sh/d/Dp4Fiym")
+    assert item == {"site": "filester", "kind": "file", "ref": "Dp4Fiym",
+                    "url": "https://filester.sh/d/Dp4Fiym"}
+    done, errs = run(sandbox, item, origin_date="2026-08-30T12:00:00+00:00")
+    assert done["downloaded"] == 1 and done["errors"] == 0 and done["file_count"] == 1, errs
+    assert sandbox["calls"][0].startswith("https://fsc3.cdn.cr/v2/uuid.mp4?token=T&download=true")
+    assert os.path.isfile(os.path.join(sandbox["dest"], "Simpcity", "Filester", "2026",
+                                       "2026.08.30 - Filester - clip_source.mp4"))
+
+
+def test_filester_single_file_gone(sandbox, monkeypatch):
+    os.makedirs(sandbox["arch"])
+    from backend import filester_downloader as fsd
+    monkeypatch.setattr(fsd._rq, "Session", lambda **kw: FakeFilester(exists=False))
+    done, _ = run(sandbox, at.parse_album_url("https://filester.me/d/GONE"))
+    assert done["alive"] is False
+
+
+def test_engine_that_fetches_nothing_is_an_error(sandbox, monkeypatch):
+    """The original bug: the folder engine rejected the link without counting an
+    error, so the run looked successful with 0 files."""
+    os.makedirs(sandbox["arch"])
+    import backend.filester_downloader as fsd
+
+    class Quiet:
+        def __init__(self, platform="album"):
+            pass
+
+        def cancel(self):
+            pass
+
+        def run(self, url, download_dir, on_progress, on_complete, on_error, password=None):
+            on_complete({"downloaded": 0, "skipped": 0, "errors": 0, "subfolder": None})
+    monkeypatch.setattr(fsd, "FilesterRunner", Quiet)
+    done, errs = run(sandbox, at.parse_album_url("https://filester.gg/f/850ce01ea5967b08"))
+    assert done["errors"] == 1 and any("nothing was downloaded" in e["message"] for e in errs)

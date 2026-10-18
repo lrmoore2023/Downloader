@@ -1947,8 +1947,11 @@ class Api:
         def after(runner, stats):
             for res in getattr(runner, "album_results", []):
                 tid, review_url = origin.get(res.get("url"), (None, None))
-                if not review_url or res.get("alive") is False or res.get("errors"):
-                    continue          # gone or incomplete: stays on the list
+                # Only a run that actually got the files counts: gone, failed,
+                # or "reachable but nothing arrived" all stay on the list.
+                if (not review_url or res.get("alive") is False or res.get("errors")
+                        or not res.get("file_count")):
+                    continue
                 tdb = self._thread_db(c, archive_dir, dest, tid)
                 if tdb is None:
                     continue
