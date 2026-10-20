@@ -92,11 +92,8 @@
                         </label>
                         <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulk('downloaded')" title="Mark the selected videos downloaded">✓ Selected</button>
                         <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulk('skipped')" title="Mark the selected videos as not downloading">✗ Selected</button>
+                        <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulkExclude()" title="Leave the selected pawchive posts out of the catalogue count (not a release)">∅ Selected</button>
                         <select class="input-field pmv-sort" id="pmvLatestSite" onchange="pmvLatestSetSite(this.value)" title="Only show one site"></select>
-                        <label class="checkbox-option" title="pawchive posts with no video, archive or download link">
-                            <input type="checkbox" id="pmvLatestHideNonMedia" checked onchange="pmvLatestSetHideNonMedia(this.checked)">
-                            <span class="checkbox-label">Hide image/text-only</span>
-                        </label>
                         <input type="search" class="input-field pmv-search" id="pmvLatestSearch"
                                placeholder="Filter by creator or title…" oninput="pmvLatestSetSearch(this.value)" aria-label="Filter by creator or title">
                     </div>

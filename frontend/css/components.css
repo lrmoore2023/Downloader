@@ -2388,7 +2388,7 @@ details.help .help-body {
 .pmv-day { border: var(--border-w) solid var(--border); border-radius: var(--radius-lg); background: var(--bg-input); margin-bottom: 12px; overflow: hidden; min-width: 860px; }
 .pmv-day-head { display: flex; justify-content: space-between; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--text-primary); background: var(--bg-raised); border-bottom: var(--border-w) solid var(--border); }
 .pmv-day-head span { color: var(--text-muted); font-weight: 500; }
-.pmv-item.pmv-latest-item { grid-template-columns: 18px 60px minmax(120px, 170px) minmax(180px, 1fr) 84px 48px minmax(120px, auto) auto; min-width: 860px; }
+.pmv-item.pmv-latest-item { grid-template-columns: 18px 88px minmax(120px, 170px) minmax(180px, 1fr) 84px 48px minmax(120px, auto) auto; min-width: 860px; }
 .pmv-latest-who { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pmv-latest-who a { color: var(--text-primary); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pmv-latest-who a:hover { color: var(--accent-text); text-decoration: underline; }

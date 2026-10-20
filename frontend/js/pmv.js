@@ -11,7 +11,7 @@ let pmvBusy = false;
 let pmvSort = 'name';
 let pmvSearch = '';                // title filter inside the open creator
 let pmvListSearch = '';            // creator-list filter (name / tag / site)
-const pmvFilters = { hideNonMedia: true, hideGone: false };
+const pmvFilters = { hideGone: false };
 const pmvExpanded = new Set();     // link_keys whose reviewed (✓/✗) group is unfolded
 
 // ── boot / list ─────────────────────────────────────────────────
@@ -287,7 +287,6 @@ function pmvSetSearch(v) {
 
 function pmvItemVisible(it, s) {
     if (pmvFilters.hideGone && it.gone) return false;
-    if (pmvFilters.hideNonMedia && s.platform === 'pawchive' && !it.media_post) return false;
     if (pmvSearch && !(it.title || '').toLowerCase().includes(pmvSearch.toLowerCase())) return false;
     return true;
 }
@@ -316,7 +315,6 @@ function renderPmvDetail(keepScroll) {
         </div>
         ${c.notes ? `<div class="field-hint pmv-notes">${escapeHtml(c.notes)}</div>` : ''}
         <div class="pmv-filters">
-            <label class="checkbox-option" title="pawchive posts with no video / archive attachment and no external link"><input type="checkbox" ${pmvFilters.hideNonMedia ? 'checked' : ''} onchange="pmvSetFilter('hideNonMedia', this.checked)"><span class="checkbox-label">Hide image/text-only posts</span></label>
             <label class="checkbox-option"><input type="checkbox" ${pmvFilters.hideGone ? 'checked' : ''} onchange="pmvSetFilter('hideGone', this.checked)"><span class="checkbox-label">Hide gone</span></label>
             <input type="search" class="input-field pmv-search" placeholder="Filter titles…" value="${escapeHtml(pmvSearch)}" oninput="pmvSetSearch(this.value)">
         </div>

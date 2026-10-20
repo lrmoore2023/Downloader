@@ -54,8 +54,8 @@ DEFAULT_SITE_CODES = {"rule34video": "R34", "iwara": "Iwara", "pawchive": "Pawch
                       "hmvmania": "HMVMania", "pmvhaven": "PMVHaven"}
 STATUSES = ("unreviewed", "downloaded", "skipped")
 
-# Attachment kinds that make a pawchive post worth showing by default (the user
-# hides image/text-only posts; a PMV arrives as a video, an archive, or a link).
+# Attachment kinds that make a pawchive post a media post (a PMV arrives as a
+# video, an archive, or a link); the rest can be left out of the count in bulk.
 MEDIA_POST_KINDS = ("video", "archive")
 
 _locks = {}

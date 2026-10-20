@@ -9,7 +9,6 @@ let pmvLatest = null;               // get_pmv_latest()
 let pmvLatestSel = new Set();       // "creator_id|link_key|item_id"
 let pmvLatestSite = '';
 let pmvLatestSearch = '';
-let pmvLatestHideNonMedia = true;
 let pmvLatestSeq = 0;
 
 const PMV_SITE_LABEL = { rule34video: 'rule34video', iwara: 'iwara', pmvhaven: 'PMVHaven',
@@ -57,7 +56,6 @@ function pmvLatestVisible() {
     const words = pmvLatestSearch ? pmvLatestSearch.split(/\s+/) : [];
     return (pmvLatest.items || []).filter(it => {
         if (pmvLatestSite && it.platform !== pmvLatestSite) return false;
-        if (pmvLatestHideNonMedia && it.media_post === false) return false;
         if (words.length) {
             const hay = `${it.creator_name} ${it.title} ${it.site_code}`.toLowerCase();
             if (!words.every(w => hay.includes(w))) return false;
@@ -71,7 +69,7 @@ function pmvLatestVisible() {
 function renderPmvLatest() {
     const d = pmvLatest;
     if (!d) return;
-    const total = (d.items || []).filter(it => !(pmvLatestHideNonMedia && it.media_post === false)).length;
+    const total = (d.items || []).length;
     const cnt = document.getElementById('pmvLatestCount');
     if (cnt) cnt.textContent = total ? String(total) : '';
 
@@ -153,6 +151,9 @@ function renderPmvLatestRow(it) {
         <span class="pmv-status">
             <button class="pmv-st" title="Downloaded" onclick="pmvLatestSet('${encK}', 'downloaded')">✓</button>
             <button class="pmv-st x" title="Not downloading this one" onclick="pmvLatestSet('${encK}', 'skipped')">✗</button>
+            ${it.platform === 'pawchive' ? `<button class="pmv-st ex"
+                    title="Not a release — leave it out of the catalogue count (numbers close up immediately)"
+                    onclick="pmvLatestExclude(['${encK}'])">∅</button>` : ''}
         </span>
         <span class="pmv-latest-who">
             <a href="#" onclick="pmvOpenFromLatest('${encodeURIComponent(it.creator_id)}'); return false;"
@@ -327,9 +328,41 @@ function pmvLatestBulk(status) {
     pmvLatestApply(keys, status);
 }
 
+// ∅ (pawchive only): leave posts out of the catalogue count. Grouped per
+// site link so each manifest is renumbered once.
+async function pmvLatestExclude(encKeys) {
+    const keys = encKeys.map(decodeURIComponent);
+    const groups = {};
+    keys.forEach(k => {
+        const [creator_id, link_key, ...rest] = k.split('|');
+        (groups[`${creator_id}|${link_key}`] ||= { creator_id, link_key, ids: [] }).ids.push(rest.join('|'));
+    });
+    let updated = 0;
+    for (const g of Object.values(groups)) {
+        let res;
+        try { res = await pywebview.api.set_pmv_excluded_bulk(g.creator_id, g.link_key, g.ids, true); }
+        catch (e) { res = { error: String(e) }; }
+        if (!res || res.error) showToast((res && res.error) || 'Could not save', 'error');
+        else updated += res.updated || 0;
+    }
+    keys.forEach(k => pmvLatestSel.delete(k));
+    if (updated) showToast(`${updated} post${updated === 1 ? '' : 's'} no longer counted`, 'info');
+    await refreshPmvLatest();
+    refreshPmvCreators();
+    if (pmvCurrentId && typeof openPmvCreator === 'function') openPmvCreator(pmvCurrentId, true);
+}
+
+function pmvLatestBulkExclude() {
+    const visible = new Map(pmvLatestVisible().map(it => [pmvRowKey(it), it]));
+    const keys = [...pmvLatestSel].filter(k => visible.has(k));
+    if (!keys.length) { showToast('Select some posts first', 'info'); return; }
+    const paw = keys.filter(k => visible.get(k).platform === 'pawchive');
+    if (!paw.length) { showToast('Only pawchive posts can be left out of the count', 'info'); return; }
+    pmvLatestExclude(paw.map(encodeURIComponent));
+}
+
 function pmvLatestSetSite(v) { pmvLatestSite = v || ''; renderPmvLatest(); }
 function pmvLatestSetSearch(v) { pmvLatestSearch = (v || '').trim().toLowerCase(); renderPmvLatest(); }
-function pmvLatestSetHideNonMedia(on) { pmvLatestHideNonMedia = !!on; renderPmvLatest(); }
 
 function pmvOpenFromLatest(encId) {
     pmvSetMode('creators');
