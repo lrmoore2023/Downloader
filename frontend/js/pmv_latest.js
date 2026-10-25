@@ -12,7 +12,7 @@ let pmvLatestSearch = '';
 let pmvLatestSeq = 0;
 
 const PMV_SITE_LABEL = { rule34video: 'rule34video', iwara: 'iwara', pmvhaven: 'PMVHaven',
-                         pawchive: 'pawchive', hmvmania: 'HMVMania' };
+                         pawchive: 'pawchive', hmvmania: 'HMVMania', twitter: 'Twitter' };
 
 function pmvRowKey(it) { return `${it.creator_id}|${it.link_key}|${it.id}`; }
 
@@ -151,7 +151,7 @@ function renderPmvLatestRow(it) {
         <span class="pmv-status">
             <button class="pmv-st" title="Downloaded" onclick="pmvLatestSet('${encK}', 'downloaded')">✓</button>
             <button class="pmv-st x" title="Not downloading this one" onclick="pmvLatestSet('${encK}', 'skipped')">✗</button>
-            ${it.platform === 'pawchive' ? `<button class="pmv-st ex"
+            ${it.numbering === 'chronological' ? `<button class="pmv-st ex"
                     title="Not a release — leave it out of the catalogue count (numbers close up immediately)"
                     onclick="pmvLatestExclude(['${encK}'])">∅</button>` : ''}
         </span>
@@ -213,6 +213,13 @@ function renderPmvFeedChips(d) {
         return `<span class="pmv-feed-chip ${cls}" title="${escapeHtml(tip)}"><b>${PMV_SITE_LABEL[p]}</b> ${escapeHtml(txt)}${fix}</span>`;
     });
     chips.push('<span class="pmv-feed-chip idle"><b>HMVMania</b> no feed → checked one by one</span>');
+    const tw = acc.twitter;
+    chips.push(tw && !tw.signed_in
+        ? `<span class="pmv-feed-chip warn" title="${escapeHtml(tw.message || '')}"><b>Twitter</b> not signed in <a href="#" onclick="openSettings(); return false;">Settings</a></span>`
+        : '<span class="pmv-feed-chip idle"><b>Twitter</b> no feed → newest posts checked one by one</span>');
+    const down = res.sites_down || {};
+    Object.keys(down).forEach(p => chips.push(
+        `<span class="pmv-feed-chip bad" title="${escapeHtml(down[p].message || '')}"><b>${escapeHtml(PMV_SITE_LABEL[p] || p)}</b> looked down last check — ${down[p].skipped || 0} link(s) skipped, retried next check</span>`));
     const extra = [];
     if (res.marked_read) extra.push(`${res.marked_read} PMVHaven notification${res.marked_read === 1 ? '' : 's'} marked read`);
     if (res.fetched_links !== undefined) extra.push(`last check fetched ${res.fetched_links} link${res.fetched_links === 1 ? '' : 's'}`);
@@ -328,7 +335,7 @@ function pmvLatestBulk(status) {
     pmvLatestApply(keys, status);
 }
 
-// ∅ (pawchive only): leave posts out of the catalogue count. Grouped per
+// ∅ (pawchive / Twitter): leave posts out of the catalogue count. Grouped per
 // site link so each manifest is renumbered once.
 async function pmvLatestExclude(encKeys) {
     const keys = encKeys.map(decodeURIComponent);
@@ -356,8 +363,8 @@ function pmvLatestBulkExclude() {
     const visible = new Map(pmvLatestVisible().map(it => [pmvRowKey(it), it]));
     const keys = [...pmvLatestSel].filter(k => visible.has(k));
     if (!keys.length) { showToast('Select some posts first', 'info'); return; }
-    const paw = keys.filter(k => visible.get(k).platform === 'pawchive');
-    if (!paw.length) { showToast('Only pawchive posts can be left out of the count', 'info'); return; }
+    const paw = keys.filter(k => visible.get(k).numbering === 'chronological');
+    if (!paw.length) { showToast('Only pawchive / Twitter posts can be left out of the count', 'info'); return; }
     pmvLatestExclude(paw.map(encodeURIComponent));
 }
 

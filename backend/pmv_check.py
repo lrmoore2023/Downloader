@@ -6,9 +6,14 @@ link ends up in exactly one of these buckets on every check:
 
 * covered by a readable feed and nothing new in it      → not fetched
 * the feed shows a video of it the manifest lacks        → fetched
-* no feed for it — HMVMania, not followed on the site, not signed in, the feed
-  errored, or the walk couldn't reach back to the cutoff → fetched directly
-  (PmvRunner's `latest` mode: about one request per link)
+* no feed for it — HMVMania, Twitter, not followed on the site, not signed in,
+  the feed errored, or the walk couldn't reach back to the cutoff → fetched
+  directly (PmvRunner's `latest` mode: about one request per link)
+
+A site that is down never holds up the others: feed, head and signature
+failures go into the run's shared `SiteHealth`, and once a site trips, its
+remaining head checks are skipped and PmvRunner skips its links outright (each
+recorded as failed, so it is picked up again next check).
 
 A source with `head(link)` (PMVHaven) can say exactly whether a tracked link
 has anything new — its newest few ids, one request — so its feed decides
@@ -39,6 +44,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend import pmv_tracker as pt
 from backend import pmv_feeds as pf
+from backend.site_health import SiteHealth
 
 OVERLAP = timedelta(hours=48)
 PAW_MARGIN = timedelta(hours=14)    # pawchive `updated` has no time zone
@@ -50,6 +56,7 @@ MAX_PAGES = 40               # feed pages read past which the walk is called a g
 SEEN_CAP = 20000
 UNTRACKED_PER_UPLOADER = 20
 FEED_PLATFORMS = ("iwara", "pmvhaven", "rule34video")
+NO_FEED_PLATFORMS = ("hmvmania", "twitter")
 STATE_VERSION = 1
 
 
@@ -132,7 +139,7 @@ class PmvCheck:
 
     def __init__(self, *, creators, manifest_root_for, state_path, sources,
                  pawchive_fetch=None, run_jobs, cancel=None, on_progress=None,
-                 now=None, mode="check", sweep_pawchive=False):
+                 now=None, mode="check", sweep_pawchive=False, health=None):
         self.creators = creators            # {pc_id: record}
         self.root_for = manifest_root_for
         self.state_path = state_path
@@ -144,6 +151,7 @@ class PmvCheck:
         self.now = now or _utc_now
         self.mode = mode
         self.sweep_pawchive = sweep_pawchive
+        self.health = health or SiteHealth()
 
     def _cancelled(self):
         return self.cancel.is_set()
@@ -231,6 +239,8 @@ class PmvCheck:
             return out
         except pf.FeedError as e:
             out.update(status="error", message=str(e))
+            if self.health.failed(platform, str(e), weak=True):
+                out["message"] = f"{e} — site looks down, its links are skipped this run"
             return out
         if not reached:
             out.update(status="gap", message=f"read {out['pages']} pages without reaching the last check")
@@ -298,6 +308,11 @@ class PmvCheck:
             for i, e in enumerate(todo, 1):
                 if self._cancelled():
                     break
+                if self.health.is_down(platform):
+                    # Fetched → skipped by the runner → retried next check.
+                    res[e["key"]] = "site down"
+                    failed += 1
+                    continue
                 if i == 1 or i % 10 == 0 or i == len(todo):
                     self._emit(f"{platform}: checking profiles {i}/{len(todo)}…", platform=platform)
                 try:
@@ -305,7 +320,11 @@ class PmvCheck:
                 except (pf.FeedError, pf.FeedAuthError) as ex:
                     res[e["key"]] = f"profile check failed ({ex})"
                     failed += 1
+                    if self.health.failed(platform, str(ex)):
+                        self._emit(f"{platform}: looks down — skipping the rest of its checks",
+                                   platform=platform)
                     continue
+                self.health.ok(platform)
                 items = e["manifest"].get("items", {})
                 if any(v not in items for v in ids):
                     res[e["key"]] = "new on profile"
@@ -330,17 +349,23 @@ class PmvCheck:
             except Exception as e:
                 msg = f"favourites unavailable ({e}); using each creator's profile"
                 favs = {}
+                if self.health.failed("pawchive", str(e)):
+                    msg = f"pawchive looks down ({e}) — its creators are skipped this run"
         for e in paw:
             if self._cancelled():
                 break
             link = e["link"]
             svc, uid = (link.get("service") or "").lower(), str(link.get("user_id") or "")
             rec = favs.get((svc, uid))
+            if rec is None and self.health.is_down("pawchive"):
+                flagged[e["key"]] = "no signature (site down)"
+                continue
             if rec is None and self.paw_fetch is not None:
                 try:
                     rec = pf.pawchive_profile(self.paw_fetch, svc, uid)
                 except Exception as ex:
                     flagged[e["key"]] = f"no signature ({ex})"
+                    self.health.failed("pawchive", str(ex))
                     continue
             sig = pf.pawchive_signature(rec)
             if not sig:
@@ -432,7 +457,7 @@ class PmvCheck:
                 reason = "never fetched"
             elif platform == "pawchive":
                 reason = paw_flagged.get(key)
-            elif platform == "hmvmania":
+            elif platform in NO_FEED_PLATFORMS:
                 reason = "no feed"
             elif platform in heads:
                 w = walks.get(platform) or {}
@@ -565,13 +590,15 @@ class PmvCheck:
                                                "flagged": len(paw_flagged), "untracked": 0, "pages": 0,
                                                "unresolved": 0}
         result["reasons"] = {f"{cid}|{key}": r for (cid, key), r in reasons.items()}
+        result["sites_down"] = self.health.down()
         # Bound the seen map (oldest entries first — dict keeps insertion order).
         if len(st["seen"]) > SEEN_CAP:
             for k in list(st["seen"].keys())[:len(st["seen"]) - SEEN_CAP]:
                 del st["seen"][k]
         st["last_result"] = {k: result[k] for k in ("mode", "platforms", "fetched_links", "direct_links",
                                                     "flagged_links", "pending", "untracked_new",
-                                                    "marked_read", "cancelled", "unfollowed")}
+                                                    "marked_read", "cancelled", "unfollowed",
+                                                    "sites_down")}
         st["last_result"]["at"] = _iso(started)
         save_state(self.state_path, st)
         return result

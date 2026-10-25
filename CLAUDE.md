@@ -57,7 +57,8 @@ broken precisely because only `pytest` was run. `pytest` is also not in
 - **PMV tab** (metadata only, never downloads): `backend/pmv_tracker.py` (manifests +
   the two numbering rules), `backend/pmv_runner.py` (the fetch job),
   `backend/r34video_scraper.py`, `backend/iwara_scraper.py`,
-  `backend/hmvmania_scraper.py`, `backend/pmvhaven_scraper.py` (pawchive reuses
+  `backend/hmvmania_scraper.py`, `backend/pmvhaven_scraper.py`, `backend/twitter_pmv.py`
+  (+ its gallery-dl child `twitter_media_dump.py`; pawchive reuses
   `pawchive_scraper`), `frontend/js/pmv.js`. Api methods are the `*_pmv_*` group.
   `chrome-extension/` is a standalone MV3 extension (load unpacked) that copies
   `SITE - YYYY.MM.DD - ` from a video page, resolving the same-day count from the
@@ -75,7 +76,12 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   rule34video — **one session per account**, so the app can't log in itself —
   the extension popup hands Chrome's session to `backend/ext_bridge.py`
   (127.0.0.1:47834, `chrome-extension://` Origin only). Probe feeds read-only with
-  `tools/pmv_feed_probe.py`.
+  `tools/pmv_feed_probe.py`. **A site that is down never stalls a check**:
+  `backend/site_health.py` (`SiteHealth`, one per run, shared by the feed phase
+  and `PmvRunner`) trips a site on a connection failure (or two HTTP 5xx/429
+  link failures in a row; a feed failure is only one strike), after which its
+  remaining links are skipped at once with a recorded error — so they are
+  fetched again next check — and the other sites carry on.
 - `frontend/js/` — `app.js` (shell/stats), `creators.js` (creator panel + URL panel +
   `switchView`), `overlays.js` (Configure/Settings dialogs), `album.js`, `dupes.js`,
   `pmv.js`, `pmv_latest.js`. The PMV tab is the first and default view (it opens on
@@ -208,6 +214,15 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   exact. Notifications just surface untracked uploaders. The API allows 120
   requests/window (`X-RateLimit-Remaining`, `X-RateLimit-Reset` in epoch ms);
   `pmvhaven_scraper._get` waits out the window instead of spending the last few.
+- **X / Twitter** (PMV tab) — `x.com/<user>/media` (GraphQL `UserMedia`) is
+  members-only: a guest gets 404 → gallery-dl "AuthRequired: authenticated
+  cookies needed" (measured 2026-10-25). Uses the Settings ▸ Twitter cookies
+  (`cookies_path`, else `cookies_browser`). Walked by gallery-dl in a child
+  process streaming JSON lines (killable: cancel, or 180 s of silence), with
+  `ratelimit: abort` — gallery-dl's default waits up to 15 min inside a check.
+  Only `type == "video"` files count (photos, `animated_gif`, text skipped).
+  Numbering is **chronological** (so ∅ works); `latest` stops after 20 tweets in a
+  row at or below the newest known id. Keyed by the lowercase handle.
 - **pawchive** — the API is behind a Cloudflare JS challenge; only `file.pawchive.pw`
   is not. The in-app solve is Settings ▸ Pawchive ▸ Connect, which captures
   `cf_clearance` + the browser UA (`backend/pawchive_cf.py`). `cf_clearance` is

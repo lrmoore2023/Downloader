@@ -1,5 +1,6 @@
 /* ── PMV tracker tab ──────────────────────────────────────────────
-   Tracks PMV creators across rule34video / iwara / pawchive: a per-video ✓ / ✗
+   Tracks PMV creators across rule34video / iwara / pawchive / hmvmania /
+   pmvhaven / X (Twitter): a per-video ✓ / ✗
    checklist with catalogue numbers and copyable filename prefixes
    ("SadBernard - R34 - 02 - "). Metadata only — nothing here downloads. */
 
@@ -233,6 +234,10 @@ window.onPmvComplete = async function (r) {
     } else {
         showToast(`PMV fetch done: ${n} new video${n === 1 ? '' : 's'}`, 'success');
     }
+    if (r.twitter_auth) {
+        showToast('Twitter: ' + r.twitter_auth.replace(/^twitter: /, ''), 'error');
+    }
+    pmvSitesDownToast(r);
     if (r.iwara_auth_failed) {
         showToast('iwara login failed (' + (r.iwara_message || 'see Settings') + ') — listed anonymously', 'info');
     }
@@ -323,9 +328,22 @@ function renderPmvDetail(keepScroll) {
     el.scrollTop = scroll;
 }
 
+// Sites found down during a run were skipped after the first failure so the
+// rest of the run carried on; say so once, they're retried next time.
+function pmvSitesDownToast(r) {
+    const down = (r && r.sites_down) || {};
+    const names = Object.keys(down);
+    if (!names.length) return;
+    const label = p => (typeof PMV_SITE_LABEL !== 'undefined' && PMV_SITE_LABEL[p]) || p;
+    const skipped = names.reduce((a, p) => a + ((down[p] && down[p].skipped) || 0), 0);
+    showToast(`${names.map(label).join(', ')} looked down — ${skipped ? `skipped ${skipped} link${skipped === 1 ? '' : 's'}; ` : ''}the other sites were checked. They'll be retried next check.`, 'info');
+    names.forEach(p => Logger.error(`[PMV] ${label(p)} down this run: ${(down[p] && down[p].message) || ''}`));
+}
+
 function renderPmvSite(s, idx, titleMap) {
     const k = s.counts || {};
     const isPaw = s.platform === 'pawchive';
+    const isChrono = s.numbering === 'chronological';
     const items = (s.items || []).filter(it => pmvItemVisible(it, s));
     const who = s.display_name || s.username || s.user_id || '';
     const rank = idx === 0
@@ -339,6 +357,8 @@ function renderPmvSite(s, idx, titleMap) {
     ].filter(Boolean).join(' · ');
     const numbering = isPaw
         ? '<span class="pmv-hint" title="pawchive back-fills old posts, so the # column is only the current chronological rank; prefixes use the upload date (Name - Patreon - 2026.05.04 - ) and never shift. A day with more than one post adds that day&#39;s count (… - 2026.05.04 02 - ).">rank by date</span>'
+        : isChrono
+        ? '<span class="pmv-hint" title="Only posts with a video are listed. The # column is the chronological rank; prefixes use the post date in UTC (Name - Twitter - 2026.05.04 - ) and never shift. ∅ leaves a post out of the count. A day with more than one post adds that day&#39;s count (… - 2026.05.04 02 - ).">rank by date</span>'
         : '';
     const fetchSite = `<button class="btn-tiny pmv-fetch-btn" ${pmvBusy ? 'disabled' : ''} onclick="pmvFetchSite('${s.link_key}')"
              title="Look for new posts on this site only">Fetch latest</button>`;
@@ -353,14 +373,14 @@ function renderPmvSite(s, idx, titleMap) {
     const rescan = isPaw ? ''
         : `<button class="btn-tiny pmv-fetch-btn" ${pmvBusy ? 'disabled' : ''} onclick="pmvRescanSite('${s.link_key}')"
              title="Walk the whole listing again to spot deleted (gone) videos. Numbers never change — unless older videos turn up and nothing is ✓ yet, in which case the catalogue is re-sorted by date.">Full rescan</button>`;
-    const renumber = (isPaw || !(s.items || []).length) ? ''
+    const renumber = (isChrono || !(s.items || []).length) ? ''
         : `<button class="btn-tiny" onclick="pmvRenumber('${s.link_key}')"
              title="Re-sort the whole catalogue by upload date (for a first scan that missed videos, e.g. iwara before logging in). ✓ videos whose number moves will show a red “was NN” badge.">Renumber</button>`;
     const profile = s.url
         ? `<button class="btn-tiny" onclick="openLink('${encodeURIComponent(s.url)}')" title="${escapeHtml(s.url)}">Open profile ↗</button>` : '';
     let warn = '';
     if (s.last_error) warn = `<div class="pmv-warn pmv-warn-error">${escapeHtml(s.last_error)}</div>`;
-    else if (!isPaw && !s.initial_complete) warn = '<div class="pmv-warn">Not numbered yet — run <b>Fetch latest</b> once to walk the whole catalogue.</div>';
+    else if (!isChrono && !s.initial_complete) warn = '<div class="pmv-warn">Not numbered yet — run <b>Fetch latest</b> once to walk the whole catalogue.</div>';
     if (s.platform === 'iwara' && pmvDetail && pmvDetail.iwara_configured === false) {
         warn += '<div class="pmv-warn">Not logged in to iwara — videos hidden from guests are missing. Add your login under Settings ▸ Iwara, then <b>Full rescan</b>' +
                 (s.counts && s.counts.downloaded ? ' and <b>Renumber</b>' : '') + '.</div>';
@@ -454,6 +474,7 @@ function renderPmvRow(it, s, titleMap) {
     if (it.backfilled) b.push('<span class="badge badge-backfilled" title="Appeared after newer posts had already been numbered">backfilled</span>');
     if (it.shifted) b.push(`<span class="badge badge-shifted" onclick="pmvAckShift('${s.link_key}', '${it.id}')"
         title="Was #${pmvPad(it.number_at_check, s.width)} when you marked it ✓; now #${pmvPad(it.number, s.width)}. Rename the file, then click to accept the new number.">was ${pmvPad(it.number_at_check, s.width)}</span>`);
+    if (it.video_count > 1) b.push(`<span class="badge badge-q" title="This post carries ${it.video_count} videos">${it.video_count} videos</span>`);
     if (it.private) b.push('<span class="badge badge-private" title="Private on iwara — needs a logged-in account to view">private</span>');
     if (it.detail_pending) b.push('<span class="badge badge-skipped" title="Date / quality lookup failed; it is retried on the next fetch">no detail</span>');
     (it.media_kinds || []).forEach(kd => {
@@ -473,7 +494,7 @@ function renderPmvRow(it, s, titleMap) {
                     onclick="pmvSetStatus('${s.link_key}', '${it.id}', 'downloaded')">✓</button>
             <button class="pmv-st x${it.status === 'skipped' ? ' on' : ''}" title="Not downloading this one — click again to clear"
                     onclick="pmvSetStatus('${s.link_key}', '${it.id}', 'skipped')">✗</button>
-            ${s.platform === 'pawchive' ? `<button class="pmv-st ex${it.excluded ? ' on' : ''}"
+            ${s.numbering === 'chronological' ? `<button class="pmv-st ex${it.excluded ? ' on' : ''}"
                     title="${it.excluded ? 'Count this post again' : 'Not a release — leave it out of the catalogue count (numbers close up immediately)'}"
                     onclick="pmvToggleExcluded('${s.link_key}', '${it.id}')">∅</button>` : ''}
         </span>
@@ -648,7 +669,8 @@ function pmvPlatformLabel(l) {
     return { rule34video: { badge: 'rule34video', cls: '' }, iwara: { badge: 'iwara', cls: 'badge-twitter' },
              pawchive: { badge: (l.service || 'pawchive'), cls: 'badge-pawchive' },
              hmvmania: { badge: 'hmvmania', cls: 'badge-derpibooru' },
-             pmvhaven: { badge: 'pmvhaven', cls: 'badge-discord' } }[l.platform]
+             pmvhaven: { badge: 'pmvhaven', cls: 'badge-discord' },
+             twitter: { badge: 'X / Twitter', cls: 'badge-twitter' } }[l.platform]
         || { badge: l.platform || '?', cls: '' };
 }
 
@@ -700,7 +722,7 @@ function pmvEdRemove(i) {
 function pmvEdDescribe(info) {
     const who = info.display_name || info.username || info.user_id || '?';
     const site = { rule34video: 'rule34video', iwara: 'iwara', pawchive: `pawchive (${info.service || '?'})`,
-                   hmvmania: 'HMVMania', pmvhaven: 'PMVHaven' }[info.platform] || info.platform;
+                   hmvmania: 'HMVMania', pmvhaven: 'PMVHaven', twitter: 'X / Twitter (videos on /media)' }[info.platform] || info.platform;
     return `Detected: ${site} — ${who}` + (info.note ? ` (${info.note})` : '');
 }
 
@@ -719,7 +741,14 @@ async function pmvEdPreview() {
     if (document.getElementById('pmvEdNewLink').value.trim() !== url) return;   // typed more since
     preview.textContent = info && info.valid
         ? pmvEdDescribe(info) + '  ·  click Add site'
-        : 'Unrecognized URL — expected rule34video.com/members/…, iwara.tv/profile/…, pawchive.pw/{service}/user/…, hmvmania.com/author/…, or pmvhaven.com/profile/…';
+        : 'Unrecognized URL — expected rule34video.com/members/…, iwara.tv/profile/…, pawchive.pw/{service}/user/…, hmvmania.com/author/…, pmvhaven.com/profile/…, or x.com/{user}/media';
+    if (info && info.valid && info.platform === 'twitter') {
+        try {
+            const acc = await pywebview.api.pmv_accounts_status();
+            const tw = acc && acc.twitter;
+            if (tw && !tw.signed_in) preview.textContent += '   ⚠ ' + (tw.message || 'X needs a signed-in session — add cookies under Settings ▸ Twitter.');
+        } catch (e) { /* ignore */ }
+    }
     if (info && info.valid && info.platform === 'iwara') {
         try {
             const st = await pywebview.api.iwara_login_status();
@@ -733,6 +762,7 @@ async function pmvEdPreview() {
 function pmvEdSameSite(a, b) {
     if (a.platform !== b.platform) return false;
     if (a.platform === 'pawchive') return a.service === b.service && a.user_id === b.user_id;
+    if (a.platform === 'twitter') return (a.username || a.user_id || '').toLowerCase() === (b.username || b.user_id || '').toLowerCase();
     if (a.platform === 'iwara' || a.platform === 'pmvhaven') return (a.user_id && a.user_id === b.user_id)
         || (a.username || '').toLowerCase() === (b.username || '').toLowerCase();
     return a.user_id === b.user_id;

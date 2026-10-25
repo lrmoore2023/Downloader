@@ -17,6 +17,14 @@ Per platform:
   numbering is chronological and old posts get back-filled), reusing the saved
   Cloudflare cookie/UA; a challenge page surfaces as `needs_cf_auth` so the UI
   can offer Reconnect, exactly as creator downloads do.
+* twitter — the /media timeline through gallery-dl in a child process
+  (twitter_pmv), signed in with the Settings ▸ Twitter cookies. Incremental
+  mode stops once it is past the newest known tweet; only video tweets are kept.
+
+A site that is down is skipped for the rest of the run (`SiteHealth`): the
+first link to hit it pays the retries, every later link on it fails at once
+with a recorded error and is fetched again next run, and the other sites carry
+on. One run shares one SiteHealth with the feed phase of a check.
 """
 
 import threading
@@ -28,14 +36,17 @@ from backend import iwara_scraper as iw
 from backend import pawchive_scraper as pw
 from backend import hmvmania_scraper as hmv
 from backend import pmvhaven_scraper as pmvh
+from backend import twitter_pmv as twp
 from backend.pawchive_links import post_media_kinds
 from backend.rate_limit import AdaptiveThrottle
+from backend.site_health import SiteHealth
 
 
 class LinkError(Exception):
-    def __init__(self, message, needs_cf_auth=False):
+    def __init__(self, message, needs_cf_auth=False, needs_twitter_auth=False):
         super().__init__(message)
         self.needs_cf_auth = needs_cf_auth
+        self.needs_twitter_auth = needs_twitter_auth
 
 
 class PmvRunner:
@@ -50,7 +61,8 @@ class PmvRunner:
     }
 
     def __init__(self, *, manifest_root_for, state, cancel=None,
-                 on_progress=None, on_complete=None, sessions=None):
+                 on_progress=None, on_complete=None, sessions=None, health=None,
+                 twitter_walk=None):
         self._root_for = manifest_root_for
         self._state = state or {}
         self._cancel = cancel or threading.Event()
@@ -59,6 +71,8 @@ class PmvRunner:
         self._sessions = dict(sessions or {})
         self._throttles = {p: AdaptiveThrottle(*v) for p, v in self.THROTTLES.items()}
         self._iwara_auth = None
+        self.health = health or SiteHealth()
+        self._twitter_walk = twitter_walk or twp.walk_media
         self.is_running = False
         self.result = None
 
@@ -120,7 +134,7 @@ class PmvRunner:
         result = {
             "cancelled": False, "total_new": 0, "per_creator": {}, "errors": [],
             "needs_cf_auth": False, "iwara_auth_failed": False, "iwara_message": "",
-            "iwara_token": None, "links_done": 0,
+            "iwara_token": None, "links_done": 0, "twitter_auth": "", "sites_down": {},
         }
         try:
             for job in jobs:
@@ -134,11 +148,20 @@ class PmvRunner:
                 key = pt.link_key(link)
                 path = pt.manifest_path(self._root_for(cid), key)
                 label = f"{creator.get('name', '?')} · {pt.link_site_code(link)}"
+                if self.health.is_down(platform):
+                    # Don't spend another retry budget on a site that is down;
+                    # recorded as failed, so the next run fetches it again.
+                    self.health.note_skip(platform)
+                    self._record_error(result, pc, job, path,
+                                       f"skipped — {platform} looks down this run "
+                                       f"({self.health.reason(platform)[:160]}); will retry next check",
+                                       False, count_health=False)
+                    continue
                 self._emit("start", job, f"{label}: fetching…")
                 try:
                     fetcher = {"rule34video": self._fetch_r34, "iwara": self._fetch_iwara,
                                "pawchive": self._fetch_pawchive, "hmvmania": self._fetch_hmvmania,
-                               "pmvhaven": self._fetch_pmvhaven}.get(platform)
+                               "pmvhaven": self._fetch_pmvhaven, "twitter": self._fetch_twitter}.get(platform)
                     if fetcher is None:
                         raise LinkError(f"unsupported platform {platform!r}")
                     with pt.manifest_lock(path):
@@ -158,6 +181,7 @@ class PmvRunner:
                         if manifest.get("numbering") == pt.LOCKED and not manifest.get("initial_complete"):
                             manifest["last_error"] = "Initial scan incomplete — run Fetch latest again"
                         pt.save_manifest(path, manifest)
+                    self.health.ok(platform)
                     pc["new"] += res["new"]
                     pc["gone"] += res.get("gone", 0)
                     result["total_new"] += res["new"]
@@ -166,6 +190,8 @@ class PmvRunner:
                                f"{label}: {res['new']} new" + (f", {res['gone']} gone" if res.get("gone") else ""),
                                new=res["new"], gone=res.get("gone", 0), total=len(manifest["items"]))
                 except LinkError as e:
+                    if e.needs_twitter_auth:
+                        result["twitter_auth"] = str(e)
                     self._record_error(result, pc, job, path, str(e), e.needs_cf_auth)
                 except Exception as e:                       # never let one site kill the run
                     self._record_error(result, pc, job, path, f"{e.__class__.__name__}: {e}", False)
@@ -177,6 +203,7 @@ class PmvRunner:
                     result["iwara_message"] = auth.message
                 if auth.user_token_changed:
                     result["iwara_token"] = auth.user_token
+            result["sites_down"] = self.health.down()
             self.result = result
             self.is_running = False
             try:
@@ -185,7 +212,11 @@ class PmvRunner:
                 pass
         return result
 
-    def _record_error(self, result, pc, job, path, message, needs_cf_auth):
+    def _record_error(self, result, pc, job, path, message, needs_cf_auth, count_health=True):
+        platform = job["link"].get("platform")
+        if count_health and not self.health.is_down(platform) and self.health.failed(platform, message):
+            self._emit("info", job, f"{platform} looks down — skipping its other links this run; "
+                                    f"the other sites carry on")
         pc["errors"] += 1
         result["errors"].append({"creator_id": job["creator"].get("id", ""),
                                  "link_key": pt.link_key(job["link"]), "message": message})
@@ -460,3 +491,49 @@ class PmvRunner:
         if not fetched and manifest.get("items"):
             raise LinkError("pawchive: listing came back empty — nothing changed")
         return fetched, True, True
+
+    # ── twitter ─────────────────────────────────────────────────────
+
+    def _fetch_twitter(self, job, manifest):
+        """Every video tweet on x.com/<user>/media. A full walk (first time, or
+        mode 'full') reads the whole timeline; 'latest' stops after STOP_AFTER
+        tweets in a row at or below the newest one already recorded."""
+        link, mode = job["link"], job.get("mode", "latest")
+        username = link.get("username") or link.get("user_id") or ""
+        if not username:
+            raise LinkError("twitter: link has no username")
+        cookies_path, cookies_browser, problem = twp.auth_options(self._state)
+        if problem and self._twitter_walk is twp.walk_media:
+            raise LinkError(f"twitter: {problem}", needs_twitter_auth=True)
+        known = manifest.get("items", {})
+        incremental = mode == "latest" and bool(manifest.get("initial_complete")) and bool(known)
+        stop_below = max((int(k) for k in known if str(k).isdigit()), default=0) if incremental else 0
+        seen = {"n": 0}
+
+        def on_event(kind, d):
+            if kind == "tweet":
+                seen["n"] += 1
+                if seen["n"] == 1 or seen["n"] % 50 == 0:
+                    self._emit("page", job, f"{seen['n']} media posts read", count=seen["n"])
+            elif kind == "log" and d.get("level") == "warning":
+                self._emit("info", job, f"twitter: {(d.get('msg') or '')[:200]}")
+
+        try:
+            res = self._twitter_walk(username, cookies_path=cookies_path, cookies_browser=cookies_browser,
+                                     stop_below=stop_below, should_cancel=self._cancelled,
+                                     on_event=on_event)
+        except twp.AuthError as e:
+            raise LinkError(f"twitter: {e}", needs_twitter_auth=True)
+        except twp.SiteError as e:
+            raise LinkError(f"twitter: {e}")
+        if res.get("cancelled") or self._cancelled():
+            return [], False, False
+        fetched = twp.video_items(res["tweets"], username)
+        if not incremental:
+            total = (res.get("user") or {}).get("media_count")
+            if isinstance(total, int) and total > len(res["tweets"]) + 5:
+                self._emit("info", job, f"twitter: the timeline listed {len(res['tweets'])} media posts; "
+                                        f"the profile counts {total} (X may hide some, e.g. deleted ones)")
+            if not fetched and known:
+                raise LinkError("twitter: timeline came back with no videos — nothing changed")
+        return fetched, (not incremental), True

@@ -54,6 +54,8 @@ from backend import r34video_scraper as r34
 from backend import iwara_scraper as iw
 from backend import hmvmania_scraper as hmv
 from backend import pmvhaven_scraper as pmvh
+from backend import twitter_pmv as twp
+from backend.site_health import SiteHealth
 from backend.library_import import scan_library
 from backend.media_library import scan_creator_media
 from backend.media_server import MediaServer
@@ -859,6 +861,8 @@ class Api:
                                            and state.get("pawchive_signed_in_at")),
                          "at": state.get("pawchive_signed_in_at") or ""},
             "pmvhaven": {"signed_in": bool((state.get("pmvhaven_api_key") or "").strip()), "at": ""},
+            "twitter": {"signed_in": not twp.auth_options(state)[2], "at": "",
+                        "message": twp.auth_options(state)[2]},
             "simpcity": {"signed_in": bool(state.get("simpcity_cookies_path")
                                            and os.path.isfile(state.get("simpcity_cookies_path"))
                                            and state.get("simpcity_signed_in_at")),
@@ -3485,6 +3489,14 @@ class Api:
                     "url": pmvh.profile_url(uid or username),
                     "site_code": pt.default_site_code("pmvhaven"),
                     "note": "" if uid else "profile lookup failed — will retry on fetch"}
+        if "x.com" in low or "twitter.com" in low:
+            m = twp.parse_profile_url(url)
+            if not m:
+                return {"valid": False}
+            username = m["username"]
+            return {"valid": True, "platform": "twitter", "user_id": username.lower(),
+                    "username": username, "display_name": "@" + username,
+                    "url": twp.media_url(username), "site_code": pt.default_site_code("twitter")}
         if "pawchive" in low:
             pw = pw_parse_creator_url(url)
             if not pw:
@@ -3534,6 +3546,12 @@ class Api:
                 out["site_code"] = pt.default_site_code("pawchive", out["service"])
         elif link["platform"] in ("iwara", "pmvhaven"):
             if not out["username"] and not out["user_id"]:
+                return None
+        elif link["platform"] == "twitter":
+            # Keyed by the handle (lowercase): the manifest is twitter_<handle>.json.
+            out["username"] = out["username"] or out["user_id"]
+            out["user_id"] = out["username"].lower()
+            if not out["user_id"]:
                 return None
         elif not out["user_id"]:
             return None
@@ -3743,7 +3761,7 @@ class Api:
             with pt.manifest_lock(path):
                 m = pt.load_manifest(path, link.get("platform"), link.get("user_id"))
                 if m.get("numbering") != pt.CHRONOLOGICAL:
-                    return {"error": "Only pawchive posts can be left out of the count — "
+                    return {"error": "Only pawchive / Twitter posts can be left out of the count — "
                                      "rule34video / iwara numbers are locked to the site's listing"}
                 for vid in item_ids or []:
                     it = m["items"].get(str(vid))
@@ -3851,11 +3869,14 @@ class Api:
             return {"error": "No PMV creators yet"}
         self._pmv_cancel = threading.Event()
         cancel = self._pmv_cancel
+        # One health record for the whole check: a site the feed phase finds
+        # down is skipped by the runner instead of retried link by link.
+        health = SiteHealth()
         self._pmv_runner = PmvRunner(
             manifest_root_for=lambda cid, _s=state: self._pmv_root(cid, _s),
             state=state, cancel=cancel,
             on_progress=lambda d: self._push_js("onPmvProgress", d),
-            on_complete=lambda r: None)
+            on_complete=lambda r: None, health=health)
         runner = self._pmv_runner
 
         def work():
@@ -3867,12 +3888,13 @@ class Api:
                     state_path=self._pmv_feed_state_path(state), sources=sources,
                     pawchive_fetch=paw_fetch, run_jobs=runner.run, cancel=cancel,
                     on_progress=lambda d: self._push_js("onPmvProgress", d),
-                    mode=mode, sweep_pawchive=bool(sweep_pawchive))
+                    mode=mode, sweep_pawchive=bool(sweep_pawchive), health=health)
                 summary = check.run()
                 rr = summary.pop("runner", None) or {}
                 res.update({k: v for k, v in rr.items() if k in (
                     "errors", "total_new", "per_creator", "needs_cf_auth",
-                    "iwara_auth_failed", "iwara_message", "iwara_token")})
+                    "iwara_auth_failed", "iwara_message", "iwara_token", "twitter_auth")})
+                res["sites_down"] = health.down()
                 res["cancelled"] = bool(summary.get("cancelled") or rr.get("cancelled"))
                 res["check"] = summary
                 auth = getattr(sources.get("iwara"), "auth", None)

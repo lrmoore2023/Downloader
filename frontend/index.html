@@ -92,7 +92,7 @@
                         </label>
                         <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulk('downloaded')" title="Mark the selected videos downloaded">✓ Selected</button>
                         <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulk('skipped')" title="Mark the selected videos as not downloading">✗ Selected</button>
-                        <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulkExclude()" title="Leave the selected pawchive posts out of the catalogue count (not a release)">∅ Selected</button>
+                        <button class="btn btn-secondary btn-sm" onclick="pmvLatestBulkExclude()" title="Leave the selected pawchive / Twitter posts out of the catalogue count (not a release)">∅ Selected</button>
                         <select class="input-field pmv-sort" id="pmvLatestSite" onchange="pmvLatestSetSite(this.value)" title="Only show one site"></select>
                         <input type="search" class="input-field pmv-search" id="pmvLatestSearch"
                                placeholder="Filter by creator or title…" oninput="pmvLatestSetSearch(this.value)" aria-label="Filter by creator or title">
@@ -638,7 +638,7 @@
                 <div class="links-list" id="pmvEdLinks"></div>
                 <div class="form-row mt-3">
                     <input type="text" class="input-field" id="pmvEdNewLink" aria-label="New site link"
-                           placeholder="Paste a rule34video.com/members/…, iwara.tv/profile/…, pawchive.pw/{service}/user/…, hmvmania.com/author/…, or pmvhaven.com/profile/… URL">
+                           placeholder="Paste a rule34video.com/members/…, iwara.tv/profile/…, pawchive.pw/{service}/user/…, hmvmania.com/author/…, pmvhaven.com/profile/…, or x.com/{user}/media URL">
                     <button class="btn btn-secondary btn-sm" onclick="pmvEdAdd()">Add site</button>
                 </div>
                 <div class="field-hint preview-line" id="pmvEdPreview" role="status"></div>
@@ -793,7 +793,7 @@
                     </div>
                     <div class="form-row">
                         <span class="form-label"></span>
-                        <span class="field-hint">Sign in opens pawchive in a small window — log in normally (it closes by itself once you're in). rule34video allows only one session per account, so the app shares your browser's instead of logging in: with the PMV Prefix Chrome extension, click its toolbar icon ▸ <b>Send rule34video sign-in</b> while the app is open. Without it, rule34video creators are checked one by one. PMVHaven uses a personal API key instead: create one at <code>pmvhaven.com/api-keys</code> and paste it here. iwara uses the login under <b>Iwara</b>.</span>
+                        <span class="field-hint">Sign in opens pawchive in a small window — log in normally (it closes by itself once you're in). rule34video allows only one session per account, so the app shares your browser's instead of logging in: with the PMV Prefix Chrome extension, click its toolbar icon ▸ <b>Send rule34video sign-in</b> while the app is open. Without it, rule34video creators are checked one by one. PMVHaven uses a personal API key instead: create one at <code>pmvhaven.com/api-keys</code> and paste it here. iwara uses the login under <b>Iwara</b>. X / Twitter uses the cookies under <b>Twitter</b>.</span>
                     </div>
                 </section>
 

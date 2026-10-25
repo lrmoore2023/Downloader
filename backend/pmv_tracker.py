@@ -13,9 +13,10 @@ two numbering rules below are the contract that keeps existing filenames valid:
   its slot and is flagged `gone`; a video that reappears keeps its number too.
   These sites can only add at the top, so a stable append-only sequence is exact.
 
-* **chronological** (pawchive) — an archive that back-fills older posts, so the
-  number is recomputed on every walk as the post's chronological rank across ALL
-  posts (by published date, ties by numeric id). Posts that vanish stay in the
+* **chronological** (pawchive, twitter) — the number is recomputed on every
+  walk as the post's chronological rank across ALL posts (by published date,
+  ties by numeric id): pawchive back-fills older posts, and on both a post can be
+  left out of the count (`excluded`, the ∅ button) without disturbing the rest. Posts that vanish stay in the
   ordering (otherwise every later ✓ post would appear to shift). When a ✓ post's
   current number differs from the number it had when checked off, the UI shows a
   "shifted" warning (`number_at_check` vs `number`).
@@ -42,16 +43,17 @@ VERSION = 1
 
 LOCKED = "locked"
 CHRONOLOGICAL = "chronological"
-PLATFORMS = ("rule34video", "iwara", "pawchive", "hmvmania", "pmvhaven")
+PLATFORMS = ("rule34video", "iwara", "pawchive", "hmvmania", "pmvhaven", "twitter")
 NUMBERING_FOR_PLATFORM = {
     "rule34video": LOCKED,
     "iwara": LOCKED,
     "pawchive": CHRONOLOGICAL,
     "hmvmania": LOCKED,
     "pmvhaven": LOCKED,
+    "twitter": CHRONOLOGICAL,
 }
 DEFAULT_SITE_CODES = {"rule34video": "R34", "iwara": "Iwara", "pawchive": "Pawchive",
-                      "hmvmania": "HMVMania", "pmvhaven": "PMVHaven"}
+                      "hmvmania": "HMVMania", "pmvhaven": "PMVHaven", "twitter": "Twitter"}
 STATUSES = ("unreviewed", "downloaded", "skipped")
 
 # Attachment kinds that make a pawchive post a media post (a PMV arrives as a
@@ -300,8 +302,9 @@ def format_prefix(name, code, number, width=2, date=None, date_seq=None):
 
 # ── item helpers ────────────────────────────────────────────────────
 
-_ITEM_FIELDS = ("title", "url", "date", "duration", "quality",
-                "media_kinds", "link_hosts", "preview_state", "private", "unlisted")
+_OPTIONAL_FIELDS = ("media_kinds", "link_hosts", "preview_state", "private", "unlisted",
+                    "video_count")
+_ITEM_FIELDS = ("title", "url", "date", "duration", "quality") + _OPTIONAL_FIELDS
 
 
 def _new_item(f, now, initial=False):
@@ -326,7 +329,7 @@ def _new_item(f, now, initial=False):
         # preview, a poll, a text update…) — listed, but holds no number.
         "excluded": False,
     }
-    for k in ("media_kinds", "link_hosts", "preview_state", "private", "unlisted"):
+    for k in _OPTIONAL_FIELDS:
         if k in f:
             it[k] = f[k]
     return it
@@ -458,16 +461,18 @@ def renumber_locked(manifest, now=None):
     return {"changed": changed, "shifted": shifted}
 
 
-# ── merge: chronological numbering (pawchive) ───────────────────────
+# ── merge: chronological numbering (pawchive, twitter) ──────────────
 
 def _chrono_key(it):
     vid = str(it.get("id") or "")
     return (it.get("date") or "", (0, int(vid)) if vid.isdigit() else (1, vid))
 
 
-def merge_chronological(manifest, fetched, *, now=None):
-    """Fold a full listing walk into a chronological manifest and renumber every
-    post by (published date, id). Missing posts are kept in the ordering as gone.
+def merge_chronological(manifest, fetched, *, full=True, now=None):
+    """Fold a listing walk into a chronological manifest and renumber every post
+    by (published date, id). After a full walk, missing posts are kept in the
+    ordering as gone; an incremental walk (twitter's newest-first timeline,
+    stopped at known posts) only adds and refreshes.
     Returns {"new", "gone", "numbered": True}."""
     now = now or now_iso()
     items = manifest["items"]
@@ -487,7 +492,7 @@ def merge_chronological(manifest, fetched, *, now=None):
             new += 1
         else:
             _refresh_item(it, f)
-    gone = _mark_gone(manifest, fetched_ids, now)
+    gone = _mark_gone(manifest, fetched_ids, now) if full else 0
     renumber_chronological(manifest)
     if first_walk:
         manifest["initial_at"] = now
@@ -525,7 +530,7 @@ def set_excluded(item, excluded):
 
 def merge(manifest, fetched, *, full, complete, now=None):
     if manifest.get("numbering") == CHRONOLOGICAL:
-        return merge_chronological(manifest, fetched, now=now)
+        return merge_chronological(manifest, fetched, full=full, now=now)
     return merge_locked(manifest, fetched, full=full, complete=complete, now=now)
 
 
