@@ -152,3 +152,81 @@ def test_recovers_the_index_from_the_nas_alone(tmp_path, monkeypatch):
     assert res["creators_total"] == 1
     got = app.load_state()["creators"]["c1"]
     assert got["links"][0]["user_id"] == "42"
+
+
+# ── API keys: a separate plain file beside the snapshots (user's choice) ──
+
+def _keys_file(arch):
+    return os.path.join(str(arch), api.NAS_BACKUP_DIRNAME, api.NAS_KEYS_FILENAME)
+
+
+def _wait_for_keys(arch, want, timeout=5.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            data = json.load(open(_keys_file(arch), encoding="utf-8"))
+            if all(data.get(k) == v for k, v in want.items()):
+                return data
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.02)
+    return None
+
+
+def test_keys_are_written_to_the_nas(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    arch = tmp_path / "arch"; arch.mkdir()
+    app.save_state({"archive_dir": str(arch), "derpibooru_api_key": "DK",
+                    "pmvhaven_api_key": "PK", "iwara_password": "IP",
+                    "pawchive_cookies_path": "C:/secret/cookies.txt"})
+    data = _wait_for_keys(arch, {"derpibooru_api_key": "DK", "pmvhaven_api_key": "PK",
+                                 "iwara_password": "IP"})
+    assert data is not None
+    assert "pawchive_cookies_path" not in data      # cookie jars stay local
+    # a later key change updates the same file
+    app.save_state({"discord_token": "DT"})
+    assert _wait_for_keys(arch, {"discord_token": "DT", "derpibooru_api_key": "DK"})
+
+
+def test_blank_keys_never_wipe_the_nas_copy(tmp_path, monkeypatch):
+    # Fresh install: pointing at the archive dir with every key blank must not
+    # overwrite the copy it is about to recover from.
+    arch = tmp_path / "arch"; arch.mkdir()
+    (tmp_path / "old").mkdir()
+    old = _app(tmp_path / "old", monkeypatch)
+    old.save_state({"archive_dir": str(arch), "pmvhaven_api_key": "PK"})
+    assert _wait_for_keys(arch, {"pmvhaven_api_key": "PK"})
+
+    fresh = _app(tmp_path, monkeypatch)
+    fresh.save_state({"archive_dir": "", "pmvhaven_api_key": ""})
+    fresh.save_state({"archive_dir": str(arch)})
+    time.sleep(0.3)
+    assert json.load(open(_keys_file(arch), encoding="utf-8"))["pmvhaven_api_key"] == "PK"
+
+
+def test_recover_restores_keys_only_into_blanks(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    arch = tmp_path / "arch"; arch.mkdir()
+    app.save_state({"archive_dir": str(arch), "creators": CREATOR,
+                    "discord_token": "OLD-DT", "pmvhaven_api_key": "PK"})
+    assert _wait_for_keys(arch, {"discord_token": "OLD-DT", "pmvhaven_api_key": "PK"})
+
+    # wipe this machine, then a new Discord token is entered before recovering
+    app.save_state({"creators": {}, "discord_token": "", "pmvhaven_api_key": ""})
+    app.save_state({"discord_token": "NEW-DT"})
+    res = app.recover_from_backup()
+    s = app.load_state()
+    assert s["pmvhaven_api_key"] == "PK"
+    assert s["discord_token"] == "NEW-DT"
+    assert res["keys_restored"] == 1
+    assert api.NAS_KEYS_FILENAME in res["sources"]
+
+
+def test_startup_seeds_keys_saved_before_the_nas_copy_existed(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    arch = tmp_path / "arch"; arch.mkdir()
+    (tmp_path / "app_state.json").write_text(json.dumps(
+        {"archive_dir": str(arch), "creators": CREATOR, "derpibooru_api_key": "DK"}),
+        encoding="utf-8")
+    app._ensure_backup_seed()
+    assert _wait_for_keys(arch, {"derpibooru_api_key": "DK"})

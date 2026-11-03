@@ -70,7 +70,7 @@ function loadSettingsFromState(state) {
 }
 
 function persistSettings() {
-    pywebview.api.save_state({
+    return pywebview.api.save_state({
         archive_dir: Settings.archiveDir,
         library_root: Settings.libraryRoot,
         cf_concurrency: Settings.concurrency,
@@ -283,13 +283,23 @@ function closeSettings() {
 // ── Rebuild library ─────────────────────────────────────────────
 
 async function recoverFromBackup() {
-    closeSettings();
+    // Wait for the form's save: landing after the recovery it would write
+    // the still-blank key fields back over the restored keys.
+    await persistSettings();
+    UI.closeOverlay('settingsOverlay');
     Logger.info('Recovering creators from backup state files…');
     const r = await pywebview.api.recover_from_backup();
     if (r && r.error) { showToast('Recovery failed', 'error'); Logger.error(r.error); return; }
-    Logger.success(`Recovered +${r.creators_added} creator(s), +${r.links_added} link(s) `
+    Logger.success(`Recovered +${r.creators_added} creator(s), +${r.links_added} link(s), `
+        + `${r.keys_restored || 0} API key(s) `
         + `from ${r.sources.length ? r.sources.join(', ') : 'no backup found'}. Total: ${r.creators_total}.`);
-    showToast(`Recovered ${r.creators_added} creator(s), ${r.links_added} link(s)`, 'success');
+    showToast(`Recovered ${r.creators_added} creator(s), ${r.links_added} link(s)`
+        + (r.keys_restored ? `, ${r.keys_restored} key(s)` : ''), 'success');
+    if (r.keys_restored) {
+        // Settings holds the pre-recovery (blank) keys; reload so the next
+        // persistSettings() doesn't write them back over the restored ones.
+        loadSettingsFromState(await pywebview.api.load_state());
+    }
     await refreshCreators(currentCreatorId);
 }
 

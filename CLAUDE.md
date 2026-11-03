@@ -150,6 +150,12 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   while every archive DB survived. `recover_from_backup()` reads these too, so a
   fresh install with an empty index can rebuild from the NAS alone. These
   snapshots carry **no credentials** — the archive dir is a shared network share.
+  The API keys/tokens (`NAS_KEY_FIELDS`: derpibooru + pmvhaven keys, Discord
+  token, iwara login/token) go separately into one **plain** file,
+  `.state-backups/api_keys.json` (user's choice, 2026-11-02, knowing the share is
+  shared). It is only ever updated with non-empty values, so a fresh install
+  can't blank it before recovering; `recover_from_backup()` fills blank keys
+  only. Cookie jars are not copied (session-bound, they expire).
 
 ### Re-adding a creator never re-downloads
 

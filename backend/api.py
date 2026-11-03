@@ -76,6 +76,14 @@ STATE_BACKUP_KEEP = 40
 # _nas_backup_payload) because the archive dir is a shared network location.
 NAS_BACKUP_DIRNAME = ".state-backups"
 NAS_BACKUP_KEEP = 20
+# The API keys/tokens, kept apart from the index snapshots in one plain file in
+# the same NAS folder so a clean install gets them back too. The user chose an
+# unencrypted file (2026-11-02) knowing the archive dir is a shared share.
+# Cookie jars are left out: they are session-bound and expire anyway.
+NAS_KEYS_FILENAME = "api_keys.json"
+NAS_KEY_FIELDS = ("derpibooru_api_key", "pmvhaven_api_key", "discord_token",
+                  "discord_token_type", "iwara_email", "iwara_password",
+                  "iwara_token")
 AVATAR_DIR = os.path.join(APP_DIR, ".avatars")
 
 
@@ -406,6 +414,42 @@ class Api:
 
         threading.Thread(target=write, daemon=True).start()
 
+    @staticmethod
+    def _key_values(state):
+        return {k: state.get(k, "") or "" for k in NAS_KEY_FIELDS}
+
+    def _backup_keys_nas(self, state):
+        """Update <archive_dir>/.state-backups/api_keys.json with the current
+        keys, off the main thread for the same reason as the index mirror.
+
+        Only non-empty values are written over what is there: a fresh install
+        pointing at the archive dir (keys still blank) must not wipe the very
+        copy it is about to recover from."""
+        root = self._nas_backup_dir(state)
+        if not root:
+            return
+        current = {k: v for k, v in self._key_values(state).items() if v}
+        if not current:
+            return
+
+        def write():
+            with self._nas_backup_lock:
+                try:
+                    path = os.path.join(root, NAS_KEYS_FILENAME)
+                    payload = self._parse_state_file(path) if os.path.isfile(path) else None
+                    payload = payload if isinstance(payload, dict) else {}
+                    payload.update(current)
+                    payload["saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    os.makedirs(root, exist_ok=True)
+                    fd, tmp = tempfile.mkstemp(dir=root, suffix=".tmp")
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, indent=2)
+                    _replace_with_retry(tmp, path)
+                except Exception:
+                    pass
+
+        threading.Thread(target=write, daemon=True).start()
+
     def _ensure_backup_seed(self):
         """At startup, guarantee at least one recovery point exists for the
         current (healthy) state, so even a session that never edits anything
@@ -418,6 +462,16 @@ class Api:
             has_any = False
         if not has_any:
             self._backup_state(self.load_state())
+        # Keys saved before the NAS copy existed would otherwise only reach it
+        # the next time one of them changes.
+        try:
+            state = self.load_state()
+            root = self._nas_backup_dir(state)
+            if (root and any(self._key_values(state).values())
+                    and not os.path.isfile(os.path.join(root, NAS_KEYS_FILENAME))):
+                self._backup_keys_nas(state)
+        except Exception:
+            pass
 
     def save_state(self, state):
         # Merge into existing state so partial updates from the UI (which omit
@@ -428,6 +482,8 @@ class Api:
             merged = self._read_state_unlocked()
             prev_creators = json.dumps(merged.get("creators", {}), sort_keys=True)
             prev_pmv = json.dumps(merged.get("pmv_creators", {}), sort_keys=True)
+            prev_keys = self._key_values(merged)
+            prev_archive = merged.get("archive_dir", "")
             merged.update(state or {})
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(STATE_FILE), suffix=".tmp")
             try:
@@ -445,6 +501,12 @@ class Api:
             if (json.dumps(merged.get("creators", {}), sort_keys=True) != prev_creators
                     or json.dumps(merged.get("pmv_creators", {}), sort_keys=True) != prev_pmv):
                 self._backup_state(merged)
+            if (self._key_values(merged) != prev_keys
+                    or merged.get("archive_dir", "") != prev_archive):
+                try:
+                    self._backup_keys_nas(merged)
+                except Exception:
+                    pass
 
     # ── Migration: legacy artist_map/cf_artist_map → creators ───────
 
@@ -618,6 +680,19 @@ class Api:
             if touched or links:
                 used.append(os.path.basename(path))
 
+        # API keys from the NAS copy — only into blanks, so a key entered on
+        # this install is never replaced by an older one.
+        keys_restored = []
+        nas = self._nas_backup_dir(state)
+        keys = self._parse_state_file(os.path.join(nas, NAS_KEYS_FILENAME)) if nas else None
+        for k in NAS_KEY_FIELDS:
+            v = (keys or {}).get(k)
+            if v and isinstance(v, str) and not (state.get(k) or ""):
+                state[k] = v
+                keys_restored.append(k)
+        if keys_restored:
+            used.append(NAS_KEYS_FILENAME)
+
         state["creators"] = creators
         state["pmv_creators"] = pmv
         self.save_state(state)
@@ -626,6 +701,7 @@ class Api:
             "creators_added": len(creators) - before,
             "creators_total": len(creators),
             "pmv_added": len(pmv) - pmv_before,
+            "keys_restored": len(keys_restored),
             "sources": used,
         }
 
