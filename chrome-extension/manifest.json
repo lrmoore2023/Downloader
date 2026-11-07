@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "PMV Prefix",
-  "version": "1.3.0",
-  "description": "On a video page, one click copies the filename prefix \"SITE - YYYY.MM.DD - \" (R34, Iwara, HMVMania, PMVHaven, Patreon via pawchive), numbering same-day uploads. Its toolbar popup can also share your rule34video sign-in and your Discord token with the Downloader app.",
+  "version": "1.4.0",
+  "description": "On a video page, one click copies the filename prefix \"SITE - YYYY.MM.DD - \" (R34, Iwara, HMVMania, PMVHaven, Patreon via pawchive), numbering same-day uploads. Its toolbar popup can also share your rule34video and X sign-ins and your Discord token with the Downloader app.",
   "permissions": [
     "clipboardWrite",
     "cookies",
@@ -15,6 +15,8 @@
     "https://pawchive.pw/*",
     "https://rule34video.com/*",
     "https://discord.com/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
     "http://127.0.0.1:47834/*"
   ],
   "background": {

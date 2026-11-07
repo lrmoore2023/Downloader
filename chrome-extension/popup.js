@@ -1,8 +1,9 @@
 // Hands Chrome's own sign-ins to the Downloader app's localhost receiver
 // (backend/ext_bridge.py):
 //  * rule34video — only rule34video.com cookies are read;
-//  * Discord — the token background.js saw on discord.com's own API calls.
-// Both go only to 127.0.0.1, and the app checks them before keeping anything.
+//  * Discord — the token background.js saw on discord.com's own API calls;
+//  * X/Twitter — only x.com / twitter.com cookies are read.
+// They go only to 127.0.0.1, and the app checks them before keeping anything.
 
 const APP = 'http://127.0.0.1:47834';
 
@@ -49,6 +50,19 @@ async function sendDiscord() {
   await post('discord', { token: discordToken });
 }
 
+async function sendTwitter() {
+  const all = (await chrome.cookies.getAll({ domain: 'x.com' }))
+    .concat(await chrome.cookies.getAll({ domain: 'twitter.com' }));
+  if (!all.some(c => c.name === 'auth_token')) {
+    setStatus('Not signed in to x.com in Chrome — sign in there first.', 'err');
+    return;
+  }
+  const cookies = all.map(c => ({
+    name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure,
+  }));
+  await post('twitter', { cookies });
+}
+
 function wire(id, fn) {
   const btn = document.getElementById(id);
   btn.addEventListener('click', async () => {
@@ -66,3 +80,4 @@ function wire(id, fn) {
 
 wire('send', sendR34);
 wire('sendDiscord', sendDiscord);
+wire('sendTwitter', sendTwitter);

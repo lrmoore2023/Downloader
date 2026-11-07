@@ -171,3 +171,34 @@ def test_ext_discord_token_kept_only_if_discord_accepts_it(monkeypatch):
     assert saved == {"discord_token": "good.tok", "discord_token_type": "user"}
     assert seen[-1] == "good.tok"                    # user token: raw, no "Bot " prefix
     assert pushed[-1][0] == "onDiscordTokenFromExt" and pushed[-1][1]["token"] == "good.tok"
+
+
+def test_ext_twitter_cookies_written_as_settings_cookie_file(tmp_path, monkeypatch):
+    from backend.api import Api
+    from backend.cookie_manager import validate_cookies_file
+    api = Api.__new__(Api)
+    saved, pushed = {}, []
+    api.save_state = lambda d: saved.update(d)
+    api._push_js = lambda *a: pushed.append(a)
+    monkeypatch.setattr(sl, "APP_DIR", str(tmp_path))
+
+    # Signed out (guest cookies only) → nothing kept.
+    assert not api._on_ext_session("twitter", {"cookies": [_c("guest_id", "g", ".x.com")]})["ok"]
+    assert not saved and not os.listdir(tmp_path)
+
+    jar = [_c("auth_token", "a1", ".x.com"), _c("ct0", "c1", ".x.com"), _c("twid", "u", "x.com"),
+           _c("other", "z", ".example.com")]
+    res = api._on_ext_session("twitter", {"cookies": jar})
+    assert res["ok"]
+    path = saved["cookies_path"]
+    assert path == str(tmp_path / ".twitter_cookies.txt") and saved["auth_method"] == "file"
+    assert validate_cookies_file(path)["valid"]
+    body = open(path, encoding="utf-8").read()
+    assert "example.com" not in body and "\tauth_token\ta1" in body and ".x.com\tTRUE" in body
+    assert pushed[-1][0] == "onTwitterCookiesFromExt"
+
+    # gallery-dl (which does the X walks) reads the file back.
+    from gallery_dl.util import cookiestxt_load
+    with open(path, encoding="utf-8") as f:
+        names = {c.name for c in cookiestxt_load(f)}
+    assert {"auth_token", "ct0", "twid"} <= names

@@ -1033,6 +1033,8 @@ class Api:
         user token) only if /users/@me accepts it."""
         if platform == "discord":
             return self._on_ext_discord_token(payload)
+        if platform == "twitter":
+            return self._on_ext_twitter_cookies(payload)
         if platform not in site_login.SITES:
             return {"ok": False, "message": f"unsupported site {platform!r}"}
         rows = site_login.site_cookies(payload.get("cookies") or [], platform)
@@ -1070,6 +1072,27 @@ class Api:
         self.save_state({"discord_token": token, "discord_token_type": "user"})
         self._push_js("onDiscordTokenFromExt", {"token": token, "token_type": "user", "account": who})
         return {"ok": True, "message": f"Downloader now uses Discord account {who}"}
+
+    TWITTER_COOKIES_FILE = ".twitter_cookies.txt"
+
+    def _on_ext_twitter_cookies(self, payload):
+        """X/Twitter cookies from Chrome, written as the Settings ▸ Twitter cookie
+        file, so there's no cookies.txt to export and browse to. Same check as
+        a browsed file (`validate_cookies_file`: an auth_token must be there),
+        plus ct0, which gallery-dl sends as the CSRF token on every API call."""
+        rows = [c for c in site_login._normalize(payload.get("cookies") or [])
+                if site_login._domain_ok(c["domain"], ("x.com", "twitter.com")) and c["value"]]
+        names = {c["name"] for c in rows}
+        if "auth_token" not in names or "ct0" not in names:
+            return {"ok": False, "message": "Not signed in to x.com in Chrome (no auth_token/ct0 cookie)."}
+        path = site_login.write_cookies(rows, os.path.join(site_login.APP_DIR, self.TWITTER_COOKIES_FILE),
+                                        "— X/Twitter session from Chrome")
+        check = validate_cookies_file(path)
+        if not check.get("valid"):
+            return {"ok": False, "message": check.get("message") or "Cookie file check failed"}
+        self.save_state({"cookies_path": path, "auth_method": "file"})
+        self._push_js("onTwitterCookiesFromExt", {"path": path, "message": check.get("message")})
+        return {"ok": True, "message": "Downloader now uses Chrome's X sign-in"}
 
     def pmv_account_logout(self, platform):
         """Forget a site's sign-in. pawchive keeps its Cloudflare clearance."""

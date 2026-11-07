@@ -51,6 +51,16 @@ tab and try again. This replaces the app's token with **the account Chrome is
 signed in to**, so if the app should use a secondary account, sign that account
 in to Chrome's Discord tab before you click.
 
+## Sending the X/Twitter sign-in
+
+Signed in at x.com in Chrome, click the toolbar icon ▸ **Send X sign-in**. The
+extension reads Chrome's x.com / twitter.com cookies (those sites only) and posts
+them to `127.0.0.1:47834`. The app writes them to `.twitter_cookies.txt`
+(gitignored) and sets that file as Settings ▸ Twitter's cookie file, so there's no
+cookies.txt to export and browse to. It needs `auth_token` and `ct0`. The app
+shares Chrome's session, so it doesn't sign Chrome out. If a fetch reports
+"AuthRequired" later, click it again.
+
 ## Install (unpacked)
 
 1. Open `chrome://extensions`.

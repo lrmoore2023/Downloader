@@ -116,6 +116,17 @@ window.onDiscordTokenFromExt = function (d) {
     if (window.showToast) showToast(`Discord token received from Chrome (${d.account || 'signed in'})`);
 };
 
+// The Chrome extension sent the x.com sign-in; the backend wrote it as the
+// Twitter cookie file. Mirror it, or persistSettings() would restore the old path.
+window.onTwitterCookiesFromExt = function (d) {
+    if (!d || !d.path) return;
+    Settings.cookiesPath = d.path;
+    document.getElementById('cookiesPath').value = d.path;
+    setAuthMethod('file');
+    updateCookieStatus({ valid: true, message: d.message || 'Signed in (from Chrome)' });
+    if (window.showToast) showToast('X/Twitter sign-in received from Chrome', 'success');
+};
+
 function setUpdateDiscordTokenType() {
     const el = document.getElementById('setDiscordTokenType');
     Settings.discordTokenType = el.value === 'bot' ? 'bot' : 'user';
