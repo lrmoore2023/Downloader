@@ -20,6 +20,7 @@ stock `requests` session.
 
 import html as _html
 import os
+import random
 import re
 import time
 
@@ -212,9 +213,38 @@ def _retry_after(resp, default):
         return default
 
 
+def _sleep(seconds, cancelled):
+    end = time.monotonic() + seconds
+    while not cancelled():
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(0.2, left))
+
+
+def _backoff(attempt):
+    """1.5, 3, 6, 12, 20, 20 … s plus a little jitter."""
+    return min(20.0, 1.5 * (2 ** attempt)) + random.uniform(0, 0.5)
+
+
+# Listing pages are walked in one go and a single lost page aborts the whole
+# walk, so they get a deep retry budget; a failed video page only leaves that
+# video `detail_pending` for the next run.
+LISTING_RETRIES = 8
+DETAIL_RETRIES = 5
+
+
 def fetch_text(session, url, throttle=None, should_cancel=None, retries=3, timeout=(15, 60)):
     """GET with pacing + bounded retries. 404 → NotFound (never retried);
-    429/5xx and connection errors back off and retry; anything else → SiteError."""
+    429/5xx and connection errors back off and retry; anything else → SiteError.
+
+    A 429 (or any response carrying Retry-After) is a rate signal and slows the
+    shared throttle. A bare 5xx is not: measured 2026-11-07 the site answered
+    ~40% of requests — home page included, at well under 1 req/s — with a 93-byte
+    503 "can't connect to database" from its KVS backend, flapping per request.
+    Widening the shared interval on those pins it at the ceiling (each failure
+    doubles it, each success only takes off 10%) without helping, so a bare 5xx
+    just waits and retries that one request."""
     cancelled = should_cancel or (lambda: False)
     last = "no attempt"
     for attempt in range(retries + 1):
@@ -235,11 +265,18 @@ def fetch_text(session, url, throttle=None, should_cancel=None, retries=3, timeo
             raise NotFound(url)
         if r.status_code == 429 or 500 <= r.status_code < 600:
             last = f"HTTP {r.status_code}"
-            wait = _retry_after(r, 2.0 * (attempt + 1))
-            if throttle:
-                throttle.on_throttled(wait)
+            if "can't connect to database" in (getattr(r, "text", "") or "")[:500]:
+                last += " (site database error)"
+            if attempt >= retries:
+                break
+            if r.status_code == 429 or r.headers.get("Retry-After"):
+                wait = _retry_after(r, 2.0 * (attempt + 1))
+                if throttle:
+                    throttle.on_throttled(wait)
+                else:
+                    _sleep(min(wait, 10), cancelled)
             else:
-                time.sleep(min(wait, 10))
+                _sleep(_backoff(attempt), cancelled)
             continue
         if r.status_code != 200:
             raise SiteError(f"HTTP {r.status_code} for {url}")
@@ -260,7 +297,8 @@ def iter_listing_pages(session, user_id, throttle=None, should_cancel=None):
         if should_cancel and should_cancel():
             return
         try:
-            html = fetch_text(session, listing_url(user_id, page), throttle, should_cancel)
+            html = fetch_text(session, listing_url(user_id, page), throttle, should_cancel,
+                              retries=LISTING_RETRIES)
         except NotFound:
             return
         items = parse_listing(html)
@@ -271,4 +309,5 @@ def iter_listing_pages(session, user_id, throttle=None, should_cancel=None):
 
 
 def fetch_video_detail(session, url, throttle=None, should_cancel=None):
-    return parse_video_page(fetch_text(session, url, throttle, should_cancel))
+    return parse_video_page(fetch_text(session, url, throttle, should_cancel,
+                                       retries=DETAIL_RETRIES))

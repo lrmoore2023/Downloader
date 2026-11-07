@@ -255,6 +255,36 @@ def test_r34_fetch_text_retries_then_succeeds_and_raises_on_other_errors():
         r34.fetch_text(FakeSession(), "missing", t)
 
 
+
+def test_r34_bare_5xx_retries_without_slowing_the_shared_throttle(monkeypatch):
+    # Measured 2026-11-07: ~40% of requests got a flapping 503 "can't connect to
+    # database". Those must not ratchet the shared interval up to its ceiling.
+    slept = []
+    monkeypatch.setattr(r34, "_sleep", lambda secs, cancelled: slept.append(secs))
+    db = FakeResp(503, "[FATAL]: can't connect to database defined in /admin/include/setup_db.php")
+    t = NoThrottle()
+    s = FakeSession({"u": [db, db, db, FakeResp(200, "ok")]})
+    assert r34.fetch_text(s, "u", t) == "ok"
+    assert t.throttled == [] and len(slept) == 3
+    s = FakeSession({"u": db})
+    with pytest.raises(r34.SiteError, match=r"HTTP 503 \(site database error\) after 3 attempts"):
+        r34.fetch_text(s, "u", t, retries=2)
+    assert len(s.calls) == 3 and len(slept) == 5        # no sleep after the last try
+
+
+def test_r34_listing_walk_survives_intermittent_503s(monkeypatch):
+    monkeypatch.setattr(r34, "_sleep", lambda secs, cancelled: None)
+    db = FakeResp(503, "can't connect to database")
+    page1 = FakeResp(200, LISTING_BLOCK)
+    page2 = FakeResp(200, LISTING_BLOCK.replace("4608707", "111").replace("4608699", "222"))
+    s = FakeSession({
+        r34.listing_url("7", 1): [db, db, db, db, db, page1],     # 6th try: past the old budget of 4
+        r34.listing_url("7", 2): [db, page2],
+    })
+    pages = list(r34.iter_listing_pages(s, "7", NoThrottle()))
+    assert [p for p, _ in pages] == [1, 2]
+
+
 # ── iwara fixtures ──────────────────────────────────────────────────
 
 IW_VIDEO_4K = {"id": "6vQpTzYELfZQ4h", "slug": "hmv-futa-bordello", "title": "【HMV-FUTA BORDELLO】",
