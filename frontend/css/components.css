@@ -857,7 +857,8 @@ details.help .help-body {
     color: var(--accent-text);
 }
 
-.chip.chip-twitter {
+.chip.chip-twitter,
+.chip.chip-bluesky {
     background: var(--neutral-soft);
     border-color: var(--neutral-line);
     color: var(--text-secondary);
@@ -1158,7 +1159,8 @@ details.help .help-body {
     color: var(--accent-text);
 }
 
-.link-badge.badge-twitter {
+.link-badge.badge-twitter,
+.link-badge.badge-bluesky {
     background: var(--neutral-soft);
     border-color: var(--neutral-line);
     color: var(--text-secondary);

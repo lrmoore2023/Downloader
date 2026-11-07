@@ -61,6 +61,18 @@ cookies.txt to export and browse to. It needs `auth_token` and `ct0`. The app
 shares Chrome's session, so it doesn't sign Chrome out. If a fetch reports
 "AuthRequired" later, click it again.
 
+## Sending the Bluesky sign-in
+
+Optional: the app downloads public Bluesky profiles without signing in. Signed
+in at bsky.app in a Chrome tab, click the toolbar icon ▸ **Send Bluesky sign-in**.
+Bluesky has no login cookies (bsky.app keeps its session in localStorage), so the
+extension reads that tab's current session (its short-lived access token, never
+the refresh token) and posts it to `127.0.0.1:47834`. The app uses it once to
+create its own app password named **Downloader** (replacing an older one of that
+name) and saves it as Settings ▸ Bluesky. Chrome stays signed in. Revoke it any
+time at bsky.app ▸ Settings ▸ Privacy and security ▸ App passwords. If the saved
+password still works, clicking again changes nothing.
+
 ## Install (unpacked)
 
 1. Open `chrome://extensions`.

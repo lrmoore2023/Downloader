@@ -568,13 +568,13 @@
                 </div>
                 <div class="form-row">
                     <span class="form-label"></span>
-                    <span class="field-hint" id="cfgFetchHint">Images/Videos apply to pawchive &amp; coomerfans (Twitter/Derpibooru always fetch everything). Uncheck <b>both</b> to track a creator's post links without downloading anything — no folder needed.</span>
+                    <span class="field-hint" id="cfgFetchHint">Images/Videos apply to pawchive, coomerfans &amp; Bluesky (Twitter/Derpibooru always fetch everything). Uncheck <b>both</b> to track a creator's post links without downloading anything — no folder needed.</span>
                 </div>
                 <div class="section-title sub">Links</div>
                 <div class="links-list" id="cfgLinks"></div>
 
                 <div class="form-row mt-3">
-                    <input type="text" class="input-field" id="cfgNewLink" aria-label="New link" placeholder="Paste a coomerfans (OF/Fansly), X/Twitter, derpibooru search, or Discord channel URL…">
+                    <input type="text" class="input-field" id="cfgNewLink" aria-label="New link" placeholder="Paste a coomerfans (OF/Fansly), X/Twitter, Bluesky, derpibooru search, or Discord channel URL…">
                     <button class="btn btn-secondary btn-sm" id="cfgAddBtn" onclick="cfgAddLink()">Add Link</button>
                 </div>
                 <div class="field-hint preview-line" id="cfgLinkPreview" role="status"></div>
@@ -673,6 +673,7 @@
                     <button type="button" class="settings-nav-item" data-target="set-sec-derpibooru">Derpibooru</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-discord">Discord</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-twitter">Twitter</button>
+                    <button type="button" class="settings-nav-item" data-target="set-sec-bluesky">Bluesky</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-filters">Link filters</button>
                     <button type="button" class="settings-nav-item" data-target="set-sec-library">Rebuild library</button>
                 </nav>
@@ -907,6 +908,26 @@
                             <span class="form-label"></span>
                             <span id="browserStatus" class="status-badge status-idle">Not extracted</span>
                         </div>
+                    </div>
+                </section>
+
+                <section class="settings-section" id="set-sec-bluesky" aria-labelledby="set-h-bluesky">
+                    <h3 class="section-title" id="set-h-bluesky">Bluesky sign-in</h3>
+                    <div class="field-hint mb-3">Optional. Public profiles (adult-labelled posts included) download without it; it's only needed for accounts that hide their posts from logged-out visitors.
+                        <b>Easiest:</b> with bsky.app open in a Chrome tab (signed in), click the PMV Prefix extension ▸ <b>Send Bluesky sign-in</b>. The app then makes its own app password, named “Downloader”, and fills it in below. Chrome stays signed in, and you can revoke the password any time at bsky.app ▸ Settings ▸ Privacy and security ▸ App passwords.
+                        Or create an app password there yourself and paste it here.</div>
+                    <div class="form-row">
+                        <span class="form-label">Handle</span>
+                        <input type="text" class="input-field" id="setBlueskyUser" placeholder="you.bsky.social" autocomplete="off" aria-label="Bluesky handle" onchange="setUpdateBluesky()">
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label">App password</span>
+                        <input type="password" class="input-field" id="setBlueskyPass" placeholder="xxxx-xxxx-xxxx-xxxx" autocomplete="off" aria-label="Bluesky app password" onchange="setUpdateBluesky()">
+                        <button class="btn btn-ghost btn-sm" onclick="testBlueskyLogin(this)">Test</button>
+                    </div>
+                    <div class="form-row">
+                        <span class="form-label"></span>
+                        <span id="blueskyStatus" class="status-badge status-idle">Not signed in (public profiles still download)</span>
                     </div>
                 </section>
 

@@ -40,8 +40,9 @@ from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
     pawchive_archive_path, twitter_archive_path, derpibooru_archive_path,
     discord_archive_path, errors_db_path, extract_into_folders, fetch_prefs, is_track_only,
-    simpcity_archive_path, LINK_COLLECTING,
+    simpcity_archive_path, bluesky_archive_path, LINK_COLLECTING,
 )
+from backend import bluesky as bsky
 from backend import album_track_runner as album_track
 from backend import simpcity_scraper as simpcity
 from backend.download_errors import open_readonly as open_errors_store
@@ -84,7 +85,8 @@ NAS_BACKUP_KEEP = 20
 NAS_KEYS_FILENAME = "api_keys.json"
 NAS_KEY_FIELDS = ("derpibooru_api_key", "pmvhaven_api_key", "discord_token",
                   "discord_token_type", "iwara_email", "iwara_password",
-                  "iwara_token")
+                  "iwara_token", "bluesky_username", "bluesky_app_password",
+                  "bluesky_pds")
 AVATAR_DIR = os.path.join(APP_DIR, ".avatars")
 
 
@@ -218,6 +220,11 @@ class Api:
             "derpibooru_filter_id": "56027",
             "discord_token": "",
             "discord_token_type": "user",
+            # Bluesky sign-in (optional): handle + app password, and the
+            # account's PDS (only used for self-hosted accounts). Credentials.
+            "bluesky_username": "",
+            "bluesky_app_password": "",
+            "bluesky_pds": "",
             "last_creator": "",
             # Albums tab — a registry isolated from the regular downloader's
             # `creators`. Each: {id, name, root_dir, links:[{url, site, password,
@@ -1035,6 +1042,8 @@ class Api:
             return self._on_ext_discord_token(payload)
         if platform == "twitter":
             return self._on_ext_twitter_cookies(payload)
+        if platform == "bluesky":
+            return self._on_ext_bluesky_session(payload)
         if platform not in site_login.SITES:
             return {"ok": False, "message": f"unsupported site {platform!r}"}
         rows = site_login.site_cookies(payload.get("cookies") or [], platform)
@@ -1093,6 +1102,53 @@ class Api:
         self.save_state({"cookies_path": path, "auth_method": "file"})
         self._push_js("onTwitterCookiesFromExt", {"path": path, "message": check.get("message")})
         return {"ok": True, "message": "Downloader now uses Chrome's X sign-in"}
+
+    def _on_ext_bluesky_session(self, payload):
+        """bsky.app's session from Chrome ({did, handle, accessJwt, service}).
+
+        Bluesky has no auth cookies, and gallery-dl signs in with a handle + app
+        password, so the browser's short-lived access token is used once to mint
+        the app's own app password (bluesky.APP_PASSWORD_NAME). If the saved one
+        still logs in to the same account, it is kept, so a second click doesn't
+        churn passwords. Chrome's refresh token is never sent or used."""
+        state = self.load_state()
+        did = (payload.get("did") or "").strip()
+        user = (state.get("bluesky_username") or "").strip()
+        pw = (state.get("bluesky_app_password") or "").strip()
+        if user and pw and did:
+            ok, _msg, who = bsky.verify_login(user, pw, state.get("bluesky_pds"))
+            if ok and who and who.get("did") == did:
+                return self._bluesky_signed_in(who.get("handle") or user, pw,
+                                               state.get("bluesky_pds") or "",
+                                               "Already signed in")
+        try:
+            res = bsky.app_password_from_session(payload.get("accessJwt"), payload.get("service"))
+        except ValueError as e:
+            return {"ok": False, "message": str(e)}
+        except Exception as e:
+            return {"ok": False, "message": f"{e.__class__.__name__}: {e}"}
+        ok, msg, _who = bsky.verify_login(res["handle"], res["password"], res["pds"])
+        if not ok:
+            return {"ok": False, "message": f"The new app password didn't log in ({msg})"}
+        return self._bluesky_signed_in(res["handle"], res["password"], res["pds"],
+                                       f"Created app password '{bsky.APP_PASSWORD_NAME}'")
+
+    def _bluesky_signed_in(self, handle, password, pds, note):
+        self.save_state({"bluesky_username": handle, "bluesky_app_password": password,
+                         "bluesky_pds": pds})
+        self._push_js("onBlueskyFromExt", {"username": handle, "password": password,
+                                           "pds": pds})
+        return {"ok": True, "message": f"{note} — Downloader signs in to Bluesky as @{handle}"}
+
+    def bluesky_test_login(self):
+        """Settings ▸ Bluesky ▸ Test: log in with the saved handle + app password."""
+        state = self.load_state()
+        user = (state.get("bluesky_username") or "").strip()
+        pw = (state.get("bluesky_app_password") or "").strip()
+        if not (user and pw):
+            return {"ok": None, "message": "Not signed in — public profiles still download"}
+        ok, msg, _who = bsky.verify_login(user, pw, state.get("bluesky_pds"))
+        return {"ok": ok, "message": msg}
 
     def pmv_account_logout(self, platform):
         """Forget a site's sign-in. pawchive keeps its Cloudflare clearance."""
@@ -1230,6 +1286,17 @@ class Api:
             name = (thread["slug"] or thread["thread_id"]).replace("-", " ").strip()
             return {"valid": True, "platform": "simpcity", "thread_id": thread["thread_id"],
                     "name": name, "url": thread["canonical"]}
+        actor = bsky.parse_profile_url(url)
+        if actor:
+            # Looked up now so the link (and its archive DB) is keyed by the
+            # account's DID, which survives a handle change.
+            try:
+                prof = bsky.get_profile(actor)
+            except Exception as e:
+                return {"valid": False, "reason": f"Couldn't look up that Bluesky account ({e})"}
+            return {"valid": True, "platform": "bluesky", "did": prof["did"],
+                    "handle": prof["handle"], "name": prof["display_name"],
+                    "url": bsky.profile_url(prof["handle"])}
         username = self._extract_username(url)
         if username:
             return {"valid": True, "platform": "twitter", "username": username, "url": url}
@@ -1268,6 +1335,9 @@ class Api:
             # Canonical first-page URL, so any page/post link of a thread dedupes.
             return {"platform": "simpcity", "thread_id": info["thread_id"],
                     "name": info["name"], "url": info["url"]}
+        if info["platform"] == "bluesky":
+            return {"platform": "bluesky", "did": info["did"], "handle": info["handle"],
+                    "name": info.get("name") or "", "url": info["url"]}
         return {"platform": "twitter", "username": info["username"], "url": info["url"]}
 
     # ── Creator CRUD ────────────────────────────────────────────────
@@ -1275,9 +1345,9 @@ class Api:
     @staticmethod
     def _summary(links):
         s = {"onlyfans": 0, "fansly": 0, "twitter": 0, "patreon": 0, "fanbox": 0,
-             "derpibooru": 0, "discord": 0, "simpcity": 0, "album": 0}
+             "derpibooru": 0, "discord": 0, "simpcity": 0, "album": 0, "bluesky": 0}
         for l in links or []:
-            if l.get("platform") in ("simpcity", "album"):
+            if l.get("platform") in ("simpcity", "album", "bluesky"):
                 s[l["platform"]] += 1
             elif l.get("platform") == "twitter":
                 s["twitter"] += 1
@@ -1417,6 +1487,9 @@ class Api:
             tw = next((l for l in c.get("links", []) if l.get("platform") == "twitter"), None)
             if tw:
                 return self._twitter_avatar(tw.get("username"))
+            bs = next((l for l in c.get("links", []) if l.get("platform") == "bluesky"), None)
+            if bs:
+                return self._bluesky_avatar(bs.get("did"))
             return {"none": True}
         service, user_id = acct
         cache = os.path.join(AVATAR_DIR, f"coomerfans_{service}_{user_id}.jpg")
@@ -1492,6 +1565,34 @@ class Api:
                     f"https://unavatar.io/twitter/{username}?fallback=false",
                     timeout=(15, 30))
                 if r.status_code == 200 and r.content:
+                    data = r.content
+                    try:
+                        os.makedirs(AVATAR_DIR, exist_ok=True)
+                        with open(cache, "wb") as f:
+                            f.write(data)
+                    except OSError:
+                        pass
+        except Exception:
+            data = None
+        mime = _sniff_image_mime(data)
+        if not data or not mime:
+            return {"none": True}
+        return {"data": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}
+
+    def _bluesky_avatar(self, did):
+        """A Bluesky creator's avatar (profile `avatar` CDN URL), cached, or {none}."""
+        if not did:
+            return {"none": True}
+        cache = os.path.join(AVATAR_DIR, f"bluesky_{bsky.archive_slug(did)}.img")
+        data = None
+        try:
+            if os.path.isfile(cache) and os.path.getsize(cache) > 0:
+                with open(cache, "rb") as f:
+                    data = f.read()
+            else:
+                url = bsky.get_profile(did).get("avatar")
+                r = bsky.fetch(url) if url else None
+                if r is not None and r.status_code == 200 and r.content:
                     data = r.content
                     try:
                         os.makedirs(AVATAR_DIR, exist_ok=True)
@@ -2505,6 +2606,8 @@ class Api:
             if platform == "twitter":
                 return twitter_archive_path(
                     archive_dir, link.get("username"), os.path.join(dest, "Twitter"))
+            if platform == "bluesky":
+                return bluesky_archive_path(archive_dir, link, os.path.join(dest, "Bluesky"))
             if platform == "derpibooru":
                 return derpibooru_archive_path(archive_dir, link, dest)
             if platform == "discord":
@@ -2638,6 +2741,7 @@ class Api:
         dest = c.get("destination", "")
         years = self._years_in(dest, "Images")                       # coomerfans/pawchive/derpibooru
         years |= self._years_in(os.path.join(dest, "Twitter"), "Images")  # twitter
+        years |= self._years_in(os.path.join(dest, "Bluesky"), "Images")  # bluesky
         current = datetime.now(timezone.utc).year
         years |= set(range(self._EARLIEST_SELECTABLE_YEAR, current + 1))
         return sorted(years, reverse=True)
@@ -2801,6 +2905,9 @@ class Api:
             derpibooru_filter_id=state.get("derpibooru_filter_id") or "",
             discord_token=state.get("discord_token") or "",
             discord_token_type=state.get("discord_token_type") or "user",
+            bluesky_username=(state.get("bluesky_username") or "").strip(),
+            bluesky_password=(state.get("bluesky_app_password") or "").strip(),
+            bluesky_pds=state.get("bluesky_pds") or "",
             on_progress=lambda d: self._push_js("onCreatorProgress", d),
             on_complete=_complete,
             on_error=lambda d: self._push_js("onCreatorError", d),

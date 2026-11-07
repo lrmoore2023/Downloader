@@ -77,6 +77,74 @@ def build_redownload_config(destination, year, cookies_path=None, cookies_browse
     return _write_temp_config(config)
 
 
+# gallery-dl's own pacing for Bluesky API calls. The AppView allows ~3000
+# requests / 5 min per IP and blobs come from the account's PDS, so this is only
+# politeness; 429s are already waited out by the extractor (RateLimit-Reset).
+BLUESKY_SLEEP_REQUEST = 0.3
+
+# 'Fetch Latest' stops once this many files in a row are already in the
+# archive (the feed is newest first, so everything past that is known).
+BLUESKY_LATEST_ABORT = 20
+
+
+def build_bluesky_config(destination, mode="full", year=None, username=None,
+                         password=None, api_server=None, images=True, videos=True):
+    """gallery-dl config for one Bluesky profile (Creator tab).
+
+    Same layout and naming as Twitter: everything lands flat in <year>/ as
+    `YYYY.MM.DD - Bluesky - <post id>_<n>.<ext>` (post date, UTC, like
+    Twitter's), and the runner then moves images into Images/<year>/
+    (archive_sync.reorganize_twitter_media).
+
+    The profile URL dispatches to gallery-dl's `media` feed (posts with media,
+    the author's own; reposts and quoted posts are skipped). The archive key is
+    pinned to `bluesky_<post id>_<n>` so it can be rebuilt from filenames on
+    disk (archive_sync.sync_archive(site="bluesky")). The default key is the
+    blob CID, which isn't in the filename.
+
+    gallery-dl's login cache is turned off: it keeps a refresh token per
+    username for 84 days and never falls back to the password when that token
+    is revoked. A replaced app password would then break every run. Without
+    the cache it logs in once per run instead.
+    """
+    bsky = {
+        "filename": "{date:%Y.%m.%d} - Bluesky - {post_id}_{num}.{extension}",
+        "directory": ["{date:%Y}"],
+        "videos": bool(videos),
+        "quoted": False,
+        "reposts": False,
+        "archive-format": "{post_id}_{num}",
+        "archive-prefix": "bluesky_",
+        "sleep-request": BLUESKY_SLEEP_REQUEST,
+    }
+    if not images:
+        # Only video blobs (always mp4 on Bluesky).
+        bsky["image-filter"] = "extension == 'mp4'"
+    if username and password:
+        bsky["username"] = username
+        bsky["password"] = password
+        if api_server:
+            bsky["api-server"] = api_server
+    if mode == "latest":
+        bsky["skip"] = f"abort:{BLUESKY_LATEST_ABORT}"
+    elif mode == "redownload_year" and year:
+        bsky["post-filter"] = f"date.year == {int(year)}"
+
+    config = {
+        "cache": {"file": None},
+        "extractor": {
+            "base-directory": destination.replace("\\", "/"),
+            "bluesky": bsky,
+        },
+        "downloader": {
+            "retries": 10,
+            "timeout": 60.0,
+            "rate": None,
+        },
+    }
+    return _write_temp_config(config)
+
+
 def build_album_config(destination, cookies_path=None, cookies_browser=None,
                        filester_cookies=None):
     """Build a gallery-dl config for album downloads (Albums tab).

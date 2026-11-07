@@ -77,7 +77,9 @@ window.onCreatorError = function (data) {
     Logger.error(data.message);
     incrementStat('statErrors');
     if (data.subtype === 'auth') {
-        showToast('Twitter auth failed — cookies may have expired (Settings)', 'error');
+        showToast(data.platform === 'bluesky'
+            ? 'Bluesky sign-in failed — send it again from the extension or check Settings ▸ Bluesky'
+            : 'Twitter auth failed — cookies may have expired (Settings)', 'error');
     }
 };
 

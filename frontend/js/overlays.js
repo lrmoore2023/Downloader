@@ -16,6 +16,8 @@ const Settings = {
     discordTokenType: 'user',
     iwaraEmail: '',
     iwaraPassword: '',
+    blueskyUsername: '',
+    blueskyPassword: '',
 };
 
 function loadSettingsFromState(state) {
@@ -33,6 +35,8 @@ function loadSettingsFromState(state) {
     Settings.iwaraEmail = state.iwara_email || '';
     Settings.iwaraPassword = state.iwara_password || '';
     Settings.pmvhavenKey = state.pmvhaven_api_key || '';
+    Settings.blueskyUsername = state.bluesky_username || '';
+    Settings.blueskyPassword = state.bluesky_app_password || '';
 
     document.getElementById('setArchiveDir').value = Settings.archiveDir;
     document.getElementById('setLibraryRoot').value = Settings.libraryRoot;
@@ -55,6 +59,11 @@ function loadSettingsFromState(state) {
     if (iwPassEl) iwPassEl.value = Settings.iwaraPassword;
     const pmvhKeyEl = document.getElementById('setPmvhavenKey');
     if (pmvhKeyEl) pmvhKeyEl.value = Settings.pmvhavenKey;
+    const bsUserEl = document.getElementById('setBlueskyUser');
+    if (bsUserEl) bsUserEl.value = Settings.blueskyUsername;
+    const bsPassEl = document.getElementById('setBlueskyPass');
+    if (bsPassEl) bsPassEl.value = Settings.blueskyPassword;
+    setBlueskyStatus(null, '');
 
     setAuthMethod(Settings.authMethod);
     if (Settings.cookiesPath) {
@@ -85,8 +94,52 @@ function persistSettings() {
         iwara_email: Settings.iwaraEmail,
         iwara_password: Settings.iwaraPassword,
         pmvhaven_api_key: Settings.pmvhavenKey,
+        bluesky_username: Settings.blueskyUsername,
+        bluesky_app_password: Settings.blueskyPassword,
     });
 }
+
+// Bluesky handle + app password — read from the inputs on change and persist.
+function setUpdateBluesky() {
+    Settings.blueskyUsername = (document.getElementById('setBlueskyUser').value || '').trim().replace(/^@/, '');
+    Settings.blueskyPassword = (document.getElementById('setBlueskyPass').value || '').trim();
+    persistSettings();
+    setBlueskyStatus(null, '');
+}
+
+function setBlueskyStatus(ok, msg) {
+    const badge = document.getElementById('blueskyStatus');
+    if (!badge) return;
+    badge.textContent = msg || (Settings.blueskyUsername && Settings.blueskyPassword
+        ? `Will sign in as @${Settings.blueskyUsername}` : 'Not signed in (public profiles still download)');
+    badge.className = 'status-badge ' + (ok === true ? 'status-ok' : ok === false ? 'status-error' : 'status-idle');
+}
+
+async function testBlueskyLogin(btn) {
+    UI.busy(btn, true);
+    try {
+        await persistSettings();
+        const res = await pywebview.api.bluesky_test_login();
+        setBlueskyStatus(res && res.ok, res && res.message);
+    } finally {
+        UI.busy(btn, false);
+    }
+}
+
+// The Chrome extension sent bsky.app's session; the backend turned it into an
+// app password and saved it. Mirror it, or persistSettings() would write the
+// old values back.
+window.onBlueskyFromExt = function (d) {
+    if (!d || !d.username) return;
+    Settings.blueskyUsername = d.username;
+    Settings.blueskyPassword = d.password || '';
+    const u = document.getElementById('setBlueskyUser');
+    if (u) u.value = Settings.blueskyUsername;
+    const p = document.getElementById('setBlueskyPass');
+    if (p) p.value = Settings.blueskyPassword;
+    setBlueskyStatus(true, `Signed in as @${d.username} (from Chrome)`);
+    if (window.showToast) showToast(`Bluesky sign-in received from Chrome (@${d.username})`, 'success');
+};
 
 // Derpibooru API key — read from the input on change and persist.
 function setUpdateDerpiApiKey() {
@@ -608,7 +661,7 @@ function cfgFetchChanged() {
             ? '<b>Track-only:</b> nothing is downloaded — pawchive posts\' external links are collected in the URL panel to check off. Other platforms are skipped. A folder is optional.'
             : 'Nothing is selected — a download run would do nothing. Check at least one box.';
     } else {
-        hint.innerHTML = 'Images/Videos apply to pawchive &amp; coomerfans (Twitter/Derpibooru always fetch everything). Uncheck <b>both</b> to track a creator\'s post links without downloading anything — no folder needed.';
+        hint.innerHTML = 'Images/Videos apply to pawchive, coomerfans &amp; Bluesky (Twitter/Derpibooru always fetch everything). Uncheck <b>both</b> to track a creator\'s post links without downloading anything — no folder needed.';
     }
 }
 
@@ -672,6 +725,8 @@ function cfgSetTag(index, value) {
 
 function platformLabel(link) {
     if (link.platform === 'twitter') return { badge: 'Twitter', cls: 'badge-twitter', name: '@' + (link.username || '?') };
+    if (link.platform === 'bluesky') return { badge: 'Bluesky', cls: 'badge-bluesky',
+        name: (link.name ? link.name + ' · ' : '') + '@' + (link.handle || link.did || '?') };
     if (link.platform === 'derpibooru') return { badge: 'Derpibooru', cls: 'badge-derpibooru', name: link.name || link.query || '?' };
     if (link.platform === 'discord') return { badge: 'Discord', cls: 'badge-discord', name: link.name || link.channel_id || '?' };
     if (link.platform === 'simpcity') return { badge: 'SimpCity', cls: 'badge-simpcity', name: link.name || ('thread ' + (link.thread_id || '?')) };
@@ -766,7 +821,7 @@ async function cfgPreviewLink() {
     if (!url) { preview.textContent = ''; return; }
     const info = await pywebview.api.resolve_link(url, cfgDestForResolve());
     if (!info.valid) {
-        preview.textContent = info.reason || 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, derpibooru.org/search?q=…, discord.com/channels/…, simpcity.cr/threads/…, a bunkr/gofile album, or x.com/…';
+        preview.textContent = info.reason || 'Unrecognized URL — expected coomerfans.com/u/…, pawchive.st/{service}/user/…, derpibooru.org/search?q=…, discord.com/channels/…, simpcity.cr/threads/…, a bunkr/gofile album, x.com/…, or bsky.app/profile/…';
         return;
     }
     if (info.platform === 'coomerfans') {
@@ -783,6 +838,8 @@ async function cfgPreviewLink() {
         preview.textContent = `Detected: SimpCity thread — ${info.name}  ·  click Add Link`;
     } else if (info.platform === 'album') {
         preview.textContent = `Detected: ${albumSiteLabel(info.site)} album — tracked for new files  ·  click Add Link`;
+    } else if (info.platform === 'bluesky') {
+        preview.textContent = `Detected: Bluesky — ${info.name ? info.name + ' ' : ''}@${info.handle}  ·  click Add Link`;
     } else {
         preview.textContent = `Detected: Twitter — @${info.username}  ·  click Add Link`;
     }

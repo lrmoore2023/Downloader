@@ -164,12 +164,19 @@ class GalleryDlRunner:
             return {"type": "skip", "message": line}
 
         # Auth errors - only match gallery-dl's error format: [category][error] HttpError: 401
+        # (AuthenticationError / AuthRequired: a rejected login or a members-only
+        # page, e.g. a revoked Bluesky app password.)
         if re.search(r"\[error\].*\b(401|403)\b", line) or \
-           re.search(r"\[error\].*(Unauthorized|Forbidden)", line, re.IGNORECASE):
+           re.search(r"\[error\].*(Unauthorized|Forbidden|AuthenticationError|AuthRequired)",
+                     line, re.IGNORECASE):
+            msg = ("Bluesky sign-in failed — check Settings ▸ Bluesky."
+                   if self._platform == "bluesky"
+                   else "Authentication failed. Cookies may have expired.")
             return {
                 "type": "error",
                 "subtype": "auth",
-                "message": "Authentication failed. Cookies may have expired.",
+                "platform": self._platform,
+                "message": msg,
                 "raw": line,
             }
 

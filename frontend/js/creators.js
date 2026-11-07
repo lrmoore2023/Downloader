@@ -35,9 +35,9 @@ function onSortChange() {
 
 function summarize(links) {
     const s = { onlyfans: 0, fansly: 0, twitter: 0, patreon: 0, fanbox: 0, derpibooru: 0, discord: 0,
-                simpcity: 0, album: 0 };
+                simpcity: 0, album: 0, bluesky: 0 };
     (links || []).forEach(l => {
-        if (l.platform === 'simpcity' || l.platform === 'album') s[l.platform] += 1;
+        if (l.platform === 'simpcity' || l.platform === 'album' || l.platform === 'bluesky') s[l.platform] += 1;
         else if (l.platform === 'twitter') s.twitter += 1;
         else if (l.platform === 'derpibooru') s.derpibooru += 1;
         else if (l.platform === 'discord') s.discord += 1;
@@ -899,6 +899,7 @@ function renderChips() {
     if (s.patreon) chips.push(chipHtml('Patreon', s.patreon));
     if (s.fanbox) chips.push(chipHtml('Fanbox', s.fanbox));
     if (s.twitter) chips.push('<span class="chip chip-twitter">Twitter</span>');
+    if (s.bluesky) chips.push(chipHtml('Bluesky', s.bluesky).replace('class="chip"', 'class="chip chip-bluesky"'));
     if (s.derpibooru) chips.push(chipHtml('Derpibooru', s.derpibooru));
     if (s.discord) chips.push('<span class="chip chip-discord">Discord</span>');
     if (s.simpcity) chips.push(chipHtml('SimpCity', s.simpcity).replace('class="chip"', 'class="chip chip-simpcity"'));
@@ -946,6 +947,7 @@ function buildScopeControl() {
     if (s.patreon) opts.push(['patreon', 'Patreon']);
     if (s.fanbox) opts.push(['fanbox', 'Fanbox']);
     if (s.twitter) opts.push(['twitter', 'Twitter']);
+    if (s.bluesky) opts.push(['bluesky', 'Bluesky']);
     if (s.derpibooru) opts.push(['derpibooru', 'Derpibooru']);
     if (s.discord) opts.push(['discord', 'Discord']);
     if (s.simpcity) opts.push(['simpcity', 'SimpCity']);
@@ -972,6 +974,8 @@ function buildLinkScope() {
         o.value = l.url;
         o.textContent = (l.platform === 'twitter')
             ? `Twitter @${l.username}`
+            : (l.platform === 'bluesky')
+                ? `Bluesky @${l.handle || l.did}`
             : (l.platform === 'derpibooru')
                 ? `Derpibooru ${l.name || l.query}`
                 : (l.platform === 'discord')

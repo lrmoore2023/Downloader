@@ -18,7 +18,7 @@ and will happily report all-green while they are broken. Always run them too:
 .venv/Scripts/python.exe tests/test_pawchive.py               # 134 checks
 .venv/Scripts/python.exe tests/test_pawchive_cf.py            # 18 checks
 .venv/Scripts/python.exe tests/test_year_range.py             # 40 checks
-.venv/Scripts/python.exe tests/test_coomerfans_integrity.py   # 18 checks
+.venv/Scripts/python.exe tests/test_coomerfans_integrity.py   # 16 checks
 ```
 
 This is not hypothetical: a stale `parse_post` stub in the integrity suite shipped
@@ -36,6 +36,13 @@ broken precisely because only `pytest` was run. `pytest` is also not in
   (pawchive, coomerfans, twitter, derpibooru, discord), plus the Albums tab
   (`album_runner`, `gofile_downloader`, `cyberdrop_dl_runner`, `filester_*`).
 - `backend/rate_limit.py` — `AdaptiveThrottle`, the shared AIMD request pacer.
+- **Bluesky** (Creator tab, link platform `bluesky`, fields `did`/`handle`):
+  gallery-dl's `bluesky` extractor, laid out exactly like Twitter —
+  `<dest>/Bluesky/<year>/` (videos) + `Bluesky/Images/<year>/`, named
+  `YYYY.MM.DD - Bluesky - <post id>_<n>.<ext>` (`build_bluesky_config`,
+  `CreatorRunner._run_bluesky`). `backend/bluesky.py` holds URL parsing, the
+  profile lookup and the optional sign-in. Honours the creator's Images/Videos
+  checkboxes; 'latest' stops after 20 already-archived files in a row.
 - **SimpCity + tracked albums** (Creator tab, **Real creators only** — destination
   under `P:\Real\…`, enforced in `resolve_link`/`save_creator` via
   `_is_real_dest`): `backend/simpcity_scraper.py` (thread URL/page parsing + link
@@ -282,6 +289,21 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   `error-notPremium` it's the salt (check the bundled gallery-dl/cyberdrop-dl
   `gofile.py`). Account creation is rate-limited (429), so the guest token is
   persisted in `.gofile_token.json`.
+- **Bluesky** — measured 2026-11-07: the public AppView serves a profile's
+  `posts_with_media` feed **anonymously, `porn`-labelled posts included**; blobs
+  (images, and videos as the original uploaded mp4) come from the account's PDS
+  via `getBlob`. Sign-in (handle + **app password**, `bluesky_username` /
+  `bluesky_app_password` / `bluesky_pds`, credentials) is optional. bsky.app has
+  **no auth cookies** — its session is in localStorage `BSKY_STORAGE`
+  (`session.accounts[]`, `currentAccount`). The extension's "Send Bluesky
+  sign-in" sends that session's short-lived `accessJwt`, and the app uses it once
+  to create its own app password named "Downloader" (revoking an older one of that
+  name). Never use the browser's `refreshJwt`: refresh tokens rotate on use, so
+  that would sign Chrome out. gallery-dl's login cache is off (`cache.file: null`)
+  because it keeps a refresh token for 84 days and never falls back to the
+  password once that token is revoked. Archive DB = `<archive_dir>/bluesky_<did>.db`
+  (keyed by DID, since handles change), entries `bluesky_<post id>_<n>`, rebuilt
+  from filenames on disk before every run.
 - Availability on pawchive is `preview_state` (`scraped` = present, `pending` =
   not imported yet), **not** `has_full`.
 

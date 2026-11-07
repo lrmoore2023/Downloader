@@ -8,6 +8,24 @@ import sqlite3
 #   2025.03.15 - Twitter - 1234567890_1.jpg
 _FILENAME_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2} - (?:Twitter - )?(\d+)_(\d+)\.\w+$")
 
+# Bluesky (same layout, gallery-dl too): "2026.11.07 - Bluesky - 3abcdefghijk2_1.jpg".
+# The post id is the record key (a base32 TID); the archive key is pinned to
+# bluesky_<post id>_<n> by config_builder.build_bluesky_config.
+_BLUESKY_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2} - Bluesky - ([a-z2-7]+)_(\d+)\.\w+$")
+
+# site -> (filename regex, archive entry format)
+_SITES = {
+    "twitter": (_FILENAME_RE, "twitter_{}_0_{}"),
+    "bluesky": (_BLUESKY_RE, "bluesky_{}_{}"),
+}
+
+
+def _entry_for(filename, site):
+    rx, fmt = _SITES[site]
+    m = rx.match(filename)
+    return fmt.format(m.group(1), m.group(2)) if m else None
+
+
 # Twitter still-image extensions that belong under Images/<year>. Everything else
 # gallery-dl produces (mp4 videos, and animated_gifs — which Twitter serves as
 # mp4) stays in <year>. Deliberately excludes 'gif'/'bmp': Twitter "gifs" are mp4.
@@ -58,7 +76,7 @@ def reorganize_twitter_media(twitter_dest):
     return moved
 
 
-def scan_files_for_entries(destination, has_videos=True):
+def scan_files_for_entries(destination, has_videos=True, site="twitter"):
     """Scan an artist directory and return a set of archive entry strings
     for all Twitter-downloaded files found on disk.
 
@@ -88,16 +106,14 @@ def scan_files_for_entries(destination, has_videos=True):
             filepath = os.path.join(d, filename)
             if not os.path.isfile(filepath):
                 continue
-            m = _FILENAME_RE.match(filename)
-            if m:
-                tweet_id = m.group(1)
-                num = m.group(2)
-                entries.add(f"twitter_{tweet_id}_0_{num}")
+            entry = _entry_for(filename, site)
+            if entry:
+                entries.add(entry)
 
     return entries
 
 
-def sync_archive(archive_path, destination, has_videos=True):
+def sync_archive(archive_path, destination, has_videos=True, site="twitter"):
     """Ensure the archive DB contains entries for all files on disk.
 
     Adds entries for files that exist on disk but are missing from the archive.
@@ -109,7 +125,7 @@ def sync_archive(archive_path, destination, has_videos=True):
     if not archive_path or not os.path.isfile(archive_path):
         return {"added": 0, "total_on_disk": 0}
 
-    disk_entries = scan_files_for_entries(destination, has_videos)
+    disk_entries = scan_files_for_entries(destination, has_videos, site)
     if not disk_entries:
         return {"added": 0, "total_on_disk": 0}
 
@@ -145,7 +161,8 @@ def sync_archive(archive_path, destination, has_videos=True):
     return {"added": added, "total_on_disk": len(disk_entries)}
 
 
-def sync_archive_for_year(archive_path, destination, year, has_videos=True):
+def sync_archive_for_year(archive_path, destination, year, has_videos=True,
+                          site="twitter"):
     """Remove archive entries for files that no longer exist on disk
     for a specific year, then add entries for files that do exist.
 
@@ -175,11 +192,9 @@ def sync_archive_for_year(archive_path, destination, year, has_videos=True):
         for filename in os.listdir(d):
             if not os.path.isfile(os.path.join(d, filename)):
                 continue
-            m = _FILENAME_RE.match(filename)
-            if m:
-                tweet_id = m.group(1)
-                num = m.group(2)
-                disk_entries.add(f"twitter_{tweet_id}_0_{num}")
+            entry = _entry_for(filename, site)
+            if entry:
+                disk_entries.add(entry)
 
     # Also collect tweet_ids on disk so we can identify archive entries for this year
     disk_tweet_ids = set()

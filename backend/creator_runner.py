@@ -9,6 +9,7 @@ per-platform engines one link at a time:
     pawchive   -> PawchiveRunner     (shares the coomerfans root layout; also writes
                                       a stateful <dest>/_pawchive_links manifest)
     twitter    -> GalleryDlRunner    (writes <dest>/Twitter/<year>/ + .../Images/<year>/)
+    bluesky    -> GalleryDlRunner    (writes <dest>/Bluesky/<year>/ + .../Images/<year>/)
 
 Links run sequentially (not concurrently) so the single output log reads
 cleanly and we don't hammer a site from two angles at once; within one
@@ -21,6 +22,7 @@ flow — this only coordinates the existing engines.
 """
 
 import os
+import sqlite3
 import threading
 
 from backend.coomerfans_runner import CoomerfansRunner
@@ -37,7 +39,9 @@ from backend.simpcity_runner import SimpcityRunner
 from backend.album_track_runner import AlbumTrackRunner, album_archive_path, site_label
 from backend.config_builder import (
     build_config, build_latest_config, build_redownload_config, cleanup_config,
+    build_bluesky_config,
 )
+from backend import bluesky as bsky
 from backend.file_scanner import scan_destination
 from backend.archive_sync import (
     sync_archive, sync_archive_for_year, reorganize_twitter_media,
@@ -94,6 +98,8 @@ def filter_links(links, scope):
         return list(links)
     if scope == "twitter":
         return [l for l in links if l.get("platform") == "twitter"]
+    if scope == "bluesky":
+        return [l for l in links if l.get("platform") == "bluesky"]
     if scope == "coomerfans":
         return [l for l in links if l.get("platform") == "coomerfans"]
     if scope in ("onlyfans", "fansly"):
@@ -122,6 +128,8 @@ def link_label(link):
     """Short human label for a link, used to prefix its log lines."""
     if link.get("platform") == "twitter":
         return f"Twitter @{link.get('username') or '?'}"
+    if link.get("platform") == "bluesky":
+        return f"Bluesky @{link.get('handle') or link.get('did') or '?'}"
     if link.get("platform") == "derpibooru":
         return f"Derpibooru {link.get('name') or db_query_label(link.get('query'))}"
     if link.get("platform") == "discord":
@@ -192,6 +200,29 @@ def twitter_archive_path(archive_dir, username, twitter_dest):
     return os.path.join(twitter_dest, ".gallery-dl-archive.db")
 
 
+def bluesky_archive_path(archive_dir, link, bluesky_dest):
+    """Per-link Bluesky archive DB, keyed by the account's DID (handles can
+    change; the DID can't), so re-adding or a renamed handle never re-downloads."""
+    archive_dir = (archive_dir or "").strip()
+    slug = bsky.archive_slug(link.get("did"))
+    if archive_dir and os.path.isdir(archive_dir):
+        return os.path.join(archive_dir, f"bluesky_{slug}.db")
+    return os.path.join(bluesky_dest, f".bluesky-{slug}-archive.db")
+
+
+def _ensure_archive(path):
+    """Create an empty gallery-dl archive DB (same table gallery-dl makes) so
+    files already on disk can be recorded into it before the first run."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE IF NOT EXISTS archive (entry TEXT PRIMARY KEY) WITHOUT ROWID")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def errors_db_path(archive_path):
     """Per-link failure store, a sibling of that link's archive DB (so it lives
     wherever the archive lives — the archive_dir when configured, else the
@@ -251,7 +282,8 @@ class CreatorRunner:
             discord_token=None, discord_token_type=None, refresh_links=True,
             error_entries=None, pawchive_cookies_path=None,
             pawchive_user_agent=None, year_range=None, links_root=None,
-            simpcity_cookies_path=None, simpcity_user_agent=None):
+            simpcity_cookies_path=None, simpcity_user_agent=None,
+            bluesky_username=None, bluesky_password=None, bluesky_pds=None):
         # A targeted 'errors' recheck (specific pawchive failures the user picked in
         # the panel — a file/post/year). Only pawchive uses the per-entry failure
         # store, so a targeted run skips other platforms (which treat 'errors' as a
@@ -273,6 +305,9 @@ class CreatorRunner:
         # SimpCity sign-in (threads are members-only), captured at Settings ▸ SimpCity.
         self._simpcity_cookies_path = simpcity_cookies_path or None
         self._simpcity_user_agent = simpcity_user_agent or None
+        # Bluesky sign-in (optional — public profiles download anonymously).
+        self._bluesky_auth = (bluesky_username or None, bluesky_password or None,
+                              bluesky_pds or None)
         # Inclusive year-range for a 'Fetch Latest' run (pawchive/coomerfans only);
         # None = all years. Resolved by the API layer (one-off vs saved default).
         self._year_range = year_range
@@ -336,6 +371,9 @@ class CreatorRunner:
                     elif link.get("platform") == "twitter":
                         self._run_twitter(link, creator, mode, year, archive_dir,
                                           cookies_path, cookies_browser, on_progress, on_error)
+                    elif link.get("platform") == "bluesky":
+                        self._run_bluesky(link, creator, mode, year, archive_dir,
+                                          on_progress, on_error)
                     elif link.get("platform") == "derpibooru":
                         self._run_derpibooru(link, creator, mode, year, archive_dir,
                                              on_progress, on_error)
@@ -681,6 +719,79 @@ class CreatorRunner:
                     sync_archive_for_year(archive_path, twitter_dest, year)
                 else:
                     sync_archive(archive_path, twitter_dest)
+            except Exception as e:
+                prog({"type": "info", "message": f"archive sync note: {e}"})
+        self._accumulate(stats)
+
+    def _run_bluesky(self, link, creator, mode, year, archive_dir, on_progress, on_error):
+        """One Bluesky profile through gallery-dl, laid out exactly like Twitter:
+        <creator>/Bluesky/<year>/ (videos) + Bluesky/Images/<year>/ (images).
+
+        Unlike Twitter, the creator's Images/Videos checkboxes apply (the
+        extractor can drop either kind before downloading). 'latest' stops after
+        a run of already-archived files; 'errors' is a full re-run."""
+        dest = os.path.join(creator["destination"], "Bluesky")
+        archive_path = bluesky_archive_path(archive_dir, link, dest)
+        errors_path = errors_db_path(archive_path)
+        prog = self._prefix(link, on_progress)
+        err = self._prefix(link, on_error)
+        if not link.get("did"):
+            err({"type": "error", "message": "link has no account id — remove it and add it again"})
+            self.error_count += 1
+            return
+        if mode == "latest" and scan_destination(dest)["latest_year"] is None                 and not os.path.isfile(archive_path):
+            prog({"type": "info",
+                  "message": "no existing media — skipping latest (run Download Everything first)"})
+            return
+
+        os.makedirs(dest, exist_ok=True)
+        # Record whatever is already on disk first, so a lost or fresh archive DB
+        # never re-downloads files the folder already has. Images were moved to
+        # Images/<year>, where gallery-dl's own file-exists check can't see them.
+        _ensure_archive(archive_path)
+        try:
+            sync_archive(archive_path, dest, site="bluesky")
+        except Exception as e:
+            prog({"type": "info", "message": f"archive sync note: {e}"})
+
+        user, pw, pds = self._bluesky_auth
+        if user and pw:
+            prog({"type": "info", "message": f"signed in as @{user}"})
+        config_path = build_bluesky_config(
+            dest, mode=mode, year=year, username=user, password=pw,
+            api_server=bsky.api_server_for(pds),
+            images=self._fetch["images"], videos=self._fetch["videos"])
+
+        runner = GalleryDlRunner(platform="bluesky")
+        self._current = runner
+        stats = {}
+        try:
+            runner.run(
+                url=bsky.profile_url(link["did"]),
+                config_path=config_path,
+                archive_path=archive_path,
+                on_progress=prog,
+                on_complete=lambda d: stats.update(d),
+                on_error=err,
+                errors_path=errors_path,
+                reset_errors=mode in ("full", "errors"),
+            )
+        finally:
+            cleanup_config(config_path)
+
+        if not stats.get("cancelled"):
+            try:
+                moved = reorganize_twitter_media(dest)
+                if moved:
+                    prog({"type": "info",
+                          "message": f"organized {moved} image(s) into Images/<year>"})
+            except Exception as e:
+                prog({"type": "info", "message": f"image organize note: {e}"})
+            try:
+                if mode == "redownload_year":
+                    sync_archive_for_year(archive_path, dest, year, site="bluesky")
+                else:
+                    sync_archive(archive_path, dest, site="bluesky")
             except Exception as e:
                 prog({"type": "info", "message": f"archive sync note: {e}"})
         self._accumulate(stats)
