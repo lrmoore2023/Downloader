@@ -8,6 +8,7 @@
   p { margin: 0 0 10px; color: #a9abb3; line-height: 1.4; }
   button { width: 100%; padding: 8px; border: 0; border-radius: 6px; background: #4f7cff; color: #fff; font: inherit; cursor: pointer; }
   button:disabled { opacity: .6; cursor: default; }
+  p.gap { margin-top: 12px; }
   #status { margin-top: 10px; min-height: 1.4em; }
   .ok { color: #6fd48a; } .err { color: #ff8a80; }
 </style>
@@ -16,6 +17,8 @@
   <h1>Downloader sign-in</h1>
   <p>rule34video allows one session per account. This shares the session Chrome already has with the Downloader app (open on this PC), so neither gets signed out.</p>
   <button id="send">Send rule34video sign-in</button>
+  <p class="gap">Discord: with discord.com open (signed in) in a tab, this sends that account's token, so you don't have to copy it from DevTools.</p>
+  <button id="sendDiscord">Send Discord token</button>
   <div id="status"></div>
   <script src="popup.js"></script>
 </body>

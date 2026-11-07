@@ -34,6 +34,7 @@ from backend.derpibooru_scraper import (
 from backend.discord_scraper import (
     parse_creator_url as dc_parse_creator_url, channel_url as dc_channel_url,
     channel_name as dc_channel_name, make_session as dc_make_session,
+    whoami as dc_whoami,
 )
 from backend.creator_runner import (
     CreatorRunner, filter_links, link_label, cf_archive_path,
@@ -1025,7 +1026,13 @@ class Api:
         """The Chrome extension handed over the browser's own session for a site
         (rule34video: one session per account, so the app must share the
         browser's rather than log in itself). Kept only if a members-only request
-        made with it is let in. Runs on the bridge's handler thread."""
+        made with it is let in. Runs on the bridge's handler thread.
+
+        discord: the payload is {"token"} — the Authorization header Chrome's
+        Discord tab sends, so nobody has to dig it out of DevTools. Kept (as a
+        user token) only if /users/@me accepts it."""
+        if platform == "discord":
+            return self._on_ext_discord_token(payload)
         if platform not in site_login.SITES:
             return {"ok": False, "message": f"unsupported site {platform!r}"}
         rows = site_login.site_cookies(payload.get("cookies") or [], platform)
@@ -1051,6 +1058,18 @@ class Api:
         self._push_js("onPmvAccountStatus", {"platform": platform, "message": "Signed in (from Chrome)",
                                              "ok": True})
         return {"ok": True, "message": "Downloader now shares this sign-in"}
+
+    def _on_ext_discord_token(self, payload):
+        token = payload.get("token")
+        token = token.strip() if isinstance(token, str) else ""
+        if not token or token.lower().startswith("bot ") or len(token) > 512:
+            return {"ok": False, "message": "No Discord token — open discord.com in Chrome first."}
+        ok, who = dc_whoami(dc_make_session(token=token, token_type="user"))
+        if not ok:
+            return {"ok": False, "message": f"The app couldn't use that token ({who})"}
+        self.save_state({"discord_token": token, "discord_token_type": "user"})
+        self._push_js("onDiscordTokenFromExt", {"token": token, "token_type": "user", "account": who})
+        return {"ok": True, "message": f"Downloader now uses Discord account {who}"}
 
     def pmv_account_logout(self, platform):
         """Forget a site's sign-in. pawchive keeps its Cloudflare clearance."""

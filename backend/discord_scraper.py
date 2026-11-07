@@ -219,6 +219,26 @@ def fetch_channel(session, channel_id):
         return None
 
 
+def whoami(session):
+    """`(ok, label)` for the session's token: GET /users/@me. ok is True only on
+    a 200 with a user id; label is the account name (or the failure reason)."""
+    try:
+        r = session.get(f"{BASE}/users/@me", timeout=(15, 30))
+    except Exception as e:
+        return False, f"couldn't reach Discord ({e.__class__.__name__})"
+    if r.status_code == 401:
+        return False, "Discord rejected the token (401)"
+    if r.status_code != 200:
+        return False, f"HTTP {r.status_code}"
+    try:
+        me = r.json()
+    except ValueError:
+        return False, "bad response"
+    if not isinstance(me, dict) or not me.get("id"):
+        return False, "bad response"
+    return True, me.get("global_name") or me.get("username") or me["id"]
+
+
 def channel_name(session, channel_id):
     """A human channel name ('#general', a DM recipient, or a fallback), or ''."""
     ch = fetch_channel(session, channel_id)

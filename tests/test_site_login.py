@@ -146,3 +146,28 @@ def test_ext_session_rejected_unless_verified(tmp_path, monkeypatch):
     assert api._on_ext_session("rule34video", payload)["ok"]
     assert saved["r34video_cookies_path"].endswith("r.txt") and saved["r34video_signed_in_at"]
     assert not api._on_ext_session("rule34video", {"cookies": [_c("x", "y", ".other.com")]})["ok"]
+
+
+def test_ext_discord_token_kept_only_if_discord_accepts_it(monkeypatch):
+    import backend.api as api_mod
+    from backend.api import Api
+    api = Api.__new__(Api)
+    saved, pushed = {}, []
+    api.save_state = lambda d: saved.update(d)
+    api._push_js = lambda *a: pushed.append(a)
+    seen = []
+
+    def fake_whoami(session):
+        seen.append(session.headers.get("Authorization"))
+        return (session.headers.get("Authorization") == "good.tok", "me")
+    monkeypatch.setattr(api_mod, "dc_whoami", fake_whoami)
+
+    assert not api._on_ext_session("discord", {})["ok"]
+    assert not api._on_ext_session("discord", {"token": "Bot abc"})["ok"]
+    assert not seen                                  # rejected before any request
+    assert not api._on_ext_session("discord", {"token": "bad.tok"})["ok"] and not saved
+    res = api._on_ext_session("discord", {"token": "  good.tok "})
+    assert res["ok"] and "me" in res["message"]
+    assert saved == {"discord_token": "good.tok", "discord_token_type": "user"}
+    assert seen[-1] == "good.tok"                    # user token: raw, no "Bot " prefix
+    assert pushed[-1][0] == "onDiscordTokenFromExt" and pushed[-1][1]["token"] == "good.tok"

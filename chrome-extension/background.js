@@ -75,3 +75,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   })();
   return true;   // keep the channel open for the async reply
 });
+
+// Discord: the Downloader needs the account's token, which is the
+// Authorization header the discord.com tab sends on every API call. Watch
+// those requests (read-only — nothing is changed or blocked) and keep the
+// latest token in session storage: memory only, gone when Chrome closes.
+// It only goes anywhere when the popup's "Send Discord token" is clicked.
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  (details) => {
+    const h = (details.requestHeaders || []).find(x => x.name.toLowerCase() === 'authorization');
+    const token = h && h.value;
+    if (!token || /^bot /i.test(token)) return;
+    chrome.storage.session.get('discordToken').then(({ discordToken }) => {
+      if (discordToken !== token) chrome.storage.session.set({ discordToken: token, discordSeenAt: Date.now() });
+    });
+  },
+  { urls: ['https://discord.com/api/*', 'https://*.discord.com/api/*'] },
+  ['requestHeaders', 'extraHeaders'],
+);

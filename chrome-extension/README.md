@@ -37,6 +37,20 @@ the app is open: it reads Chrome's rule34video.com cookies (that site only) and
 posts them to the app on `127.0.0.1:47834`, nowhere else. Both then share one
 session. Do it again if the app later reports the sign-in expired.
 
+## Sending the Discord token
+
+The Downloader's Discord links need the account's token. With discord.com open
+(signed in) in a Chrome tab, click the toolbar icon ▸ **Send Discord token**.
+The extension reads the token from the `Authorization` header that Discord's own
+tab sends to `discord.com/api` (it watches those requests; it never changes or
+blocks them). It keeps only the latest one, in session storage, which is cleared
+when Chrome closes. It sends the token to `127.0.0.1:47834` only when you click
+the button. The app checks it with `/users/@me`, then saves it as a *user* token
+in Settings ▸ Discord. If the popup says no token was seen, reload the Discord
+tab and try again. This replaces the app's token with **the account Chrome is
+signed in to**, so if the app should use a secondary account, sign that account
+in to Chrome's Discord tab before you click.
+
 ## Install (unpacked)
 
 1. Open `chrome://extensions`.

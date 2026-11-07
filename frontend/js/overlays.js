@@ -102,6 +102,20 @@ function setUpdateDiscordToken() {
     persistSettings();
 }
 
+// The Chrome extension sent Discord's token (already verified and saved by the
+// backend). Mirror it here too, or the next persistSettings() would write the
+// old value back over it.
+window.onDiscordTokenFromExt = function (d) {
+    if (!d || !d.token) return;
+    Settings.discordToken = d.token;
+    Settings.discordTokenType = d.token_type === 'bot' ? 'bot' : 'user';
+    const tokEl = document.getElementById('setDiscordToken');
+    if (tokEl) tokEl.value = Settings.discordToken;
+    const typeEl = document.getElementById('setDiscordTokenType');
+    if (typeEl) typeEl.value = Settings.discordTokenType;
+    if (window.showToast) showToast(`Discord token received from Chrome (${d.account || 'signed in'})`);
+};
+
 function setUpdateDiscordTokenType() {
     const el = document.getElementById('setDiscordTokenType');
     Settings.discordTokenType = el.value === 'bot' ? 'bot' : 'user';
