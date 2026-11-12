@@ -233,6 +233,7 @@ async function onCreatorChange() {
     updateActionAvailability();
     updateLatestRangeInfo();
     await refreshYears();
+    if (currentCreatorId !== _panelFilterFor) { resetPanelFilters(); _panelFilterFor = currentCreatorId; }
     pendingUndo = [];          // undo history is per-creator
     errorsUndo = [];
     if (typeof scUndo !== 'undefined') scUndo = [];
@@ -269,6 +270,121 @@ function isHighlightHost(host) {
     const h = (host || '').toLowerCase();
     return h.includes('mega.') || h.includes('drive.google') ||
            h.includes('docs.google') || h.includes('tinyurl.com');
+}
+
+// ── Quick filter for the two attention panels ───────────────────
+// A temporary text filter in each panel's header. Every word must appear in a
+// post's own text (title / date / prefix / page URL) or in a row's text (host,
+// URL, filename, status). A post whose header matches shows all its rows;
+// otherwise only its matching rows show. Purely client-side (rows are hidden,
+// not removed) and cleared when the creator changes. While a filter is active
+// the panel's bulk button acts on the shown rows only.
+const panelFilter = { pendingLinks: '', errorLinks: '' };
+let _panelFilterFor = null;   // creator the filters belong to (cleared on switch)
+
+function resetPanelFilters() {
+    panelFilter.pendingLinks = '';
+    panelFilter.errorLinks = '';
+}
+
+function panelFilterWords(panelId) {
+    return (panelFilter[panelId] || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function panelSearchBox(panelId) {
+    return `<input type="search" class="panel-search" placeholder="Filter…"
+        value="${escapeHtml(panelFilter[panelId] || '')}" autocomplete="off" spellcheck="false"
+        aria-label="Filter this list" title="Filter this list (Esc clears)"
+        onclick="event.stopPropagation()" onkeydown="panelSearchKey(event, '${panelId}')"
+        oninput="setPanelFilter('${panelId}', this.value)">`;
+}
+
+function panelSearchKey(e, panelId) {
+    e.stopPropagation();
+    if (e.key === 'Escape' && e.target.value) {
+        e.preventDefault();
+        e.target.value = '';
+        setPanelFilter(panelId, '');
+    }
+}
+
+function setPanelFilter(panelId, v) {
+    panelFilter[panelId] = v || '';
+    // Typing into a collapsed panel opens it — the filter is pointless unseen.
+    if (panelFilterWords(panelId).length) {
+        if (panelId === 'pendingLinks' && pendingCollapsed) togglePending();
+        if (panelId === 'errorLinks' && errorsCollapsed) toggleErrors();
+    }
+    applyPanelFilter(panelId);
+}
+
+// Rebuild a panel's HTML without losing the caret in its filter box (the
+// download-time poll can re-render while the user is typing).
+function setPanelHtml(panel, html) {
+    const a = document.activeElement;
+    const hadFocus = a && a.classList && a.classList.contains('panel-search') && panel.contains(a);
+    const s = hadFocus ? a.selectionStart : 0, en = hadFocus ? a.selectionEnd : 0;
+    const typed = hadFocus ? a.value : null;
+    panel.innerHTML = html;
+    if (hadFocus) {
+        const inp = panel.querySelector('.panel-search');
+        if (inp) {
+            inp.value = typed;
+            inp.focus();
+            try { inp.setSelectionRange(s, en); } catch (e) {}
+        }
+    }
+}
+
+function applyPanelFilter(panelId) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    const words = panelFilterWords(panelId);
+    const has = t => { t = (t || '').toLowerCase(); return words.every(w => t.includes(w)); };
+    panel.querySelectorAll('.pending-group').forEach(g => {
+        const rows = [...g.querySelectorAll('.pending-row')];
+        if (!words.length) {
+            g.classList.remove('f-hide');
+            rows.forEach(r => r.classList.remove('f-hide'));
+            return;
+        }
+        const headQ = g.dataset.q || '';
+        const headHit = has(headQ);
+        let any = false;
+        rows.forEach(r => {
+            const show = headHit || has(headQ + ' ' + (r.dataset.q || ''));
+            r.classList.toggle('f-hide', !show);
+            if (show) any = true;
+        });
+        g.classList.toggle('f-hide', !(headHit || any));
+    });
+    refreshPanelCount(panelId);
+}
+
+// Rows the user can currently see (and act on). Linkless flagged posts count as
+// one each in the pending panel, as in its header total.
+function visiblePanelRows(panel) {
+    return [...panel.querySelectorAll('.pending-group:not(.f-hide) .pending-row:not(.f-hide)')];
+}
+
+function refreshPanelCount(panelId) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    const flagged = sel => panel.querySelectorAll(sel).length;
+    const extra = panelId === 'pendingLinks';
+    const total = panel.querySelectorAll('.pending-row').length
+        + (extra ? flagged('.pending-flagged') : 0);
+    const shown = visiblePanelRows(panel).length
+        + (extra ? flagged('.pending-flagged:not(.f-hide)') : 0);
+    const filtering = panelFilterWords(panelId).length > 0;
+    const c = panel.querySelector('.pending-count');
+    if (c) c.textContent = filtering ? `${shown} / ${total}` : total;
+    const bulk = panel.querySelector('.pending-clear-all');
+    if (bulk) {
+        const verb = panelId === 'pendingLinks' ? 'Resolve' : 'Dismiss';
+        bulk.textContent = filtering ? `${verb} shown` : `${verb} all`;
+        bulk.disabled = filtering && !visiblePanelRows(panel).length;
+    }
 }
 
 async function renderPendingLinks(fromPoll = false) {
@@ -319,7 +435,7 @@ async function renderPendingLinks(fromPoll = false) {
         if (g.links.length === 1) return pendingSingleRow(g, g.links[0]);
         const rows = g.links.map(pendingChildRow).join('');
         const groupKeys = encodeURIComponent(JSON.stringify(g.links.map(l => l.key)));
-        return `<div class="pending-group">
+        return `<div class="pending-group" data-q="${pendingGroupQ(g)}">
             <div class="pending-post">
               <input type="checkbox" class="pending-check pending-check-all"
                      title="Mark all ${g.links.length} links in this post done"
@@ -337,15 +453,27 @@ async function renderPendingLinks(fromPoll = false) {
 
     const caret = pendingCollapsed ? '▸' : '▾';
     panel.style.display = '';
-    panel.innerHTML = `<div class="pending-head" onclick="togglePending()">
+    setPanelHtml(panel, `<div class="pending-head" onclick="togglePending()">
           <span class="pending-caret">${caret}</span>
           <span>Links needing attention</span>
           <span class="pending-count">${items.length + linkless.length}</span>
           <span class="field-hint pending-hint">manual downloads &amp; failed grabs — check off when done (Ctrl+Z to undo)</span>
+          ${panelSearchBox('pendingLinks')}
           <button class="btn-tiny pending-clear-all" onclick="event.stopPropagation(); resolveAllPending()"
-                  title="Mark every link here done (Ctrl+Z to undo)">Resolve all</button>
+                  title="Mark every link shown here done (Ctrl+Z to undo)">Resolve all</button>
         </div>
-        <div class="pending-list" ${pendingCollapsed ? 'style="display:none"' : ''}>${groupsHtml}</div>`;
+        <div class="pending-list" ${pendingCollapsed ? 'style="display:none"' : ''}>${groupsHtml}</div>`);
+    applyPanelFilter('pendingLinks');
+}
+
+// Searchable text of a post header (pending panel) / of one link row.
+function pendingGroupQ(g) {
+    return escapeHtml([g.title, g.date, g.prefix, g.post_url, ...(g.media_kinds || [])].join(' '));
+}
+
+function pendingRowQ(i) {
+    return escapeHtml([i.host, i.url, i.status === 'skipped' ? 'not auto-grabbed' : i.status,
+                       ...(i.missing || [])].join(' '));
 }
 
 // One link row inside a multi-link post group.
@@ -358,7 +486,7 @@ function pendingChildRow(i) {
         ? `<span class="pending-missing">missing: ${escapeHtml(i.missing.join(', '))}</span>` : '';
     // Highlight the hosts worth spotting at a glance (mega, google drive, tinyurl).
     const alt = isHighlightHost(i.host) ? ' host-alt' : '';
-    return `<div class="pending-row">
+    return `<div class="pending-row" data-q="${pendingRowQ(i)}" data-key="${escapeHtml(i.key)}">
         <input type="checkbox" class="pending-check" title="Mark done — hides this link and won't come back on re-scan"
                onchange="resolvePendingLink(this, '${encodeURIComponent(i.key)}')">
         <span class="badge badge-host${alt}">${escapeHtml(i.host)}</span>${failed}
@@ -384,7 +512,7 @@ function mediaBadges(kinds) {
 // A flagged post with no outstanding links of its own: header only, so the post
 // page stays reachable. There is nothing to check off, hence no checkbox.
 function pendingFlaggedRow(f) {
-    return `<div class="pending-group pending-flagged">
+    return `<div class="pending-group pending-flagged" data-q="${pendingGroupQ(f)}">
         <div class="pending-post">
           <a class="pending-posttitle" href="#" onclick="openLink('${encodeURIComponent(f.post_url)}');return false;"
              title="Open this post on pawchive.st">${escapeHtml(f.title || '(untitled)')}</a>
@@ -397,7 +525,7 @@ function pendingFlaggedRow(f) {
 }
 
 function pendingSingleRow(g, i) {
-    return `<div class="pending-group pending-single">
+    return `<div class="pending-group pending-single" data-q="${pendingGroupQ(g)}">
         <div class="pending-post">
           <a class="pending-posttitle" href="#" onclick="openLink('${encodeURIComponent(g.post_url)}');return false;"
              title="Open this post on pawchive.st">${escapeHtml(g.title || '(untitled)')}</a>
@@ -413,7 +541,11 @@ function pendingSingleRow(g, i) {
 // "Resolve all" — mark every currently-listed link done in one batch (undoable).
 async function resolveAllPending() {
     const id = currentCreatorId;
-    const keys = lastPendingKeys.slice();
+    const panel = document.getElementById('pendingLinks');
+    // With a filter on, only the links the user can see.
+    const keys = (panelFilterWords('pendingLinks').length && panel)
+        ? visiblePanelRows(panel).map(r => r.dataset.key).filter(Boolean)
+        : lastPendingKeys.slice();
     if (!keys.length) return;
     const res = await pywebview.api.set_links_resolved(id, keys, true);
     if (res && res.error) { showToast(res.error, 'error'); return; }
@@ -551,7 +683,8 @@ async function renderErrorLinks() {
         const retryPostBtn = `<button class="btn-tiny" onclick="retryErrorSet('${encodeURIComponent(JSON.stringify(g.items.map(x => x.entry)))}', 'post')" title="Re-check this post on the site and download anything now available">Retry post</button>`;
         const hint = g.pending
             ? '<span class="field-hint">not imported on pawchive yet — retries automatically on the next download</span>' : '';
-        return `<div class="pending-group">
+        const q = escapeHtml([g.prefix, g.page_url, g.link, g.pending ? 'not imported' : ''].join(' '));
+        return `<div class="pending-group" data-q="${q}">
             <div class="pending-post">${checkAll}${head}${prefixBtn}${retryPostBtn}${hint}</div>
             <div class="pending-rows">${rows}</div>
           </div>`;
@@ -582,18 +715,20 @@ async function renderErrorLinks() {
     const scanBtn = `<button class="btn-tiny" onclick="event.stopPropagation(); scanErrorFolder()"
                    title="Find files you downloaded elsewhere and dropped into the folder, rename them to the archive name, and clear those errors">${errorsYearFilter ? 'Scan ' + errorsYearFilter : 'Scan folder'}</button>`;
     panel.style.display = '';
-    panel.innerHTML = `<div class="pending-head" onclick="toggleErrors()">
+    setPanelHtml(panel, `<div class="pending-head" onclick="toggleErrors()">
           <span class="pending-caret">${caret}</span>
           <span>Errors needing attention</span>
           <span class="pending-count">${shownCount}</span>
           <span class="field-hint pending-hint">${hint}</span>
+          ${panelSearchBox('errorLinks')}
           ${sortBtn}
           ${yearCtl}
           ${scanBtn}
           <button class="btn-tiny pending-clear-all" onclick="event.stopPropagation(); dismissAllErrors()"
-                  title="Dismiss every error here (Ctrl+Z to undo)">Dismiss all</button>
+                  title="Dismiss every error shown here (Ctrl+Z to undo)">Dismiss all</button>
         </div>
-        <div class="pending-list" ${errorsCollapsed ? 'style="display:none"' : ''}>${groupsHtml}</div>`;
+        <div class="pending-list" ${errorsCollapsed ? 'style="display:none"' : ''}>${groupsHtml}</div>`);
+    applyPanelFilter('errorLinks');
 }
 
 // One failed-file row inside a post group: dismiss checkbox, status badge, filename,
@@ -612,7 +747,9 @@ function errorRow(i) {
            <button class="btn-tiny" onclick="copyText('${encodeURIComponent(i.url)}')">Copy</button>` : '';
     // Re-check just this one file against the site.
     const retryBtn = `<button class="btn-tiny err-retry" onclick="retryErrorSet('${encodeURIComponent(JSON.stringify([i.entry]))}', 'file')" title="Re-check this file on the site">↻</button>`;
-    return `<div class="pending-row">
+    const q = escapeHtml([i.filename, i.entry, i.url, gone ? 'gone' : notImported ? 'not imported' : 'failed',
+                          i.status ? `HTTP ${i.status}` : ''].join(' '));
+    return `<div class="pending-row" data-q="${q}" data-entry="${escapeHtml(i.entry || '')}">
         <input type="checkbox" class="pending-check" title="Dismiss — hide this error (Ctrl+Z to undo)"
                onchange="dismissError(this, '${encodeURIComponent(i.entry)}')">
         ${badge}
@@ -626,7 +763,14 @@ function errorRow(i) {
 // "Dismiss all" — hide every listed error at once (undoable via Ctrl+Z).
 async function dismissAllErrors() {
     const id = currentCreatorId;
-    const res = await pywebview.api.dismiss_all_creator_errors(id, currentScope);
+    const panel = document.getElementById('errorLinks');
+    // With a filter on, only the errors the user can see.
+    const filtered = panelFilterWords('errorLinks').length && panel;
+    const shown = filtered ? visiblePanelRows(panel).map(r => r.dataset.entry).filter(Boolean) : null;
+    if (filtered && !shown.length) return;
+    const res = filtered
+        ? await pywebview.api.dismiss_creator_errors(id, shown)
+        : await pywebview.api.dismiss_all_creator_errors(id, currentScope);
     if (res && res.error) { showToast(res.error, 'error'); return; }
     const entries = (res && res.entries) || [];
     if (entries.length) {
@@ -694,8 +838,7 @@ async function dismissError(cb, entryEnc) {
 // Refresh the panel's shown count (rows still on screen — correct whether or not a
 // year filter is active) and the Redownload Errors button's total, without a rebuild.
 function updateErrorCounts(panel) {
-    const hc = panel.querySelector('.pending-count');
-    if (hc) hc.textContent = panel.querySelectorAll('.pending-row').length;
+    refreshPanelCount('errorLinks');
     const btn = document.getElementById('btnRedownloadErrors');
     const bc = btn && btn.querySelector('.err-count');
     if (bc) bc.textContent = currentErrorCount;
@@ -749,10 +892,7 @@ function resolvePendingLink(cb, encKey) {
 // Recompute the "Links needing attention" header count from the rows still shown, so
 // it ticks down as links are checked off (not just when the panel fully empties).
 function updatePendingCount() {
-    const panel = document.getElementById('pendingLinks');
-    if (!panel) return;
-    const c = panel.querySelector('.pending-count');
-    if (c) c.textContent = panel.querySelectorAll('.pending-row').length;
+    refreshPanelCount('pendingLinks');
 }
 
 // Post-level checkbox: resolve every link in one post in a single batch.

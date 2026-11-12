@@ -1876,6 +1876,22 @@ details.help .help-body {
 
 /* Per-year retry picker in the errors-panel header — sized to match btn-tiny so it
    sits quietly beside "Dismiss all" rather than dominating the header. */
+/* Quick filter in the attention panels' headers. */
+.panel-search {
+    flex: 0 1 160px;
+    min-width: 90px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-raised);
+    border: var(--border-w) solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: text;
+    user-select: text;
+}
+.panel-search:focus { outline: none; border-color: var(--accent); }
+.pending-list .f-hide { display: none !important; }
+
 .err-year {
     flex-shrink: 0;
     padding: 3px 6px;
