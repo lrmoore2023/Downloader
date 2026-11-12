@@ -150,6 +150,7 @@
                     </div>
                     <div class="form-row">
                         <span class="form-label">Creator</span>
+                        <input type="search" class="input-field fixed-170" id="creatorSearch" placeholder="Search…" autocomplete="off" spellcheck="false" oninput="onCreatorSearch(this.value)" onkeydown="onCreatorSearchKey(event)" title="Type to filter the list; Enter opens the first match, Esc clears" aria-label="Search creators">
                         <select class="select-field grow" id="creatorSelect" onchange="onCreatorChange()" aria-label="Creator">
                             <option value="">Select a creator…</option>
                         </select>

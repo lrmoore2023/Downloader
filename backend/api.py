@@ -1373,6 +1373,13 @@ class Api:
         outside the Furry/Hentai/Real hierarchy, so non-P:\\ creators still categorize."""
         d = self._fwd(destination)
         parts = [p for p in d.split("/") if p]
+        # Diaper artists live outside the Major/Sub layout, at
+        # ...\Goon\Diaper\Artists\{Furry|Hentai}\{Creator}; they file under
+        # that major as its "Diaper" subcategory (user's call, 2026-11-12).
+        if (len(parts) >= 5
+                and [p.lower() for p in parts[-5:-2]] == ["goon", "diaper", "artists"]
+                and parts[-2].lower() in ("furry", "hentai")):
+            return parts[-2].title(), "Diaper"
         if len(parts) >= 3:
             major_folder, sub_folder = parts[-3], parts[-2]
             if major_folder.lower() in self._CATEGORY_MAJORS:

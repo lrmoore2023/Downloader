@@ -6,7 +6,7 @@ let currentCreator = null;        // full object {id, name, destination, categor
 let currentScope = 'everything';
 // Fixed type hierarchy (mirrors the P:\{Major}\{Sub} folder layout on the NAS).
 // 'Tracked' is the folder-less bucket: track-only creators with no destination.
-const CATEGORY_TREE = { Furry: ['2D', '3D'], Hentai: ['2D', '3D'], Real: ['Real', 'Furry'], Tracked: [] };
+const CATEGORY_TREE = { Furry: ['2D', '3D', 'Diaper'], Hentai: ['2D', '3D', 'Diaper'], Real: ['Real', 'Furry'], Tracked: [] };
 let currentMajor = 'All';         // shared type filter (Creator dropdown + Gallery)
 let currentSub = null;            // active subcategory within the major (null = all subs)
 let currentSort = 'recent';       // 'recent' (last downloaded) | 'name' (A–Z)
@@ -70,12 +70,58 @@ function matchesCategory(c) {
     return !currentSub || c.subcategory === currentSub;
 }
 
+// Type-to-search over the creator dropdown: every word must appear in the name or
+// the folder path. The selected creator always stays listed, so typing never
+// silently deselects it.
+let creatorSearch = '';
+
+function creatorMatchesSearch(c) {
+    if (!creatorSearch) return true;
+    const hay = `${c.name || ''} ${c.destination || ''}`.toLowerCase();
+    return creatorSearch.split(/\s+/).every(w => hay.includes(w));
+}
+
+function onCreatorSearch(v) {
+    creatorSearch = (v || '').trim().toLowerCase();
+    populateCreatorDropdown();
+}
+
+// Enter opens the first match; Escape clears the search.
+function onCreatorSearchKey(e) {
+    const inp = e.target;
+    if (e.key === 'Escape') {
+        if (!inp.value) return;
+        inp.value = '';
+        onCreatorSearch('');
+        e.preventDefault();
+        return;
+    }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const sel = document.getElementById('creatorSelect');
+    if (sel.disabled) return;
+    const hit = applySort(creatorsCache.filter(c => matchesCategory(c) && creatorMatchesSearch(c)))[0];
+    if (!hit) return;
+    inp.value = '';
+    creatorSearch = '';
+    populateCreatorDropdown(hit.id);
+    sel.value = hit.id;
+    onCreatorChange();
+}
+
 function populateCreatorDropdown(selectId) {
     const sel = document.getElementById('creatorSelect');
     const prev = selectId || currentCreatorId || sel.value;
-    const list = applySort(creatorsCache.filter(matchesCategory));
+    const list = applySort(creatorsCache.filter(c =>
+        matchesCategory(c) && (creatorMatchesSearch(c) || c.id === prev)));
 
-    sel.innerHTML = '<option value="">Select a creator…</option>';
+    const hits = creatorSearch ? list.filter(creatorMatchesSearch).length : -1;
+    sel.innerHTML = '';
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = hits < 0 ? 'Select a creator…'
+        : hits === 0 ? 'No matches' : `${hits} match${hits === 1 ? '' : 'es'}…`;
+    sel.appendChild(ph);
     list.forEach(c => {
         const o = document.createElement('option');
         o.value = c.id;
@@ -149,6 +195,11 @@ function setSub(s) {
 // read-only Type chip when a destination folder is picked.
 function deriveCategoryPair(dest) {
     const parts = (dest || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean);
+    const n = parts.length;
+    if (n >= 5 && parts.slice(n - 5, n - 2).map(p => p.toLowerCase()).join('/') === 'goon/diaper/artists'
+            && ['furry', 'hentai'].includes(parts[n - 2].toLowerCase())) {
+        return [titleCaseFolder(parts[n - 2]), 'Diaper'];
+    }
     if (parts.length >= 3) {
         const major = parts[parts.length - 3], sub = parts[parts.length - 2];
         if (['furry', 'hentai', 'real'].includes(major.toLowerCase())) {
@@ -1265,6 +1316,7 @@ function setDownloadingState(downloading) {
     isBusy = downloading;
     document.getElementById('btnCancel').style.display = downloading ? '' : 'none';
     document.getElementById('creatorSelect').disabled = downloading;
+    document.getElementById('creatorSearch').disabled = downloading;
     document.getElementById('runningIndicator').classList.toggle('visible', downloading);
     if (!downloading) {
         document.getElementById('runFile').textContent = '';
