@@ -340,8 +340,10 @@ def t_extract_review():
     r._archive.close()
 
     from backend.creator_runner import extract_into_folders
-    check("creator default: extract into artist folders",
-          extract_into_folders({}) and extract_into_folders({"extract_into_folders": True}))
+    check("creator default: _extracted review folder",
+          not extract_into_folders({}) and not extract_into_folders(None))
+    check("creator opt-in: extract into artist folders",
+          extract_into_folders({"extract_into_folders": True}))
     check("creator opt-out: _extracted review folder",
           not extract_into_folders({"extract_into_folders": False}))
 

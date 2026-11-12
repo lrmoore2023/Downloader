@@ -68,9 +68,9 @@ def fetch_prefs(creator):
 def extract_into_folders(creator):
     """The creator's "Put Extracted Files in Artist Folders" choice. Archives are
     always unpacked; True sorts the contents into the artist's year folders, False
-    into <artist>/_extracted/ for review. Absent (every pre-feature record) = True,
-    which is how extraction always behaved."""
-    return (creator or {}).get("extract_into_folders", True) is not False
+    into <artist>/_extracted/ for review. Absent = False (user's call, 2026-11-12:
+    review what came out of an archive before it lands in the library)."""
+    return (creator or {}).get("extract_into_folders", False) is True
 
 
 def is_track_only(creator):

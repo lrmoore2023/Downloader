@@ -609,7 +609,7 @@ function openConfigure() {
     document.getElementById('cfgDest').value = currentCreator.destination || '';
     setCfgType(currentCreator.category, currentCreator.subcategory);
     cfgSetFetch(currentCreator.fetch);
-    document.getElementById('cfgExtractInto').checked = currentCreator.extract_into_folders !== false;
+    document.getElementById('cfgExtractInto').checked = currentCreator.extract_into_folders === true;
     const r = currentCreator.latest_range || {};
     document.getElementById('cfgRangeStart').value = (r.start != null) ? r.start : '';
     document.getElementById('cfgRangeEnd').value = (r.end != null) ? r.end : '';
@@ -625,7 +625,7 @@ function openNewCreator() {
     document.getElementById('cfgDest').value = '';
     setCfgType('', '');
     cfgSetFetch(null);
-    document.getElementById('cfgExtractInto').checked = true;
+    document.getElementById('cfgExtractInto').checked = false;
     document.getElementById('cfgRangeStart').value = '';
     document.getElementById('cfgRangeEnd').value = '';
     document.getElementById('cfgDeleteBtn').style.display = 'none';
