@@ -236,6 +236,11 @@ stay dismissed. Checked-off external links live in `_pawchive_links.json` in the
   Only `type == "video"` files count (photos, `animated_gif`, text skipped).
   Numbering is **chronological** (so ∅ works); `latest` stops after 20 tweets in a
   row at or below the newest known id. Keyed by the lowercase handle.
+  Creator avatars: gallery-dl's `x.com/<user>/info` (one request, same cookies,
+  child process `twitter_profile_dump.py`), else `api.fxtwitter.com/<user>`
+  (anonymous; 404s some accounts). **unavatar.io is dead for X** — since 2026-11
+  it returns X's generic "See what's happening" card for every handle; that
+  image's MD5 is rejected so it is never cached.
 - **pawchive** — the API is behind a Cloudflare JS challenge; only `file.pawchive.pw`
   is not. The in-app solve is Settings ▸ Pawchive ▸ Connect, which captures
   `cf_clearance` + the browser UA (`backend/pawchive_cf.py`). `cf_clearance` is

@@ -41,6 +41,42 @@ _RESERVED = {"i", "home", "explore", "search", "notifications", "messages", "set
 _USER_RE = re.compile(r"(?:^|[/.])(?:x|twitter)\.com/@?([A-Za-z0-9_]{1,15})(?=[/?#]|$)", re.I)
 
 _DUMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "twitter_media_dump.py")
+_PROFILE_DUMP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "twitter_profile_dump.py")
+
+
+def profile_image(username, *, cookies_path="", cookies_browser="", timeout=60,
+                  run=subprocess.run):
+    """Full-size avatar URL (pbs.twimg.com) for a handle, or "" when X won't say.
+
+    One gallery-dl `/info` request (UserByScreenName) in a child process, with
+    the Settings ▸ Twitter session. Measured 2026-11-13: this resolves every
+    handle tried, where unavatar.io had started returning X's generic
+    "See what's happening" share card for all of them."""
+    if not username:
+        return ""
+    fd, cfg = tempfile.mkstemp(prefix="twitter-profile-", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(build_config(cookies_path, cookies_browser), fh)
+    kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+    try:
+        p = run([sys.executable, "-I", _PROFILE_DUMP, cfg, username],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL, timeout=timeout, **kw)
+        for ln in (p.stdout or "").splitlines():
+            try:
+                obj = json.loads(ln)
+            except ValueError:
+                continue
+            if obj.get("t") == "user" and obj.get("profile_image"):
+                return obj["profile_image"]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    finally:
+        try:
+            os.unlink(cfg)
+        except OSError:
+            pass
+    return ""
 
 
 class SiteError(Exception):

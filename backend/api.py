@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import re
@@ -1553,26 +1554,37 @@ class Api:
             return {"none": True}
         return {"data": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}
 
+    # MD5s of images that are NOT an avatar: X's generic "See what's happening"
+    # share card, which unavatar.io began returning for every handle (2026-11).
+    # A cached copy of one is treated as a miss so it gets replaced.
+    _TWITTER_PLACEHOLDER_MD5 = {"66ec2f46e8396d328f1bd39a8b73afa9"}
+
     def _twitter_avatar(self, username):
         """A twitter/X creator's profile image, base64 data URI (cached), or {none}.
-        X blocks direct avatar fetches (returns its SPA HTML), so this goes through
-        unavatar.io, which resolves the handle to the real avatar. Best-effort:
-        falls back to initials in the UI if it can't be fetched."""
+
+        X blocks direct avatar fetches without a session, so the image URL comes
+        from gallery-dl's /info lookup with the Settings ▸ Twitter session
+        (reliable), else the public api.fxtwitter.com profile (anonymous, but 404s
+        some accounts). The image itself is a plain pbs.twimg.com fetch.
+        Best-effort: the UI falls back to initials when nothing resolves."""
         if not username:
             return {"none": True}
         safe = re.sub(r"[^A-Za-z0-9_]", "", username)
         cache = os.path.join(AVATAR_DIR, f"twitter_{safe}.img")
+
+        def real(blob):
+            return bool(blob) and hashlib.md5(blob).hexdigest() not in self._TWITTER_PLACEHOLDER_MD5
+
         data = None
         try:
             if os.path.isfile(cache) and os.path.getsize(cache) > 0:
                 with open(cache, "rb") as f:
                     data = f.read()
-            else:
-                r = pw_make_session().get(
-                    f"https://unavatar.io/twitter/{username}?fallback=false",
-                    timeout=(15, 30))
-                if r.status_code == 200 and r.content:
-                    data = r.content
+                if not real(data):
+                    data = None
+            if data is None:
+                data = self._fetch_twitter_avatar(username)
+                if data and real(data) and _sniff_image_mime(data):
                     try:
                         os.makedirs(AVATAR_DIR, exist_ok=True)
                         with open(cache, "wb") as f:
@@ -1582,9 +1594,33 @@ class Api:
         except Exception:
             data = None
         mime = _sniff_image_mime(data)
-        if not data or not mime:
+        if not real(data) or not mime:
             return {"none": True}
         return {"data": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}
+
+    def _fetch_twitter_avatar(self, username):
+        """Raw avatar bytes for a handle, or None (see _twitter_avatar)."""
+        url = ""
+        cookies_path, cookies_browser, problem = twp.auth_options(self.load_state())
+        if not problem:
+            url = twp.profile_image(username, cookies_path=cookies_path,
+                                    cookies_browser=cookies_browser)
+        sess = pw_make_session()
+        if not url:
+            try:
+                r = sess.get(f"https://api.fxtwitter.com/{username}", timeout=(15, 30))
+                if r.status_code == 200:
+                    url = ((r.json() or {}).get("user") or {}).get("avatar_url") or ""
+                    # '_normal' is the 48 px thumbnail; without it pbs serves the original.
+                    url = re.sub(r"_normal(\.\w+)$", r"\1", url)
+            except Exception:
+                url = ""
+        if not url:
+            return None
+        r = sess.get(url, timeout=(15, 30))
+        if r.status_code == 200 and r.content:
+            return r.content
+        return None
 
     def _bluesky_avatar(self, did):
         """A Bluesky creator's avatar (profile `avatar` CDN URL), cached, or {none}."""
